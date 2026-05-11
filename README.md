@@ -275,6 +275,7 @@ $ARGUMENTS
 ## 参考资源（References）
 
 
+> - 感谢 [MyCodeAgent](https://github.com/YYHDBL/MyCodeAgent) 提供的优秀代码代理框架，本项目基于此开发
 > - 感谢 [Datawhale](https://github.com/datawhalechina) 提供的优秀开源教程 [HelloAgent](https://github.com/jjyaoao/HelloAgents.git)
 > - 感谢 [shareAI-lab](https://github.com/shareAI-lab) 的[Kode-Cli](https://github.com/shareAI-lab/Kode-cli.git)项目
 > - 感谢 [MiniMax-AI](https://github.com/MiniMax-AI)的[Mini-Agent](https://github.com/MiniMax-AI/Mini-Agent)项目
