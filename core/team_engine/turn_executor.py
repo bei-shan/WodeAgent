@@ -28,10 +28,13 @@ class TurnExecutor:
     def execute_turn(self, messages: list[dict[str, Any]], tool_usage: Dict[str, int]) -> Dict[str, Any]:
         raw_response = self.llm.invoke_raw(messages, tools=self._tools_schema, tool_choice="auto")
         response_text = self._extract_content(raw_response) or ""
+        reasoning_content = self._extract_reasoning_content(raw_response)
         tool_calls = self._extract_tool_calls(raw_response)
         output_messages = list(messages)
 
         assistant_msg: Dict[str, Any] = {"role": "assistant", "content": response_text}
+        if reasoning_content:
+            assistant_msg["reasoning_content"] = reasoning_content
         if tool_calls:
             assistant_msg["tool_calls"] = []
             for call in tool_calls:
@@ -148,6 +151,40 @@ class TurnExecutor:
         except Exception:
             return []
         return []
+
+    @staticmethod
+    def _extract_reasoning_content(raw_response: Any) -> Optional[str]:
+        """Extract reasoning_content from LLM response (for DeepSeek/Qwen/OpenAI reasoning models)."""
+        def _get_attr(obj, key: str):
+            if obj is None:
+                return None
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        try:
+            choices = _get_attr(raw_response, "choices")
+            if not choices:
+                return None
+            choice = choices[0]
+            message = _get_attr(choice, "message")
+            if not message:
+                return None
+
+            reasoning = _get_attr(message, "reasoning_content") or _get_attr(message, "reasoning")
+            if reasoning:
+                return reasoning
+
+            model_extra = None
+            if isinstance(message, dict):
+                model_extra = message.get("model_extra") or message.get("additional_kwargs")
+            else:
+                model_extra = getattr(message, "model_extra", None) or getattr(message, "additional_kwargs", None)
+            if isinstance(model_extra, dict):
+                return model_extra.get("reasoning_content") or model_extra.get("reasoning")
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _extract_final_answer(response: str) -> str:
