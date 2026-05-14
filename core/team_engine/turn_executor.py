@@ -12,6 +12,7 @@ from core.response_parser import (
     extract_content,
     extract_tool_calls,
     ensure_json_input,
+    extract_reasoning_content,
 )
 from tools.registry import ToolRegistry
 
@@ -33,10 +34,13 @@ class TurnExecutor:
     def execute_turn(self, messages: list[dict[str, Any]], tool_usage: Dict[str, int]) -> Dict[str, Any]:
         raw_response = self.llm.invoke_raw(messages, tools=self._tools_schema, tool_choice="auto")
         response_text = extract_content(raw_response) or ""
+        reasoning_content = extract_reasoning_content(raw_response)
         tool_calls = extract_tool_calls(raw_response)
         output_messages = list(messages)
 
         assistant_msg: Dict[str, Any] = {"role": "assistant", "content": response_text}
+        if reasoning_content:
+            assistant_msg["reasoning_content"] = reasoning_content
         if tool_calls:
             assistant_msg["tool_calls"] = []
             for call in tool_calls:
