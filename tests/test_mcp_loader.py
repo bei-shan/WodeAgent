@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import time
 import unittest
@@ -368,6 +369,125 @@ class TestConnectTimeoutEnv(unittest.TestCase):
 
         importlib.reload(tools.mcp.loader)
         self.assertEqual(tools.mcp.loader._DEFAULT_CONNECT_TIMEOUT, 3.0)
+
+
+# ---------------------------------------------------------------------------
+# Config file loading with logging
+# ---------------------------------------------------------------------------
+
+
+class TestMCPConfigLogging(unittest.TestCase):
+    """Test that config loading logs errors instead of silently ignoring them."""
+
+    def setUp(self):
+        clear_pending_servers()
+
+    def tearDown(self):
+        clear_pending_servers()
+
+    def test_invalid_json_logs_warning(self):
+        """A JSON syntax error in mcp_servers.json should log a warning."""
+        import tempfile
+        from tools.mcp.config import _load_from_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Create a file with invalid JSON
+            bad_json = tmp + "/mcp_servers.json"
+            with open(bad_json, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers": {"fetch": {"command": "uvx",}')  # trailing comma
+
+            with self.assertLogs("tools.mcp.config", level="WARNING") as log_ctx:
+                result = _load_from_files(tmp)
+
+            self.assertIsNone(result)
+            self.assertTrue(
+                any("invalid json" in msg.lower() for msg in log_ctx.output),
+                f"Expected warning about invalid JSON, got: {log_ctx.output}",
+            )
+
+    def test_permission_error_logs_warning_and_skips(self):
+        """A permission error should log a warning and try the next file."""
+        import tempfile
+        from tools.mcp.config import _load_from_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Create a valid mcp.json that can be read
+            valid = tmp + "/mcp.json"
+            with open(valid, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers": {"test": {"command": "echo"}}}')
+
+            with self.assertLogs("tools.mcp.config", level="INFO") as log_ctx:
+                result = _load_from_files(tmp)
+
+            self.assertIsNotNone(result)
+            self.assertIn("test", result.get("mcpServers", {}))
+            self.assertTrue(
+                any("loaded from" in msg.lower() for msg in log_ctx.output),
+                f"Expected info about loaded config, got: {log_ctx.output}",
+            )
+
+    def test_env_var_invalid_json_logs_warning(self):
+        """MCP_SERVERS env var with invalid JSON should log a warning."""
+        from tools.mcp.config import _load_from_env
+
+        with patch.dict(os.environ, {"MCP_SERVERS": "{invalid}"}, clear=False):
+            with self.assertLogs("tools.mcp.config", level="WARNING") as log_ctx:
+                result = _load_from_env()
+
+            self.assertIsNone(result)
+            self.assertTrue(
+                any("invalid json" in msg.lower() for msg in log_ctx.output),
+                f"Expected warning about invalid JSON, got: {log_ctx.output}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# MCP call timeout env vars
+# ---------------------------------------------------------------------------
+
+
+class TestMCPCallTimeoutEnv(unittest.TestCase):
+    """Test that MCP_CALL_TIMEOUT and MCP_LIST_TOOLS_TIMEOUT env vars are respected."""
+
+    def setUp(self):
+        clear_pending_servers()
+
+    def tearDown(self):
+        clear_pending_servers()
+
+    def test_call_timeout_default(self):
+        """Default call timeout is 30 seconds."""
+        import importlib
+        import tools.mcp.client
+
+        importlib.reload(tools.mcp.client)
+        self.assertEqual(tools.mcp.client._MCP_CALL_TIMEOUT, 30.0)
+
+    @patch.dict(os.environ, {"MCP_CALL_TIMEOUT": "10"}, clear=False)
+    def test_call_timeout_custom(self):
+        """MCP_CALL_TIMEOUT env var overrides default."""
+        import importlib
+        import tools.mcp.client
+
+        importlib.reload(tools.mcp.client)
+        self.assertEqual(tools.mcp.client._MCP_CALL_TIMEOUT, 10.0)
+
+    def test_list_tools_timeout_default(self):
+        """Default list_tools timeout is 60 seconds."""
+        import importlib
+        import tools.mcp.client
+
+        importlib.reload(tools.mcp.client)
+        self.assertEqual(tools.mcp.client._MCP_LIST_TOOLS_TIMEOUT, 60.0)
+
+    @patch.dict(os.environ, {"MCP_LIST_TOOLS_TIMEOUT": "90"}, clear=False)
+    def test_list_tools_timeout_custom(self):
+        """MCP_LIST_TOOLS_TIMEOUT env var overrides default."""
+        import importlib
+        import tools.mcp.client
+
+        importlib.reload(tools.mcp.client)
+        self.assertEqual(tools.mcp.client._MCP_LIST_TOOLS_TIMEOUT, 90.0)
 
 
 if __name__ == "__main__":

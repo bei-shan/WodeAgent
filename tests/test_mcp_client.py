@@ -374,5 +374,162 @@ class TestMCPClientConfig(unittest.TestCase):
         self.assertIsNone(cfg.env)
 
 
+# ---------------------------------------------------------------------------
+# Timeout on MCP operations
+# ---------------------------------------------------------------------------
+
+
+class TestMCPClientTimeout(unittest.TestCase):
+    """Test that MCP operations respect timeouts.
+
+    We mock ``asyncio.wait_for`` directly to raise ``asyncio.TimeoutError``
+    rather than trying to simulate a real hang (which triggers complex
+    cancellation behavior in the MCP library's internals that doesn't
+    interact well with mocked sessions).
+    """
+
+    def setUp(self):
+        self.client = MCPClient(_make_config())
+
+    def tearDown(self):
+        try:
+            self.client.close_sync()
+        except Exception:
+            pass
+
+    @patch("tools.mcp.client.asyncio.wait_for")
+    @patch("tools.mcp.client.stdio_client")
+    @patch("tools.mcp.client.ClientSession")
+    def test_call_tool_timeout_raises(
+        self, mock_session_cls, mock_stdio, mock_wait_for
+    ):
+        """call_tool raises TimeoutError when asyncio.wait_for times out."""
+        mock_read = AsyncMock()
+        mock_write = AsyncMock()
+        mock_conn_ctx = AsyncMock()
+        mock_conn_ctx.__aenter__.return_value = (mock_read, mock_write, None)
+        mock_stdio.return_value = mock_conn_ctx
+
+        mock_session = AsyncMock()
+        mock_session_cls.return_value = mock_session
+
+        # Simulate a timeout from asyncio.wait_for
+        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+
+        with self.assertRaises(TimeoutError):
+            self.client.call_tool_sync("slow_tool", {})
+
+    @patch("tools.mcp.client.asyncio.wait_for")
+    @patch("tools.mcp.client.stdio_client")
+    @patch("tools.mcp.client.ClientSession")
+    def test_list_tools_timeout_raises(
+        self, mock_session_cls, mock_stdio, mock_wait_for
+    ):
+        """list_tools raises TimeoutError when asyncio.wait_for times out."""
+        mock_read = AsyncMock()
+        mock_write = AsyncMock()
+        mock_conn_ctx = AsyncMock()
+        mock_conn_ctx.__aenter__.return_value = (mock_read, mock_write, None)
+        mock_stdio.return_value = mock_conn_ctx
+
+        mock_session = AsyncMock()
+        mock_session_cls.return_value = mock_session
+
+        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+
+        with self.assertRaises(TimeoutError):
+            self.client.list_tools_sync()
+
+    @patch("tools.mcp.client.asyncio.wait_for")
+    @patch("tools.mcp.client.stdio_client")
+    @patch("tools.mcp.client.ClientSession")
+    def test_timeout_error_contains_tool_name(
+        self, mock_session_cls, mock_stdio, mock_wait_for
+    ):
+        """TimeoutError message includes the tool name for debugging."""
+        mock_read = AsyncMock()
+        mock_write = AsyncMock()
+        mock_conn_ctx = AsyncMock()
+        mock_conn_ctx.__aenter__.return_value = (mock_read, mock_write, None)
+        mock_stdio.return_value = mock_conn_ctx
+
+        mock_session = AsyncMock()
+        mock_session_cls.return_value = mock_session
+
+        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+
+        with self.assertRaises(TimeoutError) as ctx:
+            self.client.call_tool_sync("my_tool", {})
+        self.assertIn("my_tool", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Exception conversion (anyio → standard Python)
+# ---------------------------------------------------------------------------
+
+
+class TestMCPClientExceptionConversion(unittest.TestCase):
+    """Test that anyio-specific exceptions are converted to standard types."""
+
+    def setUp(self):
+        self.client = MCPClient(_make_config())
+
+    def tearDown(self):
+        try:
+            self.client.close_sync()
+        except Exception:
+            pass
+
+    @patch("tools.mcp.client.stdio_client")
+    @patch("tools.mcp.client.ClientSession")
+    def test_double_closed_resource_raises_connection_error(
+        self, mock_session_cls, mock_stdio
+    ):
+        """When both the initial call and the retry fail with ClosedResourceError,
+        the client raises ConnectionError (not the raw anyio exception)."""
+        import anyio
+
+        mock_read = AsyncMock()
+        mock_write = AsyncMock()
+        mock_conn_ctx = AsyncMock()
+        mock_conn_ctx.__aenter__.return_value = (mock_read, mock_write, None)
+        mock_stdio.return_value = mock_conn_ctx
+
+        bad_session = AsyncMock()
+        bad_session.call_tool.side_effect = anyio.ClosedResourceError("closed")
+
+        also_bad_session = AsyncMock()
+        also_bad_session.call_tool.side_effect = anyio.ClosedResourceError("still closed")
+
+        mock_session_cls.side_effect = [bad_session, also_bad_session]
+
+        with self.assertRaises(ConnectionError):
+            self.client.call_tool_sync("broken", {})
+
+    @patch("tools.mcp.client.stdio_client")
+    @patch("tools.mcp.client.ClientSession")
+    def test_list_tools_double_closed_resource_raises_connection_error(
+        self, mock_session_cls, mock_stdio
+    ):
+        """list_tools also converts double ClosedResourceError to ConnectionError."""
+        import anyio
+
+        mock_read = AsyncMock()
+        mock_write = AsyncMock()
+        mock_conn_ctx = AsyncMock()
+        mock_conn_ctx.__aenter__.return_value = (mock_read, mock_write, None)
+        mock_stdio.return_value = mock_conn_ctx
+
+        bad_session = AsyncMock()
+        bad_session.list_tools.side_effect = anyio.ClosedResourceError("closed")
+        bad_session2 = AsyncMock()
+        bad_session2.list_tools.side_effect = anyio.ClosedResourceError("closed again")
+
+        mock_session_cls.side_effect = [bad_session, bad_session2]
+
+        with self.assertRaises(ConnectionError):
+            self.client.list_tools_sync()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 from core.env import load_env
 
 load_env()
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_FILES = (
     "mcp_servers.json",
@@ -24,7 +27,8 @@ def _load_from_env() -> dict[str, Any] | None:
         return None
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.warning("MCP_SERVERS env var contains invalid JSON: %s", exc)
         return None
 
 
@@ -35,8 +39,28 @@ def _load_from_files(project_root: str) -> dict[str, Any] | None:
         if not path.exists():
             continue
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            logger.info("MCP config loaded from %s", path)
+            return data
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "MCP config file %s has invalid JSON at line %d column %d: %s",
+                path, exc.lineno, exc.colno, exc.msg,
+            )
+            # JSON syntax error means the user intended to configure MCP
+            # but made a mistake.  Don't silently fall through to the next
+            # file — surface the error and stop.
+            return None
+        except PermissionError:
+            logger.warning("MCP config file %s: permission denied, skipping", path)
+            continue
+        except OSError as exc:
+            logger.warning("MCP config file %s: %s, skipping", path, exc)
+            continue
+        except Exception as exc:
+            logger.warning(
+                "MCP config file %s: unexpected error: %s, skipping", path, exc
+            )
             continue
     return None
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from dataclasses import dataclass
@@ -12,6 +13,13 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 import anyio
+
+logger = logging.getLogger(__name__)
+
+# Per-call timeout for regular MCP tool invocations (seconds).
+_MCP_CALL_TIMEOUT = float(os.environ.get("MCP_CALL_TIMEOUT", "30"))
+# Longer timeout for list_tools (npx downloads can take tens of seconds).
+_MCP_LIST_TOOLS_TIMEOUT = float(os.environ.get("MCP_LIST_TOOLS_TIMEOUT", "60"))
 
 
 @dataclass
@@ -31,6 +39,10 @@ class MCPClient:
     connected) is intentionally lock-free — the worst case is two threads both
     enter ``connect()`` and one waits at the lock for the other to finish, then
     returns the already-established session via double-check.
+
+    Timeouts: every MCP operation is wrapped with ``asyncio.wait_for``.
+    The per-call timeout defaults to 30 s (``MCP_CALL_TIMEOUT``) for regular
+    calls and 60 s (``MCP_LIST_TOOLS_TIMEOUT``) for ``list_tools``.
     """
 
     def __init__(self, config: MCPClientConfig):
@@ -105,62 +117,86 @@ class MCPClient:
                 self._conn = None
 
     # ------------------------------------------------------------------
-    # MCP operations (each auto-connects + retries once on transport error)
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _call_with_retry(self, operation_name: str, coro_factory, timeout: float) -> Any:
+        """Execute *coro_factory(session)* with a single retry on transport
+        error, wrapped in ``asyncio.wait_for``.
+
+        Raises:
+            TimeoutError: if the operation exceeds *timeout* seconds.
+            ConnectionError: if the transport is closed and the retry also fails.
+        """
+        async def _do_call(session):
+            try:
+                return await asyncio.wait_for(coro_factory(session), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"MCP operation '{operation_name}' timed out after {timeout:.0f}s"
+                )
+
+        session = await self.connect()
+        try:
+            return await _do_call(session)
+        except TimeoutError:
+            raise
+        except anyio.ClosedResourceError:
+            logger.debug("MCP transport closed during '%s', reconnecting...", operation_name)
+            await self.close()
+            session = await self.connect()
+            try:
+                return await _do_call(session)
+            except anyio.ClosedResourceError:
+                raise ConnectionError(
+                    f"MCP transport closed during '{operation_name}' and reconnection failed"
+                )
+
+    # ------------------------------------------------------------------
+    # MCP operations
     # ------------------------------------------------------------------
 
     async def list_tools(self) -> Any:
-        session = await self.connect()
-        try:
-            return await session.list_tools()
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.list_tools()
+        return await self._call_with_retry(
+            "list_tools",
+            lambda s: s.list_tools(),
+            timeout=_MCP_LIST_TOOLS_TIMEOUT,
+        )
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        session = await self.connect()
-        try:
-            return await session.call_tool(name, arguments)
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.call_tool(name, arguments)
+        return await self._call_with_retry(
+            f"call_tool:{name}",
+            lambda s: s.call_tool(name, arguments),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
 
     async def list_resources(self) -> Any:
-        session = await self.connect()
-        try:
-            return await session.list_resources()
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.list_resources()
+        return await self._call_with_retry(
+            "list_resources",
+            lambda s: s.list_resources(),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
 
     async def read_resource(self, uri: Any) -> Any:
-        session = await self.connect()
-        try:
-            return await session.read_resource(uri)
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.read_resource(uri)
+        return await self._call_with_retry(
+            "read_resource",
+            lambda s: s.read_resource(uri),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
 
     async def list_prompts(self) -> Any:
-        session = await self.connect()
-        try:
-            return await session.list_prompts()
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.list_prompts()
+        return await self._call_with_retry(
+            "list_prompts",
+            lambda s: s.list_prompts(),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
 
     async def get_prompt(self, name: str, arguments: dict[str, Any]) -> Any:
-        session = await self.connect()
-        try:
-            return await session.get_prompt(name, arguments=arguments)
-        except anyio.ClosedResourceError:
-            await self.close()
-            session = await self.connect()
-            return await session.get_prompt(name, arguments=arguments)
+        return await self._call_with_retry(
+            f"get_prompt:{name}",
+            lambda s: s.get_prompt(name, arguments=arguments),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
 
     # ------------------------------------------------------------------
     # Sync wrappers (thread-safe)
