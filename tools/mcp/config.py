@@ -53,4 +53,6 @@ def load_mcp_servers(project_root: str) -> dict[str, Any]:
 
 
 def connect_mode() -> str:
-    return os.environ.get("MCP_CONNECT_MODE", "startup").lower()
+    # 默认改为 manual，避免启动时等待 MCP 子进程响应而阻塞
+    # 启动阶段：后台线程连接，超时标记 pending，首次工具调用时重试
+    return os.environ.get("MCP_CONNECT_MODE", "manual").lower()
