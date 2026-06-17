@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from core.context_engine.observation_truncator import truncate_observation
+from core.response_parser import (
+    extract_content,
+    extract_tool_calls,
+    ensure_json_input,
+)
 from tools.registry import ToolRegistry
 
 
@@ -27,8 +32,8 @@ class TurnExecutor:
 
     def execute_turn(self, messages: list[dict[str, Any]], tool_usage: Dict[str, int]) -> Dict[str, Any]:
         raw_response = self.llm.invoke_raw(messages, tools=self._tools_schema, tool_choice="auto")
-        response_text = self._extract_content(raw_response) or ""
-        tool_calls = self._extract_tool_calls(raw_response)
+        response_text = extract_content(raw_response) or ""
+        tool_calls = extract_tool_calls(raw_response)
         output_messages = list(messages)
 
         assistant_msg: Dict[str, Any] = {"role": "assistant", "content": response_text}
@@ -56,7 +61,7 @@ class TurnExecutor:
         for call in tool_calls:
             tool_name = call.get("name") or "unknown_tool"
             tool_call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
-            tool_input, parse_err = self._ensure_json_input(call.get("arguments"))
+            tool_input, parse_err = ensure_json_input(call.get("arguments"))
             if parse_err:
                 observation = json.dumps(
                     {

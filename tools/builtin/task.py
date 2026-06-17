@@ -20,7 +20,6 @@ from core.llm import HelloAgentsLLM
 from core.message import Message
 from core.team_engine.turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
-from core.context_engine.observation_truncator import truncate_observation
 from prompts.tools_prompts.task_prompt import task_prompt
 from ..base import Tool, ToolParameter, ErrorCode
 from core.env import load_env
@@ -203,105 +202,6 @@ class SubagentRunner:
         
         # Max steps reached
         return "Subagent reached maximum steps without completing.", self.tool_usage
-    
-    def _get_allowed_tools_schema(self) -> list[dict[str, Any]]:
-        tools = self.tool_registry.get_openai_tools()
-        return [t for t in tools if t.get("function", {}).get("name") in ALLOWED_TOOLS]
-
-    @staticmethod
-    def _extract_content(raw_response: Any) -> Optional[str]:
-        try:
-            if hasattr(raw_response, "choices"):
-                content = raw_response.choices[0].message.content
-                if isinstance(content, list):
-                    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
-                return content
-            if isinstance(raw_response, dict) and raw_response.get("choices"):
-                content = raw_response["choices"][0]["message"].get("content")
-                if isinstance(content, list):
-                    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
-                return content
-        except Exception:
-            return str(raw_response)
-
-    @staticmethod
-    def _extract_tool_calls(raw_response: Any) -> list[dict[str, Any]]:
-        def _get_attr(obj, key: str):
-            if obj is None:
-                return None
-            if isinstance(obj, dict):
-                return obj.get(key)
-            return getattr(obj, key, None)
-
-        try:
-            choices = _get_attr(raw_response, "choices")
-            if not choices:
-                return []
-            choice = choices[0]
-            message = _get_attr(choice, "message")
-            if not message:
-                return []
-            tool_calls = _get_attr(message, "tool_calls") or []
-            calls: list[dict[str, Any]] = []
-            if tool_calls:
-                for call in tool_calls:
-                    fn = _get_attr(call, "function") or {}
-                    name = _get_attr(fn, "name") or _get_attr(call, "name") or "unknown_tool"
-                    arguments = _get_attr(fn, "arguments") or _get_attr(call, "arguments") or {}
-                    call_id = _get_attr(call, "id")
-                    calls.append({"id": call_id, "name": name, "arguments": arguments})
-                return calls
-
-            function_call = _get_attr(message, "function_call")
-            if function_call:
-                name = _get_attr(function_call, "name") or "unknown_tool"
-                arguments = _get_attr(function_call, "arguments") or {}
-                return [{"id": None, "name": name, "arguments": arguments}]
-        except Exception:
-            return []
-
-        return []
-    
-    def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
-        """Execute a tool and return the observation."""
-        # Validate tool is allowed
-        if tool_name in DENIED_TOOLS:
-            return f"Error: Tool '{tool_name}' is not allowed for subagents."
-        
-        # Get tool from registry
-        tool = self.tool_registry.get_tool(tool_name)
-        if tool is None:
-            return f"Error: Tool '{tool_name}' not found."
-        
-        # Track tool usage
-        self.tool_usage[tool_name] = self.tool_usage.get(tool_name, 0) + 1
-        
-        # Execute tool
-        try:
-            result = tool.run(tool_input)
-            result_str = str(result)
-            return truncate_observation(tool_name, result_str, str(self.project_root))
-        except Exception as e:
-            logger.error("Tool execution error: %s", e)
-            return f"Error executing tool: {str(e)}"
-    
-    def _extract_final_answer(self, response: str) -> str:
-        """Extract the final answer from the response."""
-        return (response or "").strip()
-
-    @staticmethod
-    def _ensure_json_input(raw: Any) -> Tuple[Any, Optional[str]]:
-        if raw is None:
-            return {}, None
-        if isinstance(raw, (dict, list)):
-            return raw, None
-        s = str(raw).strip()
-        if not s:
-            return {}, None
-        try:
-            return json.loads(s), None
-        except Exception as e:
-            return None, str(e)
 
 
 # =============================================================================

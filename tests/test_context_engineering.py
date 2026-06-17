@@ -15,7 +15,6 @@ from core.context_engine.tool_result_compressor import compress_tool_result
 from core.context_engine.input_preprocessor import preprocess_input, extract_file_mentions
 from core.context_engine.history_manager import HistoryManager
 from core.config import Config
-from agents.codeAgent import CodeAgent
 
 
 class TestToolOutputTruncation:
@@ -157,14 +156,16 @@ class TestCodeAgentToolCalls:
     def test_extract_tool_calls(self):
         tool_call = DummyToolCall(DummyFunction(name="Read", arguments='{"path": "a.py"}'), call_id="call_1")
         raw = DummyRawResponse([DummyChoice(DummyMessage(content=None, tool_calls=[tool_call]))])
-        calls = CodeAgent._extract_tool_calls(raw)
+        from core.response_parser import extract_tool_calls
+        calls = extract_tool_calls(raw)
 
         assert calls == [{"id": "call_1", "name": "Read", "arguments": '{"path": "a.py"}'}]
 
     def test_extract_tool_calls_from_function_call(self):
         func_call = DummyFunction(name="Search", arguments='{"query": "test"}')
         raw = DummyRawResponse([DummyChoice(DummyMessage(content=None, function_call=func_call))])
-        calls = CodeAgent._extract_tool_calls(raw)
+        from core.response_parser import extract_tool_calls
+        calls = extract_tool_calls(raw)
 
         assert calls == [{"id": None, "name": "Search", "arguments": '{"query": "test"}'}]
 
