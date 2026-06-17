@@ -6,6 +6,7 @@
 
 import os
 import re
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -200,24 +201,36 @@ class BashTool(Tool):
         # =====================================================================
         # 执行命令
         # =====================================================================
-        
+
         # 设置环境变量
         env = os.environ.copy()
         env["MYCODEAGENT"] = "1"
-        
+
         # 转换超时时间为秒
         timeout_sec = timeout_ms / 1000.0
-        
+
         stdout = ""
         stderr = ""
         exit_code = None
         signal_name = None
         timed_out = False
-        
+
+        # 安全策略：简单命令用 shell=False（防注入），复杂命令用 shell=True（已过安全检测）
+        use_shell = self._has_shell_operators(command)
+        if use_shell:
+            run_args = command
+        else:
+            try:
+                run_args = shlex.split(command)
+            except ValueError:
+                # shlex 无法解析的命令（如不匹配的引号），回退到 shell=True
+                use_shell = True
+                run_args = command
+
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                run_args,
+                shell=use_shell,
                 cwd=str(target_dir),
                 env=env,
                 capture_output=True,
@@ -240,6 +253,14 @@ class BashTool(Tool):
             return self.create_error_response(
                 error_code=ErrorCode.PERMISSION_DENIED,
                 message="Permission denied executing command.",
+                params_input=params_input,
+                time_ms=time_ms,
+            )
+        except FileNotFoundError:
+            time_ms = int((time.monotonic() - start_time) * 1000)
+            return self.create_error_response(
+                error_code=ErrorCode.EXECUTION_ERROR,
+                message=f"Command not found: {run_args[0] if isinstance(run_args, list) else command}",
                 params_input=params_input,
                 time_ms=time_ms,
             )
@@ -363,41 +384,49 @@ class BashTool(Tool):
     def _check_command_safety(self, command: str) -> Optional[str]:
         """
         检查命令安全性
-        
+
         Args:
             command: 要检查的命令
-            
+
         Returns:
             如果命令不安全，返回错误消息；否则返回 None
         """
+        # ---- 命令替换检测（最高优先级，阻止 shell 注入） ----
+        if re.search(r'\$\(|`|\$\{', command):
+            return "Command blocked by safety rules. Command substitution ($() / backticks / ${}) is not allowed."
+
+        # ---- 输出重定向到绝对路径 ----
+        if re.search(r'[>]\s*/', command):
+            return "Command blocked by safety rules. Output redirection to absolute paths is not allowed."
+
         # 提取命令中的所有"词"（简单分词）
         # 注意：这是一个简化的检查，可能无法捕获所有变体
         # Strip quoted strings to reduce false positives (e.g. echo "ls")
         command_for_scan = re.sub(r'(["\']).*?\1', ' ', command)
         words = re.findall(r'\b\w+\b', command_for_scan.lower())
-        
+
         # 检查交互式命令
         for word in words:
             if word in self.INTERACTIVE_COMMANDS:
                 return f"Command blocked by safety rules. Interactive command '{word}' is not allowed."
-        
+
         # 检查交互式 git 命令
         if "git" in words:
             if "rebase" in words and ("-i" in command or "--interactive" in command):
                 return "Command blocked by safety rules. Interactive 'git rebase -i' is not allowed."
             if "add" in words and ("-i" in command or "--interactive" in command):
                 return "Command blocked by safety rules. Interactive 'git add -i' is not allowed."
-        
+
         # 检查破坏性命令
         for word in words:
             if word in self.DESTRUCTIVE_COMMANDS:
                 return f"Command blocked by safety rules. Destructive command '{word}' is not allowed."
-        
+
         # 检查权限提升命令
         for word in words:
             if word in self.PRIVILEGE_COMMANDS:
                 return f"Command blocked by safety rules. Privilege escalation command '{word}' is not allowed."
-        
+
         # 检查危险的 rm 命令
         if "rm" in words:
             # 检查 rm -rf / 或 rm -rf /*
@@ -407,7 +436,7 @@ class BashTool(Tool):
                 # 更宽松的检查
                 if "/ " in command or "/*" in command:
                     return "Command blocked by safety rules. Destructive 'rm' on root is not allowed."
-        
+
         # 检查远程脚本执行
         remote_exec_patterns = [
             r'\bcurl\s+.*\|\s*bash',
@@ -420,12 +449,12 @@ class BashTool(Tool):
         for pattern in remote_exec_patterns:
             if re.search(pattern, command, re.IGNORECASE):
                 return "Command blocked by safety rules. Remote script execution is not allowed."
-        
+
         # 检查网络工具（默认禁用）
         if not self._allow_network:
             if "curl" in words or "wget" in words:
                 return "Command blocked by safety rules. Network tools (curl/wget) are disabled. Set BASH_ALLOW_NETWORK=true to enable."
-        
+
         # 检查读/搜/列类命令
         for word in words:
             if word in self.READ_SEARCH_COMMANDS:
@@ -439,40 +468,57 @@ class BashTool(Tool):
                     "rg": "Grep",
                 }.get(word, "the appropriate tool")
                 return f"Command blocked by safety rules. Use {tool_suggestion} instead of '{word}'."
-        
+
         return None
+
+    @staticmethod
+    def _has_shell_operators(command: str) -> bool:
+        """检测命令是否包含需要 shell 解释的操作符。
+
+        如果命令是单个简单命令（无管道、无串联、无重定向），
+        应该用 ``shell=False`` + ``shlex.split`` 执行以避免注入风险。
+        """
+        # 匹配 shell 操作符（不在引号内的）
+        # 简化版：检测常见操作符
+        return bool(re.search(r'[&|;<>]', re.sub(r'(["\']).*?\1', '', command)))
 
     def _check_cd_paths(self, command: str, base_dir: Path) -> Optional[str]:
         """
         检查命令中的 cd 路径是否在项目根目录内
-        
+
         Args:
             command: 要检查的命令
             base_dir: 当前工作目录
-            
+
         Returns:
             如果 cd 路径越界，返回错误消息；否则返回 None
         """
-        # 匹配 cd 命令及其目标路径
+        # 匹配 cd 命令及其目标路径（大小写不敏感）
         cd_patterns = [
-            r'\bcd\s+([^\s;&|]+)',  # cd path
-            r'\bcd\s+"([^"]+)"',     # cd "path with spaces"
-            r"\bcd\s+'([^']+)'",     # cd 'path with spaces'
+            r'\b[cC][dD]\s+([^\s;&|]+)',  # cd path (case-insensitive)
+            r'\b[cC][dD]\s+"([^"]+)"',     # cd "path with spaces"
+            r"\b[cC][dD]\s+'([^']+)'",     # cd 'path with spaces'
         ]
-        
+
         for pattern in cd_patterns:
             for match in re.finditer(pattern, command):
                 cd_target = match.group(1)
-                
+
+                # 展开环境变量和 ~
+                cd_target = os.path.expandvars(cd_target)
+                cd_target = os.path.expanduser(cd_target)
+
                 # 解析 cd 目标路径
                 try:
-                    if cd_target.startswith("/"):
+                    if cd_target.startswith("/") or (
+                        os.name == "nt" and re.match(r'^[A-Za-z]:', cd_target)
+                    ):
                         # 绝对路径
                         resolved = Path(cd_target).resolve()
                     else:
                         # 相对路径（相对于当前工作目录）
                         resolved = (base_dir / cd_target).resolve()
-                    
+
                     # 检查是否在项目根目录内
                     resolved.relative_to(self._root)
                 except ValueError:
@@ -480,7 +526,7 @@ class BashTool(Tool):
                 except OSError:
                     # 路径解析失败，继续检查其他 cd
                     pass
-        
+
         return None
 
     def get_parameters(self) -> List[ToolParameter]:

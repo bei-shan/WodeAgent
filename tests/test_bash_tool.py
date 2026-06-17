@@ -111,3 +111,105 @@ def test_timeout_with_output_partial(bash_tool):
     assert status == ToolStatus.PARTIAL
     data = _extract_data(result)
     assert "hi" in data["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# New safety features (command substitution, redirection, shell=False)
+# ---------------------------------------------------------------------------
+
+
+def test_command_substitution_dollar_paren_blocked(bash_tool):
+    """$(...) command substitution is blocked."""
+    result = bash_tool.run({"command": "echo $(whoami)"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "Command substitution" in err.get("message", "")
+
+
+def test_command_substitution_backtick_blocked(bash_tool):
+    """Backtick command substitution is blocked."""
+    result = bash_tool.run({"command": "echo `whoami`"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "Command substitution" in err.get("message", "")
+
+
+def test_command_substitution_brace_blocked(bash_tool):
+    """${...} parameter expansion is blocked."""
+    result = bash_tool.run({"command": "echo ${HOME}"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "Command substitution" in err.get("message", "")
+
+
+def test_output_redirect_to_absolute_path_blocked(bash_tool):
+    """> /absolute/path output redirection is blocked."""
+    result = bash_tool.run({"command": "echo test > /tmp/out.txt"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "redirection" in err.get("message", "").lower()
+
+
+def test_simple_command_uses_shell_false(bash_tool, tmp_path):
+    """Simple commands (no &&, |, ;) are executed with shell=False."""
+    result = bash_tool.run({"command": "python -c \"print('safe')\""})
+    assert _extract_status(result) == ToolStatus.SUCCESS
+    data = _extract_data(result)
+    assert data["exit_code"] == 0
+    assert "safe" in data["stdout"]
+
+
+def test_command_chain_still_works(bash_tool, tmp_path):
+    """Command chaining with && still works (shell=True path)."""
+    result = bash_tool.run({"command": "echo first && echo second"})
+    assert _extract_status(result) == ToolStatus.SUCCESS
+    data = _extract_data(result)
+    assert data["exit_code"] == 0
+    assert "first" in data["stdout"]
+    assert "second" in data["stdout"]
+
+
+def test_pipe_still_works(bash_tool):
+    """Pipes still work (shell=True path)."""
+    result = bash_tool.run({"command": "echo hello | python -c \"import sys; print(sys.stdin.read().strip())\""})
+    assert _extract_status(result) == ToolStatus.SUCCESS
+    data = _extract_data(result)
+    assert "hello" in data["stdout"]
+
+
+def test_cd_case_insensitive(bash_tool, tmp_path):
+    """cd path check is case-insensitive (Windows compatibility)."""
+    (tmp_path / "sub").mkdir()
+    result = bash_tool.run({"command": "CD sub && pwd"})
+    assert _extract_status(result) == ToolStatus.SUCCESS
+    data = _extract_data(result)
+    assert data["stdout"].strip().endswith("sub")
+
+
+def test_cd_with_tilde_expansion_blocked(bash_tool, tmp_path):
+    """cd ~/something is checked and blocked if outside project root."""
+    # ~ resolves to user home, which is outside project root
+    result = bash_tool.run({"command": "cd ~ && pwd"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "Access denied" in err.get("message", "")
+
+
+def test_command_not_found_error(bash_tool):
+    """Non-existent command returns a clear error with shell=False."""
+    result = bash_tool.run({"command": "nonexistent_command_xyz"})
+    assert _extract_status(result) == ToolStatus.ERROR
+    err = _extract_error(result)
+    assert "not found" in err.get("message", "").lower()
+
+
+def test_has_shell_operators():
+    """_has_shell_operators correctly detects shell syntax."""
+    from tools.builtin.bash import BashTool
+    assert BashTool._has_shell_operators("echo a && echo b") is True
+    assert BashTool._has_shell_operators("cat file | grep x") is True
+    assert BashTool._has_shell_operators("a; b") is True
+    assert BashTool._has_shell_operators("echo hello > out.txt") is True
+    assert BashTool._has_shell_operators("python -c 'print(1)'") is False
+    assert BashTool._has_shell_operators("git status") is False
+    assert BashTool._has_shell_operators("npm install") is False

@@ -335,8 +335,12 @@ class WriteTool(Tool):
                 # 使用 PID + 时间戳确保临时文件名唯一
                 import os
                 temp_path = abs_path.with_suffix(f".tmp.{os.getpid()}.{int(time.time() * 1000000)}")
-                temp_path.write_text(content, encoding="utf-8")
-                temp_path.replace(abs_path)
+                try:
+                    temp_path.write_text(content, encoding="utf-8")
+                    temp_path.replace(abs_path)
+                finally:
+                    if temp_path.exists():
+                        temp_path.unlink()
                 
                 applied = True
                 bytes_written = len(content.encode("utf-8"))
