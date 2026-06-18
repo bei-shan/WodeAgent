@@ -1,7 +1,4 @@
-"""Read 工具提示词
-
-提供给 LLM 的工具描述，遵循《通用工具响应协议》。
-"""
+"""Read tool prompt — describes the Read tool to the LLM."""
 
 read_prompt = """
 Tool name: Read

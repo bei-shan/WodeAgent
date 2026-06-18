@@ -1,7 +1,4 @@
-"""MultiEditTool 的提示词定义
-
-该提示词用于向 LLM 描述 MultiEdit 工具的功能和使用方式。
-"""
+"""MultiEdit tool prompt — describes the MultiEdit tool to the LLM."""
 
 multi_edit_prompt = """MultiEdit: Apply multiple independent edits to ONE file atomically.
 

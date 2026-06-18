@@ -1,7 +1,4 @@
-"""WriteTool 的提示词定义
-
-该提示词用于向 LLM 描述 Write 工具的功能和使用方式。
-"""
+"""Write tool prompt — describes the Write tool to the LLM."""
 
 write_prompt = """Write: Create or overwrite a file with FULL content.
 

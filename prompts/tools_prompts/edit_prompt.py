@@ -1,7 +1,4 @@
-"""EditTool 的提示词定义
-
-该提示词用于向 LLM 描述 Edit 工具的功能和使用方式。
-"""
+"""Edit tool prompt — describes the Edit tool to the LLM."""
 
 edit_prompt = """Edit: Replace a single, unique text snippet in an existing file.
 

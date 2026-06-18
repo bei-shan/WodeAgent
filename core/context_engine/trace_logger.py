@@ -13,7 +13,9 @@ import json
 import logging
 import os
 import threading
+import time
 import traceback
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -622,6 +624,65 @@ class TraceLogger:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """支持 with 语句（自动 finalize）"""
         self.finalize()
+
+
+# ---------------------------------------------------------------------------
+# Lightweight span-based tracing (thread-safe, no external deps)
+# ---------------------------------------------------------------------------
+
+_span_local = threading.local()
+
+
+class TraceSpan:
+    """Context manager that records span_start / span_end events.
+
+    Spans can be nested.  Each span automatically captures its parent
+    span_id so that JSONL consumers can reconstruct the call tree.
+
+    Usage::
+
+        with TraceSpan(tracer, "react_loop", max_steps=50):
+            for step in range(50):
+                with TraceSpan(tracer, "step", step=step):
+                    ...
+
+    The ``span`` method is a shortcut for logging an event inside the
+    current span without creating a child span.
+    """
+
+    __slots__ = ("_logger", "_name", "_span_id", "_parent_id", "_start", "_attrs")
+
+    def __init__(self, logger: TraceLogger, name: str, **attrs: Any):
+        self._logger = logger
+        self._name = name
+        self._span_id = uuid.uuid4().hex[:12]
+        self._parent_id = getattr(_span_local, "span_id", None)
+        self._start = time.monotonic()
+        self._attrs = attrs
+
+    def __enter__(self) -> "TraceSpan":
+        _span_local.span_id = self._span_id
+        self._logger.log_event("span_start", {
+            "span_id": self._span_id,
+            "parent_id": self._parent_id,
+            "span": self._name,
+            **self._attrs,
+        })
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        duration_ms = int((time.monotonic() - self._start) * 1000)
+        self._logger.log_event("span_end", {
+            "span_id": self._span_id,
+            "span": self._name,
+            "duration_ms": duration_ms,
+            "error": str(exc_val) if exc_val else None,
+        })
+        _span_local.span_id = self._parent_id
+
+    def event(self, name: str, **attrs: Any) -> None:
+        """Log an event attached to this span (no child span created)."""
+        self._logger.log_event(name, {"span_id": self._span_id, **attrs})
 
 
 def create_trace_logger(trace_dir: str = "memory/traces") -> TraceLogger:

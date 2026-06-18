@@ -15,7 +15,7 @@ from pathlib import Path
 # 添加项目根目录到 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.context_engine.trace_logger import create_trace_logger
+from core.context_engine.trace_logger import create_trace_logger, TraceSpan
 
 
 def test_trace_logger_disabled():
@@ -244,3 +244,83 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ---------------------------------------------------------------------------
+# TraceSpan tests
+# ---------------------------------------------------------------------------
+
+
+def test_trace_span_basic():
+    """TraceSpan records span_start and span_end events."""
+    os.environ['TRACE_ENABLED'] = 'true'
+    logger = create_trace_logger()
+
+    with TraceSpan(logger, "test_span", key="value") as span:
+        span.event("mid_event", data=42)
+
+    logger.finalize()
+
+    # Read back and verify
+    events = _read_jsonl_events(logger._filepath)
+    span_starts = [e for e in events if e["event"] == "span_start"]
+    span_ends = [e for e in events if e["event"] == "span_end"]
+    mid_events = [e for e in events if e["event"] == "mid_event"]
+
+    assert len(span_starts) == 1
+    assert len(span_ends) == 1
+    assert len(mid_events) == 1
+    assert span_starts[0]["payload"]["span"] == "test_span"
+    assert span_starts[0]["payload"]["key"] == "value"
+    assert "span_id" in span_starts[0]["payload"]
+    assert "duration_ms" in span_ends[0]["payload"]
+
+
+def test_trace_span_nesting():
+    """Nested spans get correct parent_id."""
+    os.environ['TRACE_ENABLED'] = 'true'
+    logger = create_trace_logger()
+
+    with TraceSpan(logger, "parent") as parent:
+        with TraceSpan(logger, "child") as child:
+            child.event("deep", x=1)
+
+    logger.finalize()
+
+    events = _read_jsonl_events(logger._filepath)
+    span_starts = [e for e in events if e["event"] == "span_start"]
+
+    parent_start = next(e for e in span_starts if e["payload"]["span"] == "parent")
+    child_start = next(e for e in span_starts if e["payload"]["span"] == "child")
+
+    assert parent_start["payload"]["parent_id"] is None
+    assert child_start["payload"]["parent_id"] == parent_start["payload"]["span_id"]
+
+
+def test_trace_span_error_capture():
+    """Span_end records error when context exits with exception."""
+    os.environ['TRACE_ENABLED'] = 'true'
+    logger = create_trace_logger()
+
+    try:
+        with TraceSpan(logger, "failing_span"):
+            raise ValueError("test error")
+    except ValueError:
+        pass
+
+    logger.finalize()
+
+    events = _read_jsonl_events(logger._filepath)
+    span_end = next(e for e in events if e["event"] == "span_end" and e["payload"]["span"] == "failing_span")
+    assert "test error" in span_end["payload"]["error"]
+
+
+def _read_jsonl_events(filepath):
+    """Helper: read JSONL file into list of event dicts."""
+    events = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+    return events

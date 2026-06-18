@@ -905,5 +905,66 @@ class TestWriteTool(unittest.TestCase):
             )
 
 
+# ---------------------------------------------------------------------------
+# Parametrized boundary tests (pytest style)
+# ---------------------------------------------------------------------------
+
+import json
+import pytest
+
+
+@pytest.mark.parametrize("path,content,expected_error", [
+    (None, "content", "INVALID_PARAM"),
+    ("", "content", "INVALID_PARAM"),
+    ("file.txt", None, "INVALID_PARAM"),
+    (123, "content", "INVALID_PARAM"),
+    ("file.txt", 456, "INVALID_PARAM"),
+    ("../escape.txt", "x", "ACCESS_DENIED"),
+    ("/absolute.txt", "x", "ACCESS_DENIED"),
+    ("emoji🎉.txt", "x", None),     # unicode path
+    ("normal.txt", "", None),       # empty content is valid
+])
+def test_write_tool_parametrized(path, content, expected_error):
+    """Boundary tests for WriteTool: invalid params, edge cases, no-crash."""
+    with create_temp_project() as project:
+        tool = WriteTool(project_root=project.root)
+        params = {}
+        if path is not None:
+            params["path"] = path
+        if content is not None:
+            params["content"] = content
+
+        response = tool.run(params)
+        parsed = json.loads(response)
+
+        if expected_error:
+            assert parsed["status"] == "error", f"Expected error {expected_error}, got {parsed}"
+            assert parsed["error"]["code"] == expected_error, f"Expected {expected_error}, got {parsed['error']['code']}"
+        else:
+            # At minimum, should not crash
+            assert parsed["status"] in ("success", "partial", "error"), f"Invalid status: {parsed['status']}"
+
+
+@pytest.mark.parametrize("path,content", [
+    ("test.txt", "hello"),
+    ("subdir/test.txt", "hello"),
+    ("a.txt", "hello"),
+])
+def test_write_tool_create_read_verify(path, content):
+    """Write then Read: verify round-trip integrity."""
+    with create_temp_project() as project:
+        write_tool = WriteTool(project_root=project.root)
+        write_result = write_tool.run({"path": path, "content": content})
+        write_parsed = json.loads(write_result)
+        assert write_parsed["status"] == "success"
+
+        from tools.builtin.read_file import ReadTool
+        read_tool = ReadTool(project_root=project.root)
+        read_result = read_tool.run({"path": path})
+        read_parsed = json.loads(read_result)
+        assert read_parsed["status"] in ("success", "partial")
+        assert content in read_parsed["data"]["content"]
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
