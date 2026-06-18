@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -126,7 +126,7 @@ class TraceLogger:
             safe_payload = self._sanitizer.sanitize(payload)
             # 构建事件对象
             event_obj = {
-                "ts": datetime.utcnow().isoformat() + "Z",
+                "ts": datetime.now(timezone.utc).isoformat(),
                 "session_id": self.session_id,
                 "step": step,
                 "event": event,
@@ -223,7 +223,7 @@ class TraceLogger:
     def _write_html_header(self):
         if not self._html_handle:
             return
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         title = f"Trace Session: {self.session_id}"
         self._html_handle.write("""<!doctype html>
 <html lang="en">
