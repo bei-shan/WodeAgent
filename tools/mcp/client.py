@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 _MCP_CALL_TIMEOUT = float(os.environ.get("MCP_CALL_TIMEOUT", "30"))
 # Longer timeout for list_tools (npx downloads can take tens of seconds).
 _MCP_LIST_TOOLS_TIMEOUT = float(os.environ.get("MCP_LIST_TOOLS_TIMEOUT", "60"))
+# Timeout for the initial connect + session initialization.
+_MCP_CONNECT_TIMEOUT = float(os.environ.get("MCP_CONNECT_TIMEOUT", "30"))
 
 
 @dataclass
@@ -83,7 +85,15 @@ class MCPClient:
                 self._conn = streamablehttp_client(self._config.url)
 
             try:
-                read, write, *_ = await self._conn.__aenter__()
+                read, write, *_ = await asyncio.wait_for(
+                    self._conn.__aenter__(),
+                    timeout=_MCP_CONNECT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                self._conn = None
+                raise TimeoutError(
+                    f"MCP transport open timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
+                )
             except Exception:
                 self._conn = None
                 raise
@@ -91,7 +101,15 @@ class MCPClient:
             session = ClientSession(read, write)
             try:
                 await session.__aenter__()
-                await session.initialize()
+                try:
+                    await asyncio.wait_for(
+                        session.initialize(),
+                        timeout=_MCP_CONNECT_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    raise TimeoutError(
+                        f"MCP session initialize timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
+                    )
             except Exception:
                 try:
                     await session.__aexit__(None, None, None)

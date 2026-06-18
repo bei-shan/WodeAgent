@@ -353,13 +353,13 @@ class TestConnectTimeoutEnv(unittest.TestCase):
         clear_pending_servers()
 
     def test_default_timeout(self):
-        """Default timeout is 5 seconds when env var is not set."""
+        """Default timeout is 30 seconds when env var is not set."""
         # Re-import to pick up env
         import importlib
         import tools.mcp.loader
 
         importlib.reload(tools.mcp.loader)
-        self.assertEqual(tools.mcp.loader._DEFAULT_CONNECT_TIMEOUT, 5.0)
+        self.assertEqual(tools.mcp.loader._DEFAULT_CONNECT_TIMEOUT, 30.0)
 
     @patch.dict(os.environ, {"MCP_CONNECT_TIMEOUT": "3"}, clear=False)
     def test_custom_timeout_from_env(self):

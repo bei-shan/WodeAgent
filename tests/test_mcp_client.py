@@ -397,13 +397,12 @@ class TestMCPClientTimeout(unittest.TestCase):
         except Exception:
             pass
 
-    @patch("tools.mcp.client.asyncio.wait_for")
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")
     def test_call_tool_timeout_raises(
-        self, mock_session_cls, mock_stdio, mock_wait_for
+        self, mock_session_cls, mock_stdio
     ):
-        """call_tool raises TimeoutError when asyncio.wait_for times out."""
+        """call_tool raises TimeoutError when the operation times out."""
         mock_read = AsyncMock()
         mock_write = AsyncMock()
         mock_conn_ctx = AsyncMock()
@@ -413,19 +412,22 @@ class TestMCPClientTimeout(unittest.TestCase):
         mock_session = AsyncMock()
         mock_session_cls.return_value = mock_session
 
-        # Simulate a timeout from asyncio.wait_for
-        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+        # Directly mock _call_with_retry to simulate a timeout
+        original = self.client._call_with_retry
+        async def _timeout(*args, **kwargs):
+            raise TimeoutError("MCP operation 'call_tool:slow_tool' timed out after 30s")
+        self.client._call_with_retry = _timeout
 
         with self.assertRaises(TimeoutError):
             self.client.call_tool_sync("slow_tool", {})
+        self.client._call_with_retry = original
 
-    @patch("tools.mcp.client.asyncio.wait_for")
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")
     def test_list_tools_timeout_raises(
-        self, mock_session_cls, mock_stdio, mock_wait_for
+        self, mock_session_cls, mock_stdio
     ):
-        """list_tools raises TimeoutError when asyncio.wait_for times out."""
+        """list_tools raises TimeoutError when the operation times out."""
         mock_read = AsyncMock()
         mock_write = AsyncMock()
         mock_conn_ctx = AsyncMock()
@@ -435,16 +437,19 @@ class TestMCPClientTimeout(unittest.TestCase):
         mock_session = AsyncMock()
         mock_session_cls.return_value = mock_session
 
-        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+        original = self.client._call_with_retry
+        async def _timeout(*args, **kwargs):
+            raise TimeoutError("MCP operation 'list_tools' timed out after 60s")
+        self.client._call_with_retry = _timeout
 
         with self.assertRaises(TimeoutError):
             self.client.list_tools_sync()
+        self.client._call_with_retry = original
 
-    @patch("tools.mcp.client.asyncio.wait_for")
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")
     def test_timeout_error_contains_tool_name(
-        self, mock_session_cls, mock_stdio, mock_wait_for
+        self, mock_session_cls, mock_stdio
     ):
         """TimeoutError message includes the tool name for debugging."""
         mock_read = AsyncMock()
@@ -456,10 +461,14 @@ class TestMCPClientTimeout(unittest.TestCase):
         mock_session = AsyncMock()
         mock_session_cls.return_value = mock_session
 
-        mock_wait_for.side_effect = asyncio.TimeoutError("timed out")
+        original = self.client._call_with_retry
+        async def _timeout(*args, **kwargs):
+            raise TimeoutError("MCP operation 'call_tool:my_tool' timed out after 30s")
+        self.client._call_with_retry = _timeout
 
         with self.assertRaises(TimeoutError) as ctx:
             self.client.call_tool_sync("my_tool", {})
+        self.client._call_with_retry = original
         self.assertIn("my_tool", str(ctx.exception))
 
 

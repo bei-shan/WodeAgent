@@ -25,8 +25,9 @@ from tools.mcp.config import load_mcp_servers, connect_mode
 logger = logging.getLogger(__name__)
 
 # Per-server connect timeout for background threads (seconds).
+# Default 30s — npx-based servers need 10-30s for first-time package downloads.
 # Configurable via MCP_CONNECT_TIMEOUT env var.
-_DEFAULT_CONNECT_TIMEOUT = float(os.environ.get("MCP_CONNECT_TIMEOUT", "5"))
+_DEFAULT_CONNECT_TIMEOUT = float(os.environ.get("MCP_CONNECT_TIMEOUT", "30"))
 
 
 # ---------------------------------------------------------------------------
