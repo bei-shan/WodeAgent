@@ -230,7 +230,7 @@ def _background_connect(
                 server_name,
             )
     except TimeoutError:
-        logger.warning(
+        logger.info(
             "MCP server '%s' connection timed out after %.0fs — "
             "marked as pending, will retry on first tool call",
             server_name,
@@ -241,7 +241,7 @@ def _background_connect(
                 name=server_name, client=client, namespace=server_name
             )
     except Exception as exc:
-        logger.warning(
+        logger.info(
             "MCP server '%s' connection failed: %s — "
             "marked as pending, will retry on first tool call",
             server_name,
