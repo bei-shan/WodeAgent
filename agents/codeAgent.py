@@ -366,22 +366,17 @@ class CodeAgent(Agent):
     # ReAct Core（Message List 自然累积模式）
     # =========================================================================
 
+    # ------------------------------------------------------------------
+    # ReAct 循环（拆分为 3 个子方法以提高可读性和可测试性）
+    # ------------------------------------------------------------------
+
     def _react_loop(
         self,
         pending_input: str,
         show_raw: bool,
         trace_logger,
     ) -> str:
-        """
-        ReAct 循环（Message List 模式）
-        
-        每步：
-        1. 构建 messages = system(L1/L2) + history(user/assistant/tool)
-        2. 调用 LLM
-        3. 解析 Thought/Action
-        4. 若为 Finish：返回结果
-        5. 若为工具调用：执行工具，将 assistant + tool 消息追加到 history
-        """
+        """ReAct 循环入口。每步：准备 → LLM → 工具执行 → 下一轮。"""
         tool_choice = "auto"
 
         for step in range(1, self.max_steps + 1):
@@ -399,239 +394,26 @@ class CodeAgent(Agent):
             elif self.logger.isEnabledFor(logging.DEBUG):
                 self.logger.debug("Step %d/%d", step, self.max_steps)
 
-            # 每次 ReAct 前检查是否需要压缩
-            if self.history_manager.should_compress(pending_input):
-                estimated_tokens = self.history_manager.estimate_context_tokens(pending_input)
-                threshold = int(self.config.context_window * self.config.compression_threshold)
-                trace_logger.log_event("history_compression_triggered", {
-                    "estimated_tokens": estimated_tokens,
-                    "threshold": threshold,
-                    "total_usage_tokens": self.history_manager.get_total_usage_tokens(),
-                    "message_count": self.history_manager.get_message_count(),
-                }, step=step)
+            self._maybe_compress_history(pending_input, trace_logger, step)
 
-                if self.console_verbose:
-                    self._console("\n📦 触发历史压缩...")
-                elif self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug("触发历史压缩")
+            messages, base_messages = self._build_step_messages(trace_logger, step)
 
-                rounds_before = self.history_manager.get_rounds_count()
-                messages_before = self.history_manager.get_message_count()
-
-                compress_info = self.history_manager.compact(
-                    on_event=lambda ev, payload: trace_logger.log_event(ev, payload, step=step),
-                    return_info=True,
-                )
-                compressed = bool(compress_info.get("compressed"))
-
-                if compressed:
-                    rounds_after = self.history_manager.get_rounds_count()
-                    messages_after = self.history_manager.get_message_count()
-
-                    trace_logger.log_event("history_compression_completed", {
-                        "rounds_before": rounds_before,
-                        "rounds_after": rounds_after,
-                        "messages_compressed": messages_before - messages_after,
-                        "summary_generated": compress_info.get("summary_generated", False),
-                        "details": compress_info,
-                    }, step=step)
-
-                    # 记录压缩后的最终上下文（system + history）
-                    compressed_history = self.history_manager.to_messages()
-                    final_context = self.context_builder.build_messages(compressed_history)
-                    trace_logger.log_event(
-                        "history_compression_final_context",
-                        {"message_count": len(final_context), "messages": final_context},
-                        step=step,
-                    )
-
-                    if self.console_verbose:
-                        self._console(f"✅ 压缩完成，当前轮次数: {rounds_after}")
-                        self._print_context_preview(final_context)
-                    elif self.logger.isEnabledFor(logging.DEBUG):
-                        self.logger.debug("压缩完成，当前轮次数: %d", rounds_after)
-                        self._print_context_preview(final_context)
-
-            # 构建 messages 列表
-            history_messages = self.history_manager.to_messages()
-            messages = self._build_messages(history_messages)
-            base_messages = messages
-            
-            trace_logger.log_event(
-                "context_build",
-                {"message_count": len(messages), "history_count": len(history_messages)},
-                step=step,
+            result = self._invoke_llm_with_retry(
+                messages, base_messages, tools_schema, tool_choice,
+                show_raw, trace_logger, step,
             )
-
-            usage = None
-            empty_retry_used = False
-            response_text = ""
-            tool_calls: list[dict[str, Any]] = []
-
-            while True:
-                # 调用 LLM
-                raw_response = self.llm.invoke_raw(messages, tools=tools_schema, tool_choice=tool_choice)
-                if show_raw:
-                    self.last_response_raw = (
-                        raw_response.model_dump()
-                        if hasattr(raw_response, "model_dump")
-                        else raw_response
-                    )
-
-                response_text = extract_content(raw_response) or ""
-                reasoning_content = extract_reasoning_content(raw_response)
-                usage = extract_usage(raw_response)
-                if usage and usage.get("total_tokens") is not None:
-                    self.history_manager.update_last_usage(usage["total_tokens"])
-
-                response_meta = extract_response_meta(raw_response)
-                tool_calls = extract_tool_calls(raw_response)
-                raw_dump = self._extract_raw_response(raw_response)
-                trace_logger.log_event(
-                    "model_output",
-                    {
-                        "raw": response_text,
-                        "usage": usage,
-                        "meta": response_meta,
-                        "raw_response": raw_dump,
-                        "tool_calls": tool_calls,
-                    },
-                    step=step,
-                )
-
-                if self.console_verbose and reasoning_content:
-                    display_reasoning = reasoning_content
-                    if len(display_reasoning) > 1200:
-                        display_reasoning = display_reasoning[:1200] + "...(truncated)"
-                    self._console(f"\n🧠 Reasoning: {display_reasoning}\n")
-
-                if tool_calls or (response_text and str(response_text).strip()):
-                    break
-
-                # 重试一次并追加提示
-                if not empty_retry_used:
-                    empty_retry_used = True
-                    hint = "上次 content 为空且未返回 tool_calls，请在 content 中回复最终答案，或使用工具调用。"
-                    messages = base_messages + [{"role": "user", "content": hint}]
-                    trace_logger.log_event(
-                        "empty_response_retry",
-                        {
-                            "finish_reason": response_meta.get("finish_reason"),
-                            "content_len": response_meta.get("content_len"),
-                            "reasoning_len": response_meta.get("reasoning_len"),
-                            "hint": hint,
-                        },
-                        step=step,
-                    )
-                    if self.console_verbose:
-                        self._console("⚠️ LLM返回空响应，追加提示后重试一次")
-                    else:
-                        self.logger.warning("LLM返回空响应，追加提示后重试一次")
-                    continue
-
-                if self.console_verbose:
-                    self._console("❌ LLM返回空响应")
-                else:
-                    self.logger.error("LLM返回空响应")
-                trace_logger.log_event(
-                    "error",
-                    {
-                        "stage": "llm_response",
-                        "error_code": "INTERNAL_ERROR",
-                        "message": "Empty response",
-                        "meta": response_meta,
-                    },
-                    step=step,
-                )
+            if result is None:
                 break
+
+            tool_calls = result["tool_calls"]
+            response_text = result["response_text"]
+            reasoning_content = result["reasoning_content"]
 
             if not tool_calls and (not response_text or not str(response_text).strip()):
                 break
-            # 有工具调用：写入 assistant + 执行 tools
+
             if tool_calls:
-                # ensure each tool_call has an id (OpenAI strict requirement)
-                for call in tool_calls:
-                    if not call.get("id"):
-                        call["id"] = f"call_{uuid.uuid4().hex}"
-                assistant_content = str(response_text or "")
-                self.history_manager.append_assistant(
-                    content=assistant_content,
-                    metadata={
-                        "step": step,
-                        "action_type": "tool_call",
-                        "tool_calls": tool_calls,
-                    },
-                    reasoning_content=reasoning_content,  # ⚠️ 传递 reasoning_content
-                )
-                self._log_message_write(
-                    trace_logger,
-                    "assistant",
-                    assistant_content,
-                    {"action_type": "tool_call", "tool_calls": tool_calls},
-                    step,
-                )
-
-                for call in tool_calls:
-                    tool_name = call.get("name") or "unknown_tool"
-                    tool_call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
-                    raw_args = call.get("arguments") or {}
-                    tool_input, parse_err = ensure_json_input(raw_args)
-                    if parse_err:
-                        error_result = {
-                            "status": "error",
-                            "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {parse_err}"},
-                            "data": {},
-                        }
-                        observation = json.dumps(error_result, ensure_ascii=False)
-                        trace_logger.log_event(
-                            "error",
-                            {
-                                "stage": "tool_call_parse",
-                                "error_code": "INVALID_PARAM",
-                                "message": str(parse_err),
-                                "tool": tool_name,
-                                "tool_call_id": tool_call_id,
-                            },
-                            step=step,
-                        )
-                    else:
-                        trace_logger.log_event("tool_call", {"tool": tool_name, "args": tool_input, "tool_call_id": tool_call_id}, step=step)
-                        if self.console_verbose:
-                            self._console(f"\n🎬 Action: {tool_name}[{tool_input}]\n")
-                        elif self.logger.isEnabledFor(logging.DEBUG):
-                            self.logger.debug("Action: %s %s", tool_name, tool_input)
-                        try:
-                            observation = self._execute_tool(tool_name, tool_input)
-                            try:
-                                result_obj = json.loads(observation)
-                                trace_logger.log_event("tool_result", {"tool": tool_name, "result": result_obj}, step=step)
-                            except json.JSONDecodeError:
-                                trace_logger.log_event("tool_result", {"tool": tool_name, "result": {"text": observation}}, step=step)
-                        except Exception as e:
-                            error_result = {"status": "error", "error": {"code": "EXECUTION_ERROR", "message": str(e)}, "data": {}}
-                            observation = json.dumps(error_result, ensure_ascii=False)
-                            trace_logger.log_event("error", {"stage": "tool_execution", "error_code": "EXECUTION_ERROR", "message": str(e), "tool": tool_name, "traceback": tb.format_exc()}, step=step)
-
-                    self.history_manager.append_tool(
-                        tool_name=tool_name,
-                        raw_result=observation,
-                        metadata={"step": step, "tool_call_id": tool_call_id},
-                        project_root=self.project_root,
-                    )
-                    self._log_message_write(
-                        trace_logger,
-                        "tool",
-                        observation,
-                        {"tool_name": tool_name, "tool_call_id": tool_call_id},
-                        step,
-                    )
-
-                    if self.console_verbose:
-                        display_obs = observation[:300] + "..." if len(observation) > 300 else observation
-                        self._console(f"\n👀 Observation: {display_obs}\n")
-                    elif self.logger.isEnabledFor(logging.DEBUG):
-                        display_obs = observation[:300] + "..." if len(observation) > 300 else observation
-                        self.logger.debug("Observation: %s", display_obs)
+                self._execute_step_tools(tool_calls, response_text, reasoning_content, trace_logger, step)
                 continue
 
             # 无工具调用：视为最终回答
@@ -639,13 +421,261 @@ class CodeAgent(Agent):
             self.history_manager.append_assistant(
                 content=final_text,
                 metadata={"step": step, "action_type": "final"},
-                reasoning_content=reasoning_content,  # ⚠️ 传递 reasoning_content
+                reasoning_content=reasoning_content,
             )
             self._log_message_write(trace_logger, "assistant", final_text, {"action_type": "final"}, step)
             trace_logger.log_event("finish", {"final": final_text}, step=step)
             return final_text
 
         return "抱歉，我无法在限定步数内完成这个任务。"
+
+    # ------------------------------------------------------------------
+    # ReAct 子方法
+    # ------------------------------------------------------------------
+
+    def _maybe_compress_history(self, pending_input: str, trace_logger, step: int) -> None:
+        """检查并在需要时压缩历史。"""
+        if not self.history_manager.should_compress(pending_input):
+            return
+
+        estimated_tokens = self.history_manager.estimate_context_tokens(pending_input)
+        threshold = int(self.config.context_window * self.config.compression_threshold)
+        trace_logger.log_event("history_compression_triggered", {
+            "estimated_tokens": estimated_tokens,
+            "threshold": threshold,
+            "total_usage_tokens": self.history_manager.get_total_usage_tokens(),
+            "message_count": self.history_manager.get_message_count(),
+        }, step=step)
+
+        if self.console_verbose:
+            self._console("\n📦 触发历史压缩...")
+        elif self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug("触发历史压缩")
+
+        rounds_before = self.history_manager.get_rounds_count()
+        messages_before = self.history_manager.get_message_count()
+
+        compress_info = self.history_manager.compact(
+            on_event=lambda ev, payload: trace_logger.log_event(ev, payload, step=step),
+            return_info=True,
+        )
+        compressed = bool(compress_info.get("compressed"))
+
+        if compressed:
+            rounds_after = self.history_manager.get_rounds_count()
+            messages_after = self.history_manager.get_message_count()
+
+            trace_logger.log_event("history_compression_completed", {
+                "rounds_before": rounds_before,
+                "rounds_after": rounds_after,
+                "messages_compressed": messages_before - messages_after,
+                "summary_generated": compress_info.get("summary_generated", False),
+                "details": compress_info,
+            }, step=step)
+
+            compressed_history = self.history_manager.to_messages()
+            final_context = self.context_builder.build_messages(compressed_history)
+            trace_logger.log_event(
+                "history_compression_final_context",
+                {"message_count": len(final_context), "messages": final_context},
+                step=step,
+            )
+
+            if self.console_verbose:
+                self._console(f"✅ 压缩完成，当前轮次数: {rounds_after}")
+                self._print_context_preview(final_context)
+            elif self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug("压缩完成，当前轮次数: %d", rounds_after)
+                self._print_context_preview(final_context)
+
+    def _build_step_messages(self, trace_logger, step: int):
+        """构建当前 step 的 messages 列表，返回 (messages, base_messages)。"""
+        history_messages = self.history_manager.to_messages()
+        messages = self._build_messages(history_messages)
+        base_messages = messages
+        trace_logger.log_event(
+            "context_build",
+            {"message_count": len(messages), "history_count": len(history_messages)},
+            step=step,
+        )
+        return messages, base_messages
+
+    def _invoke_llm_with_retry(
+        self,
+        messages, base_messages, tools_schema, tool_choice,
+        show_raw: bool, trace_logger, step: int,
+    ) -> dict | None:
+        """调用 LLM，含一次空响应重试。返回 None 表示最终空响应。"""
+        empty_retry_used = False
+        reasoning_content = None
+
+        while True:
+            raw_response = self.llm.invoke_raw(messages, tools=tools_schema, tool_choice=tool_choice)
+            if show_raw:
+                self.last_response_raw = (
+                    raw_response.model_dump()
+                    if hasattr(raw_response, "model_dump")
+                    else raw_response
+                )
+
+            response_text = extract_content(raw_response) or ""
+            reasoning_content = extract_reasoning_content(raw_response)
+            usage = extract_usage(raw_response)
+            if usage and usage.get("total_tokens") is not None:
+                self.history_manager.update_last_usage(usage["total_tokens"])
+
+            response_meta = extract_response_meta(raw_response)
+            tool_calls = extract_tool_calls(raw_response)
+            raw_dump = self._extract_raw_response(raw_response)
+            trace_logger.log_event(
+                "model_output",
+                {
+                    "raw": response_text,
+                    "usage": usage,
+                    "meta": response_meta,
+                    "raw_response": raw_dump,
+                    "tool_calls": tool_calls,
+                },
+                step=step,
+            )
+
+            if self.console_verbose and reasoning_content:
+                display_reasoning = reasoning_content
+                if len(display_reasoning) > 1200:
+                    display_reasoning = display_reasoning[:1200] + "...(truncated)"
+                self._console(f"\n🧠 Reasoning: {display_reasoning}\n")
+
+            if tool_calls or (response_text and str(response_text).strip()):
+                return {
+                    "tool_calls": tool_calls,
+                    "response_text": response_text,
+                    "reasoning_content": reasoning_content,
+                }
+
+            # 重试一次并追加提示
+            if not empty_retry_used:
+                empty_retry_used = True
+                hint = "上次 content 为空且未返回 tool_calls，请在 content 中回复最终答案，或使用工具调用。"
+                messages = base_messages + [{"role": "user", "content": hint}]
+                trace_logger.log_event(
+                    "empty_response_retry",
+                    {
+                        "finish_reason": response_meta.get("finish_reason"),
+                        "content_len": response_meta.get("content_len"),
+                        "reasoning_len": response_meta.get("reasoning_len"),
+                        "hint": hint,
+                    },
+                    step=step,
+                )
+                if self.console_verbose:
+                    self._console("⚠️ LLM返回空响应，追加提示后重试一次")
+                else:
+                    self.logger.warning("LLM返回空响应，追加提示后重试一次")
+                continue
+
+            if self.console_verbose:
+                self._console("❌ LLM返回空响应")
+            else:
+                self.logger.error("LLM返回空响应")
+            trace_logger.log_event(
+                "error",
+                {
+                    "stage": "llm_response",
+                    "error_code": "INTERNAL_ERROR",
+                    "message": "Empty response",
+                    "meta": response_meta,
+                },
+                step=step,
+            )
+            return None
+
+    def _execute_step_tools(
+        self, tool_calls, response_text, reasoning_content, trace_logger, step: int,
+    ) -> None:
+        """执行当前 step 的所有 tool_calls，写入 assistant + tool 消息到历史。"""
+        # ensure each tool_call has an id (OpenAI strict requirement)
+        for call in tool_calls:
+            if not call.get("id"):
+                call["id"] = f"call_{uuid.uuid4().hex}"
+        assistant_content = str(response_text or "")
+        self.history_manager.append_assistant(
+            content=assistant_content,
+            metadata={
+                "step": step,
+                "action_type": "tool_call",
+                "tool_calls": tool_calls,
+            },
+            reasoning_content=reasoning_content,
+        )
+        self._log_message_write(
+            trace_logger,
+            "assistant",
+            assistant_content,
+            {"action_type": "tool_call", "tool_calls": tool_calls},
+            step,
+        )
+
+        for call in tool_calls:
+            tool_name = call.get("name") or "unknown_tool"
+            tool_call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
+            raw_args = call.get("arguments") or {}
+            tool_input, parse_err = ensure_json_input(raw_args)
+            if parse_err:
+                error_result = {
+                    "status": "error",
+                    "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {parse_err}"},
+                    "data": {},
+                }
+                observation = json.dumps(error_result, ensure_ascii=False)
+                trace_logger.log_event(
+                    "error",
+                    {
+                        "stage": "tool_call_parse",
+                        "error_code": "INVALID_PARAM",
+                        "message": str(parse_err),
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                    },
+                    step=step,
+                )
+            else:
+                trace_logger.log_event("tool_call", {"tool": tool_name, "args": tool_input, "tool_call_id": tool_call_id}, step=step)
+                if self.console_verbose:
+                    self._console(f"\n🎬 Action: {tool_name}[{tool_input}]\n")
+                elif self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug("Action: %s %s", tool_name, tool_input)
+                try:
+                    observation = self._execute_tool(tool_name, tool_input)
+                    try:
+                        result_obj = json.loads(observation)
+                        trace_logger.log_event("tool_result", {"tool": tool_name, "result": result_obj}, step=step)
+                    except json.JSONDecodeError:
+                        trace_logger.log_event("tool_result", {"tool": tool_name, "result": {"text": observation}}, step=step)
+                except Exception as e:
+                    error_result = {"status": "error", "error": {"code": "EXECUTION_ERROR", "message": str(e)}, "data": {}}
+                    observation = json.dumps(error_result, ensure_ascii=False)
+                    trace_logger.log_event("error", {"stage": "tool_execution", "error_code": "EXECUTION_ERROR", "message": str(e), "tool": tool_name, "traceback": tb.format_exc()}, step=step)
+
+            self.history_manager.append_tool(
+                tool_name=tool_name,
+                raw_result=observation,
+                metadata={"step": step, "tool_call_id": tool_call_id},
+                project_root=self.project_root,
+            )
+            self._log_message_write(
+                trace_logger,
+                "tool",
+                observation,
+                {"tool_name": tool_name, "tool_call_id": tool_call_id},
+                step,
+            )
+
+            if self.console_verbose:
+                display_obs = observation[:300] + "..." if len(observation) > 300 else observation
+                self._console(f"\n👀 Observation: {display_obs}\n")
+            elif self.logger.isEnabledFor(logging.DEBUG):
+                display_obs = observation[:300] + "..." if len(observation) > 300 else observation
+                self.logger.debug("Observation: %s", display_obs)
 
     # =========================================================================
     # 辅助方法

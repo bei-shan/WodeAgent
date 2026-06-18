@@ -27,6 +27,16 @@ class ReadTool(Tool):
     # 类级别的 mtime 缓存（所有实例共享，按 C4 设计）
     # 格式: {absolute_path: last_mtime_ns}
     _mtime_cache: Dict[str, int] = {}
+    _MAX_CACHE_SIZE = 1000
+
+    @classmethod
+    def _cache_mtime(cls, cache_key: str, mtime_ns: int) -> None:
+        """记录 mtime 到缓存，超过容量时淘汰一半条目。"""
+        if len(cls._mtime_cache) >= cls._MAX_CACHE_SIZE:
+            keys_to_drop = list(cls._mtime_cache.keys())[:cls._MAX_CACHE_SIZE // 2]
+            for k in keys_to_drop:
+                del cls._mtime_cache[k]
+        cls._mtime_cache[cache_key] = mtime_ns
 
     def __init__(
         self,
@@ -188,8 +198,8 @@ class ReadTool(Tool):
                 last_mtime = ReadTool._mtime_cache[cache_key]
                 if file_mtime_ns != last_mtime:
                     modified_externally = True
-            # 更新缓存
-            ReadTool._mtime_cache[cache_key] = file_mtime_ns
+            # 更新缓存（带容量限制）
+            ReadTool._cache_mtime(cache_key, file_mtime_ns)
             
             # 检测是否为二进制文件（读取前 8KB，如果包含 null byte 则判定为二进制）
             if self._is_binary_file(target):

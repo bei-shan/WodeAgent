@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.skills.skill_loader import SkillLoader
+from core.skills.skill_loader import SkillLoader, _parse_frontmatter
 from prompts.tools_prompts.skill_prompt import skill_prompt
 from ..base import Tool, ToolParameter, ErrorCode
 from core.env import load_env
@@ -135,36 +135,6 @@ def _apply_arguments(body: str, args: str) -> str:
     if trimmed_args:
         return f"{body}\n\nARGUMENTS: {trimmed_args}"
     return body
-
-
-def _parse_frontmatter(content: str) -> Optional[tuple[dict[str, str], str]]:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-
-    end_idx = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-
-    if end_idx is None:
-        return None
-
-    frontmatter_lines = lines[1:end_idx]
-    body = "\n".join(lines[end_idx + 1 :])
-    frontmatter: dict[str, str] = {}
-
-    for line in frontmatter_lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if ":" not in stripped:
-            return None
-        key, value = stripped.split(":", 1)
-        frontmatter[key.strip()] = value.strip().strip("\"'")
-
-    return frontmatter, body
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
