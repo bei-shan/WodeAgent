@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import uuid
@@ -152,15 +153,22 @@ class TeamStore:
             with inbox_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False))
                 f.write("\n")
+        max_inbox = int(os.getenv("TEAM_MAX_INBOX_SIZE", "10000"))
+        self._trim_jsonl(inbox_path, max_inbox)
         return row
 
     def read_inbox_messages(self, team_name: str, member_name: str) -> List[Dict[str, Any]]:
+        return self.read_inbox_messages_from(team_name, member_name, start_line=0)
+
+    def read_inbox_messages_from(self, team_name: str, member_name: str, start_line: int = 0) -> List[Dict[str, Any]]:
         inbox_path = self._inbox_path(team_name, member_name)
         if not inbox_path.exists():
             return []
         rows: List[Dict[str, Any]] = []
-        for line in inbox_path.read_text(encoding="utf-8").splitlines():
+        for idx, line in enumerate(inbox_path.read_text(encoding="utf-8").splitlines()):
             if not line.strip():
+                continue
+            if idx < start_line:
                 continue
             rows.append(json.loads(line))
         return rows
@@ -200,6 +208,8 @@ class TeamStore:
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(item, ensure_ascii=False))
                 f.write("\n")
+        max_items = int(os.getenv("TEAM_MAX_WORK_ITEMS", "5000"))
+        self._trim_jsonl(path, max_items)
         return item
 
     def list_work_items(
@@ -303,6 +313,16 @@ class TeamStore:
                 if touched:
                     self._write_jsonl(path, rows)
         return changed
+
+    @staticmethod
+    def _trim_jsonl(path: Path, max_lines: int) -> None:
+        """Keep only the last *max_lines* entries in a JSONL file."""
+        if not path.exists():
+            return
+        rows = TeamStore._read_jsonl(path)
+        if len(rows) <= max_lines:
+            return
+        TeamStore._write_jsonl(path, rows[-max_lines:])
 
     @staticmethod
     def _read_jsonl(path: Path) -> List[Dict[str, Any]]:

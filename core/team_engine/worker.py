@@ -15,6 +15,7 @@ class TeammateWorker(threading.Thread):
         poll_fn: Callable[[], bool],
         poll_interval_s: float = 0.2,
         idle_timeout_s: float = 120.0,
+        on_stop: Optional[Callable[[], None]] = None,
     ):
         super().__init__(
             name=f"TeamWorker[{team_name}:{teammate_name}]",
@@ -25,6 +26,7 @@ class TeammateWorker(threading.Thread):
         self._poll_fn = poll_fn
         self.poll_interval_s = max(0.01, float(poll_interval_s))
         self.idle_timeout_s = max(0.01, float(idle_timeout_s))
+        self._on_stop = on_stop
         self.stop_event = threading.Event()
         self._state_lock = threading.Lock()
         self.state = "starting"
@@ -32,6 +34,8 @@ class TeammateWorker(threading.Thread):
         self.last_heartbeat = now
         self.last_active = now
         self.last_error: Optional[str] = None
+        self.messages_processed: int = 0
+        self.work_items_executed: int = 0
 
     def stop(self) -> None:
         with self._state_lock:
@@ -71,4 +75,10 @@ class TeammateWorker(threading.Thread):
 
         with self._state_lock:
             self.state = "stopped"
+
+        if self._on_stop is not None:
+            try:
+                self._on_stop()
+            except Exception:  # pragma: no cover - defensive
+                pass
 

@@ -1,4 +1,7 @@
-# AgentTeams 功能设计文档（MVP 当前实现对齐版）
+# AgentTeams 功能设计文档（MVP v2 实现对齐版）
+
+> 最后更新：2026-06-18
+> v2 变更：新增 TeamList/TeamRetry 工具、Worker 健康统计、inbox 增量读取、存储上限、审批持久化、角色化系统提示词
 
 ## 1. 目标与范围
 
@@ -10,10 +13,21 @@ MVP 目标：
 3. 保持 `Task(mode=oneshot)` 兼容，不破坏原有一次性子代理路径。
 4. 通过 feature flag 可快速关闭与回滚。
 
+MVP v2 新增（2026-06-18）：
+1. Worker 退出感知（`on_stop` 回调）。
+2. 消息去重持久化（`processed_messages` 入快照）。
+3. 审批请求会话恢复。
+4. Inbox 增量读取（cursor 机制）。
+5. 存储文件上限自动截断。
+6. Worker 健康统计（`messages_processed`、`work_items_executed`）。
+7. 角色化 TurnExecutor 系统提示词。
+8. 新增 `TeamList`、`TeamRetry` 工具。
+
 MVP 非目标：
 1. 不做完整的多窗格交互 UI（如 Shift+Up/Down 焦点切换）。
-2. 不做每个 teammate 的完整会话历史恢复。
+2. 不做每个 teammate 的完整独立会话历史恢复。
 3. 不做分布式调度、复杂事务、复杂重试编排。
+4. 不拆分 TaskTool 语义层（`Task` + `TeamSpawn`）。
 
 ## 2. 系统架构
 
@@ -35,7 +49,7 @@ MVP 非目标：
 
 ## 3. 功能工具面
 
-已注册工具：
+已注册工具（15个）：
 1. `TeamCreate`
 2. `SendMessage`
 3. `TeamStatus`
@@ -49,6 +63,8 @@ MVP 非目标：
 11. `TeamTaskList`
 12. `TeamApprovals`
 13. `TeamApprovePlan`
+14. `TeamList`（v2 新增）
+15. `TeamRetry`（v2 新增）
 
 Task 相关模式：
 1. `Task(mode=oneshot)`：保持原行为（默认）。
@@ -161,18 +177,50 @@ MVP 验收重点：
 1. 终端交互暂不支持完整 teammate 焦点切换 UI（键盘导航体验未复刻）。
 2. in-process teammate 不是完整独立会话恢复（当前为状态恢复）。
 3. shutdown 协议是可用基线，未扩展复杂拒绝/协商状态机。
-4. 全量 `pytest` 仍受非 Teams 目录测试收集路径影响，需后续统一测试入口策略。
+4. TaskTool 语义分层未拆分（`Task` + `TeamSpawn`），Task 持续承载 oneshot/persistent/parallel 三种模式。
+
+### v2 已解决的限制
+
+- Worker 空闲退出无感知 → 已通过 `on_stop` 回调解决
+- 消息去重不持久化 → 已通过 `export_state`/`import_state` 解决
+- 审批请求重启丢失 → 已通过快照恢复解决
+- Inbox 全量读取 → 已通过 `_inbox_cursor` 增量读取解决
+- 存储文件无限增长 → 已通过 `_trim_jsonl` 和配置上限解决
+- Worker 健康状态不透明 → 已通过 `team_state` 详细统计解决
+- TurnExecutor 系统提示词硬编码 → 已通过角色映射解决
+- 缺少 TeamList 工具 → 已新增
+- 缺少失败重试工具 → 已新增 `TeamRetry`
+
+## 10b. 验收基线（Claude Code Teams 复刻完成度）
+
+满足以下 10 条即可认为核心复刻完成：
+
+| # | 验收项 | 状态 |
+|---|--------|------|
+| 1 | 支持 message + broadcast | ✅ |
+| 2 | shutdown request/response 带 request_id | ✅ |
+| 3 | plan approval 可阻塞执行 | ✅ |
+| 4 | 共享任务看板 CRUD 完整 | ✅ |
+| 5 | 任务依赖可阻塞/解锁 | ✅ |
+| 6 | 多 teammate 并发 claim 无重复领取 | ✅ |
+| 7 | teammate 空闲后可自动认领新任务 | ✅ |
+| 8 | runtime 能显示任务/消息/审批摘要 | ✅ |
+| 9 | cleanup 遵循"先关闭成员再清理" | ✅ |
+| 10 | save/load 后团队状态可继续推进 | ✅ |
 
 ## 11. 配置项
 
 关键环境变量：
 1. `ENABLE_AGENT_TEAMS`（总开关）
 2. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`（兼容开关）
-3. `AGENT_TEAMS_STORE_DIR`
-4. `AGENT_TASKS_STORE_DIR`
+3. `AGENT_TEAMS_STORE_DIR`（默认 `.teams`）
+4. `AGENT_TASKS_STORE_DIR`（默认 `.tasks`）
 5. `TEAMMATE_MODE`（`auto|in-process|tmux`）
 6. `TEAM_DELEGATE_MODE`
-7. `TEAM_LLM_MAX_CONCURRENCY`
+7. `TEAM_LLM_MAX_CONCURRENCY`（默认 `4`）
+8. `TEAM_WORKER_MAX_STEPS`（默认 `8`）
+9. `TEAM_MAX_INBOX_SIZE`（默认 `10000`，v2 新增）
+10. `TEAM_MAX_WORK_ITEMS`（默认 `5000`，v2 新增）
 
 ---
 

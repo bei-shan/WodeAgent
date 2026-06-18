@@ -22,6 +22,7 @@ from .protocol import (
     EVENT_WORK_ITEM_COMPLETED,
     EVENT_WORK_ITEM_FAILED,
     EVENT_WORK_ITEM_STARTED,
+    EVENT_WORKER_STOPPED,
     MESSAGE_TYPES,
     MESSAGE_TYPE_BROADCAST,
     MESSAGE_TYPE_MESSAGE,
@@ -95,6 +96,7 @@ class TeamManager:
         self._events: Dict[str, List[Event]] = defaultdict(list)
         self._recent_errors: Dict[str, str] = {}
         self._processed_by_member: Dict[tuple[str, str], set[str]] = defaultdict(set)
+        self._inbox_cursor: Dict[tuple[str, str], int] = defaultdict(lambda: 0)
         max_parallel = max_llm_concurrency or int(os.getenv("TEAM_LLM_MAX_CONCURRENCY", "4"))
         self._llm_semaphore = threading.Semaphore(max(1, max_parallel))
         self.message_router = MessageRouter(store=self.store, emit_fn=self._emit)
@@ -146,6 +148,9 @@ class TeamManager:
         for key in list(self._processed_by_member.keys()):
             if key[0] == normalized_team:
                 self._processed_by_member.pop(key, None)
+        for key in list(self._inbox_cursor.keys()):
+            if key[0] == normalized_team:
+                self._inbox_cursor.pop(key, None)
         return {"team_name": normalized_team, "deleted": True}
 
     def cleanup_team(self, team_name: str, force: bool = False) -> Dict[str, Any]:
@@ -501,10 +506,12 @@ class TeamManager:
             team_state.update(worker_state)
             team_states[name] = team_state
             work_counts[name] = self.collect_work(name).get("counts", {})
+            pending_reqs = self.list_plan_approvals(name, status="pending")
             approval_counts[name] = {
-                "pending": len(self.list_plan_approvals(name, status="pending")),
+                "pending": len(pending_reqs),
                 "approved": len(self.list_plan_approvals(name, status="approved")),
                 "rejected": len(self.list_plan_approvals(name, status="rejected")),
+                "requests": pending_reqs,
             }
             board_rows = self.list_board_tasks(name)
             blocked = 0
@@ -525,11 +532,23 @@ class TeamManager:
                 "pending": pending,
                 "in_progress": in_progress,
             }
+        processed_messages: Dict[str, List[str]] = {}
+        for (team, member), msg_ids in self._processed_by_member.items():
+            key = f"{team}|{member}"
+            processed_messages[key] = list(msg_ids)
+
+        inbox_cursors: Dict[str, int] = {}
+        for (team, member), cursor in getattr(self, "_inbox_cursor", {}).items():
+            key = f"{team}|{member}"
+            inbox_cursors[key] = cursor
+
         return {
             "teams": team_states,
             "work_items": work_counts,
             "approvals": approval_counts,
             "task_board": task_board_counts,
+            "processed_messages": processed_messages,
+            "inbox_cursors": inbox_cursors,
         }
 
     def import_state(self, state: Optional[Dict[str, Any]]) -> None:
@@ -549,8 +568,38 @@ class TeamManager:
                 if not name or name == "lead":
                     continue
                 self._start_worker(team_name, name)
-        with self._plan_approvals_lock:
-            self._plan_approvals = {}
+        # Restore processed message IDs from snapshot.
+        snapshot_processed = snapshot.get("processed_messages")
+        if isinstance(snapshot_processed, dict):
+            for key, msg_ids in snapshot_processed.items():
+                if "|" in key and isinstance(msg_ids, list):
+                    team, member = key.split("|", 1)
+                    self._processed_by_member[(team, member)] = set(msg_ids)
+        # Restore inbox cursors from snapshot.
+        snapshot_cursors = snapshot.get("inbox_cursors")
+        if isinstance(snapshot_cursors, dict):
+            if not hasattr(self, "_inbox_cursor"):
+                self._inbox_cursor: Dict[tuple[str, str], int] = {}
+            for key, cursor in snapshot_cursors.items():
+                if "|" in key and isinstance(cursor, int):
+                    team, member = key.split("|", 1)
+                    self._inbox_cursor[(team, member)] = cursor
+        # Restore pending approval requests from snapshot.
+        snapshot_approvals = snapshot.get("approvals")
+        if isinstance(snapshot_approvals, dict):
+            for team, data in snapshot_approvals.items():
+                if not isinstance(data, dict):
+                    continue
+                requests = data.get("requests")
+                if not isinstance(requests, list):
+                    continue
+                for req in requests:
+                    if not isinstance(req, dict):
+                        continue
+                    req_id = str(req.get("request_id") or "").strip()
+                    if not req_id or req_id in self.approval_service._requests:
+                        continue
+                    self.approval_service._requests[req_id] = dict(req)
 
     def _read_team_or_raise(self, team_name: str) -> Dict[str, Any]:
         try:
@@ -586,19 +635,33 @@ class TeamManager:
             return
 
     def _start_worker(self, team_name: str, teammate_name: str) -> None:
+        def _on_worker_stopped() -> None:
+            key = (sanitize_name(team_name), sanitize_name(teammate_name))
+            self.worker_supervisor.workers.pop(key, None)
+            self._emit(
+                team_name,
+                EVENT_WORKER_STOPPED,
+                {"teammate": teammate_name, "reason": "idle_timeout"},
+            )
+
         self.worker_supervisor.start_worker(
             team_name=team_name,
             teammate_name=teammate_name,
             poll_fn=lambda: self._process_member_inbox(team_name, teammate_name),
             poll_interval_s=0.02,
             idle_timeout_s=60.0,
+            on_stop=_on_worker_stopped,
         )
 
     def _process_member_inbox(self, team_name: str, teammate_name: str) -> bool:
         processed_ids = self._processed_by_member[(team_name, teammate_name)]
-        rows = self.store.read_inbox_messages(team_name, teammate_name)
+        cursor = self._inbox_cursor.get((team_name, teammate_name), 0)
+        rows = self.store.read_inbox_messages_from(team_name, teammate_name, start_line=cursor)
         did_work = False
+        rows_processed = 0
+        worker = self.worker_supervisor.workers.get((sanitize_name(team_name), sanitize_name(teammate_name)))
         for row in rows:
+            rows_processed += 1
             message_id = str(row.get("message_id") or "")
             if not message_id or message_id in processed_ids:
                 continue
@@ -615,11 +678,14 @@ class TeamManager:
                 self._apply_plan_approval_response(team_name, teammate_name, row)
             self.mark_message_processed(team_name, message_id, processed_by=teammate_name)
             processed_ids.add(message_id)
+            if worker is not None:
+                worker.messages_processed += 1
             did_work = True
         did_work = self._process_next_work_item(team_name, teammate_name) or did_work
         did_work = self._dispatch_approved_plan_work(team_name, teammate_name) or did_work
         if not did_work:
             did_work = self._claim_board_task_to_work_item(team_name, teammate_name) or did_work
+        self._inbox_cursor[(team_name, teammate_name)] = cursor + rows_processed
         return did_work
 
     def _process_next_work_item(self, team_name: str, teammate_name: str) -> bool:
@@ -669,6 +735,9 @@ class TeamManager:
                 {"work_id": work_id, "owner": teammate_name, "status": WORK_ITEM_STATUS_SUCCEEDED},
             )
             _ = updated
+            worker = self.worker_supervisor.workers.get((sanitize_name(team_name), sanitize_name(teammate_name)))
+            if worker is not None:
+                worker.work_items_executed += 1
         except Exception as exc:
             self.store.update_work_item_status(
                 team_name,

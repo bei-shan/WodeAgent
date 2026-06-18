@@ -10,6 +10,26 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from .turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
 
+_ROLE_SYSTEM_PROMPTS: Dict[str, str] = {
+    "developer": (
+        "You are a developer teammate. Complete the assigned work item by "
+        "using available tools. Produce working, correct code. "
+        "Task recursion is forbidden."
+    ),
+    "reviewer": (
+        "You are a reviewer teammate. Examine the assigned work item with "
+        "a critical eye. Identify issues, suggest improvements, and validate "
+        "correctness. Do NOT create or edit files. Task recursion is forbidden."
+    ),
+    "planner": (
+        "You are a planner teammate. Analyze the assigned work item and "
+        "produce a clear, actionable plan. Break down complex tasks into "
+        "smaller steps. Do NOT create or edit files. Task recursion is forbidden."
+    ),
+}
+
+_DEFAULT_WORKER_PROMPT = _ROLE_SYSTEM_PROMPTS["developer"]
+
 
 class ExecutionService:
     """Runs teammate work items with tool-policy filtering."""
@@ -65,14 +85,10 @@ class ExecutionService:
             denied_tools=denied_tools,
         )
         instruction = str(work_item.get("instruction") or "")
+        role = self._get_teammate_role(team_name, teammate_name)
+        system_prompt = _ROLE_SYSTEM_PROMPTS.get(role, _DEFAULT_WORKER_PROMPT)
         messages: List[Dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a teammate worker. Complete the assigned work item. "
-                    "Task recursion is forbidden."
-                ),
-            },
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": instruction},
         ]
         tool_usage: Dict[str, int] = {}
@@ -92,6 +108,17 @@ class ExecutionService:
         if last_tool_msg:
             return {"result": last_tool_msg, "tool_usage": tool_usage}
         return {"result": "", "tool_usage": tool_usage}
+
+    def _get_teammate_role(self, team_name: str, teammate_name: str) -> str:
+        """Return the teammate's role from team config, defaulting to 'developer'."""
+        try:
+            cfg = self._read_team_fn(team_name)
+            for member in cfg.get("members", []):
+                if str(member.get("name") or "") == teammate_name:
+                    return str(member.get("role") or "developer")
+        except Exception:
+            pass
+        return "developer"
 
     def _build_teammate_registry(self, team_name: str, teammate_name: str) -> Tuple[ToolRegistry, Set[str]]:
         cfg = self._read_team_fn(team_name)
