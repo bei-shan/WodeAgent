@@ -6,6 +6,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import time
+from pathlib import Path
+
 from core.worktree.manager import WorktreeError, WorktreeManager
 from prompts.tools_prompts.exit_worktree_prompt import exit_worktree_prompt
 from ..base import ErrorCode, Tool, ToolParameter
@@ -76,10 +79,12 @@ class ExitWorktreeTool(Tool):
             )
 
         wt_name = active["name"]
+        git_error: Optional[str] = None
 
+        # Phase 1: git cleanup (may fail, but we always restore project_root).
         try:
-            # Auto-remove clean worktrees regardless of action choice.
             if self._worktree_manager.is_clean(wt_name):
+                # Auto-remove clean worktrees regardless of action choice.
                 self._worktree_manager.remove(wt_name)
                 actual_action = "removed (auto — no changes)"
                 merge_hint = ""
@@ -107,20 +112,25 @@ class ExitWorktreeTool(Tool):
                 actual_action = "removed (changes discarded)"
                 merge_hint = ""
         except WorktreeError as exc:
-            return self.create_error_response(
-                error_code=self._map_code(exc.code),
-                message=exc.message,
-                params_input=params_input,
-                time_ms=int((time.monotonic() - start_time) * 1000),
-            )
+            git_error = exc.message
+            actual_action = f"{action} (git error)"
+            merge_hint = ""
 
-        # Always restore project root (even if cleanup partially failed).
+        # Phase 2: always restore project_root regardless of git outcome.
         try:
             self._code_agent.exit_worktree(action=action, discard_changes=discard_changes)
         except WorktreeError:
-            pass  # project_root restoration is independent of git cleanup
+            pass
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+        if git_error:
+            return self.create_error_response(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=f"Worktree cleanup failed: {git_error}. Project root has been restored.",
+                params_input=params_input,
+                time_ms=elapsed_ms,
+            )
         text = f"Exited worktree '{wt_name}' ({actual_action})."
         if merge_hint:
             text += f"\n{merge_hint}"
