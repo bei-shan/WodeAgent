@@ -26,6 +26,7 @@ class WorkerSupervisor:
         poll_fn: Callable[[], bool],
         poll_interval_s: float = 0.02,
         idle_timeout_s: float = 60.0,
+        on_stop: Optional[Callable[[], None]] = None,
     ) -> Any:
         team = sanitize_name(team_name)
         teammate = sanitize_name(teammate_name)
@@ -39,6 +40,7 @@ class WorkerSupervisor:
             poll_fn=poll_fn,
             poll_interval_s=poll_interval_s,
             idle_timeout_s=idle_timeout_s,
+            on_stop=on_stop,
         )
         worker.start()
         self._workers[key] = worker
@@ -70,10 +72,19 @@ class WorkerSupervisor:
         active: list[str] = []
         idle: list[str] = []
         stopped: list[str] = []
+        teammates: dict[str, dict] = {}
         for (w_team, member), worker in self._workers.items():
             if w_team != team:
                 continue
             state = str(getattr(worker, "state", "") or "")
+            info = {
+                "state": state,
+                "last_active": getattr(worker, "last_active", None),
+                "last_error": getattr(worker, "last_error", None),
+                "messages_processed": int(getattr(worker, "messages_processed", 0) or 0),
+                "work_items_executed": int(getattr(worker, "work_items_executed", 0) or 0),
+            }
+            teammates[member] = info
             if state == "idle":
                 idle.append(member)
             elif worker and worker.is_alive():
@@ -81,6 +92,7 @@ class WorkerSupervisor:
             else:
                 stopped.append(member)
         return {
+            "teammates": teammates,
             "active_teammates": sorted(active),
             "idle_teammates": sorted(idle),
             "stopped_teammates": sorted(stopped),

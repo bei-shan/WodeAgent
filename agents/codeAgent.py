@@ -221,6 +221,8 @@ class CodeAgent(Agent):
             from tools.builtin.team_task_get import TeamTaskGetTool
             from tools.builtin.team_task_update import TeamTaskUpdateTool
             from tools.builtin.team_task_list import TeamTaskListTool
+            from tools.builtin.team_list import TeamListTool
+            from tools.builtin.team_retry import TeamRetryTool
         except Exception as exc:
             self.logger.warning("AgentTeams enabled but team tools unavailable: %s", exc)
             return
@@ -238,6 +240,8 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(TeamTaskGetTool(project_root=self.project_root, team_manager=self.team_manager))
         self.tool_registry.register_tool(TeamTaskUpdateTool(project_root=self.project_root, team_manager=self.team_manager))
         self.tool_registry.register_tool(TeamTaskListTool(project_root=self.project_root, team_manager=self.team_manager))
+        self.tool_registry.register_tool(TeamListTool(project_root=self.project_root, team_manager=self.team_manager))
+        self.tool_registry.register_tool(TeamRetryTool(project_root=self.project_root, team_manager=self.team_manager))
 
     def _refresh_skills_prompt(self) -> None:
         refresh = os.getenv("SKILLS_REFRESH_ON_CALL", "true").lower() in {"1", "true", "yes", "y", "on"}
