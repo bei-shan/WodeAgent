@@ -36,6 +36,7 @@ def build_session_snapshot(
     parallel_work_index: Optional[Dict[str, Any]] = None,
     team_store_dir: str = ".teams",
     task_store_dir: str = ".tasks",
+    worktree_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     team_snapshot_payload = teams_snapshot or {}
     inferred_parallel_index: Dict[str, Any] = {}
@@ -60,6 +61,7 @@ def build_session_snapshot(
         "parallel_work_index": parallel_work_index or inferred_parallel_index,
         "team_store_dir": team_store_dir or ".teams",
         "task_store_dir": task_store_dir or ".tasks",
+        "worktree_state": worktree_state,
     }
 
 
@@ -77,4 +79,5 @@ def load_session_snapshot(path: str | Path) -> Dict[str, Any]:
     payload.setdefault("parallel_work_index", {})
     payload.setdefault("team_store_dir", ".teams")
     payload.setdefault("task_store_dir", ".tasks")
+    payload.setdefault("worktree_state", None)
     return payload

@@ -29,6 +29,7 @@ from core.context_engine.summary_compressor import create_summary_generator
 from core.session_store import build_session_snapshot, save_session_snapshot, load_session_snapshot
 from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
+from core.worktree.manager import WorktreeManager, WorktreeError
 from tools.builtin.list_files import ListFilesTool
 from tools.builtin.search_files_by_name import SearchFilesByNameTool
 from tools.builtin.search_code import GrepTool
@@ -41,6 +42,8 @@ from tools.builtin.skill import SkillTool
 from tools.builtin.bash import BashTool
 from tools.builtin.ask_user import AskUserTool
 from tools.builtin.task import TaskTool
+from tools.builtin.enter_worktree import EnterWorktreeTool
+from tools.builtin.exit_worktree import ExitWorktreeTool
 from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
@@ -86,6 +89,7 @@ class CodeAgent(Agent):
     ):
         super().__init__(name, llm, system_prompt=system_prompt, config=config)
         self.project_root = project_root
+        self._original_project_root = project_root
         self.tool_registry = tool_registry
         self.logger = logger or setup_logger(
             name=f"agent.{self.name}",
@@ -129,7 +133,17 @@ class CodeAgent(Agent):
             self.teammate_runtime_mode,
             self.delegate_mode,
         )
-        
+
+        # Worktree 会话隔离管理器
+        worktree_store_dir = os.getenv("WORKTREE_STORE_DIR", ".worktrees")
+        worktree_base_ref = os.getenv("WORKTREE_BASE_REF", "fresh")
+        self._worktree_manager = WorktreeManager(
+            project_root=self._original_project_root,
+            store_dir=worktree_store_dir,
+            base_ref=worktree_base_ref,
+        )
+        self._active_worktree: Optional[dict] = None
+
         # 创建 Summary 生成器（Phase 7）
         summary_generator = create_summary_generator(
             llm=self.llm,
@@ -203,6 +217,21 @@ class CodeAgent(Agent):
                 team_manager=self.team_manager,
             )
         )
+        # Worktree session isolation tools
+        self.tool_registry.register_tool(
+            EnterWorktreeTool(
+                project_root=self.project_root,
+                worktree_manager=self._worktree_manager,
+                code_agent=self,
+            )
+        )
+        self.tool_registry.register_tool(
+            ExitWorktreeTool(
+                project_root=self.project_root,
+                worktree_manager=self._worktree_manager,
+                code_agent=self,
+            )
+        )
         if self.enable_agent_teams:
             self._register_agent_teams_tools()
 
@@ -242,6 +271,77 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(TeamTaskListTool(project_root=self.project_root, team_manager=self.team_manager))
         self.tool_registry.register_tool(TeamListTool(project_root=self.project_root, team_manager=self.team_manager))
         self.tool_registry.register_tool(TeamRetryTool(project_root=self.project_root, team_manager=self.team_manager))
+
+    # ------------------------------------------------------------------
+    # Worktree session isolation
+    # ------------------------------------------------------------------
+
+    def enter_worktree(self, name: str | None = None, path: str | None = None) -> None:
+        """Switch the session's project_root to a worktree directory.
+
+        Called by EnterWorktreeTool after git worktree creation/lookup.
+        All subsequent tool operations (Read/Write/Edit/Bash/...) will
+        target the worktree directory automatically.
+
+        Parameters
+        ----------
+        name:
+            The worktree name. Used for logging only (the actual switch
+            uses *path*).
+        path:
+            Absolute filesystem path of the worktree.
+        """
+        if self._active_worktree is not None:
+            raise WorktreeError(
+                "CONFLICT",
+                f"Already in worktree '{self._active_worktree.get('name')}'. "
+                "ExitWorktree first before entering another.",
+            )
+
+        wt_path = Path(path).resolve() if isinstance(path, str) else Path(name).resolve() if name else None
+        if wt_path is None:
+            raise WorktreeError("INVALID_PARAM", "name or path required")
+
+        # Resolve the entry from the worktree manager if possible.
+        entry = None
+        try:
+            if path:
+                entry = self._worktree_manager.get_by_path(path)
+        except WorktreeError:
+            pass
+
+        self._active_worktree = entry or {"name": name or str(wt_path.name), "path": str(wt_path)}
+        self.project_root = str(wt_path)
+
+        # Refresh tools with new project_root.
+        self._inject_permission_gate()
+        self.context_builder.project_root = self.project_root if hasattr(self.context_builder, "project_root") else self.context_builder._project_root
+
+        self.logger.info(
+            "Entered worktree '%s' at %s",
+            self._active_worktree.get("name"),
+            self.project_root,
+        )
+
+    def exit_worktree(self, action: str = "keep", discard_changes: bool = False) -> None:
+        """Restore the session's project_root to the original directory.
+
+        Called by ExitWorktreeTool.  This only restores the project_root;
+        the tool handles git cleanup (keep/remove) independently.
+        """
+        if self._active_worktree is None:
+            return
+
+        wt_name = self._active_worktree.get("name", "unknown")
+        self.project_root = str(self._original_project_root)
+        self._active_worktree = None
+
+        # Refresh tools with original project_root.
+        self._inject_permission_gate()
+        if hasattr(self.context_builder, "project_root"):
+            self.context_builder.project_root = self.project_root
+
+        self.logger.info("Exited worktree '%s', restored to %s", wt_name, self.project_root)
 
     def _refresh_skills_prompt(self) -> None:
         refresh = os.getenv("SKILLS_REFRESH_ON_CALL", "true").lower() in {"1", "true", "yes", "y", "on"}
@@ -731,6 +831,13 @@ class CodeAgent(Agent):
         history_messages = self.history_manager.serialize_messages()
         tool_schema = self._get_openai_tools_for_current_mode()
         teams_snapshot = self.team_manager.export_state() if self.team_manager else {}
+        worktree_state = None
+        if self._active_worktree:
+            worktree_state = {
+                "name": self._active_worktree.get("name"),
+                "path": self._active_worktree.get("path"),
+                "branch": self._active_worktree.get("branch"),
+            }
         snapshot = build_session_snapshot(
             system_messages=system_messages,
             history_messages=history_messages,
@@ -747,6 +854,7 @@ class CodeAgent(Agent):
             parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
             team_store_dir=self.team_store_dir,
             task_store_dir=self.task_store_dir,
+            worktree_state=worktree_state,
         )
         save_session_snapshot(path, snapshot)
 
@@ -762,6 +870,16 @@ class CodeAgent(Agent):
             if hasattr(self.context_builder, "set_runtime_system_blocks"):
                 self.context_builder.set_runtime_system_blocks(
                     ["[Team Runtime]\n- Team state restored from session snapshot."]
+                )
+        # Restore worktree state if the session was saved inside a worktree.
+        worktree_state = snapshot.get("worktree_state")
+        if isinstance(worktree_state, dict) and worktree_state.get("path"):
+            try:
+                self.enter_worktree(path=worktree_state["path"])
+            except Exception:
+                self.logger.warning(
+                    "Failed to restore worktree from session: %s",
+                    worktree_state.get("name", "unknown"),
                 )
 
     def _print_context_preview(
