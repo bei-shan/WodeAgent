@@ -110,12 +110,23 @@ class ExecutionService:
         denyset.add("Task")
 
         filtered = ToolRegistry()
+        main_gate = None
         for tool in self._tool_registry.get_all_tools():
             name = tool.name
             if name in denyset:
                 continue
             if allowset and name not in allowset:
                 continue
+            if main_gate is None:
+                main_gate = getattr(tool, "_permission_gate", None)
             filtered.register_tool(tool)
+
+        # Team workers inherit the main agent's authorization cache but
+        # must not prompt the user directly.
+        if main_gate is not None:
+            sub_gate = main_gate.subagent_gate()
+            for tool in filtered.get_all_tools():
+                tool._permission_gate = sub_gate
+
         return filtered, denyset
 

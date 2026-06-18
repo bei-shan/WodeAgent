@@ -203,11 +203,32 @@ class MultiEditTool(Tool):
             try:
                 abs_path.relative_to(self._root)
             except ValueError:
-                return self.create_error_response(
-                    error_code=ErrorCode.ACCESS_DENIED,
-                    message="Path must be within project root.",
-                    params_input=params_input,
-                )
+                resolved = str(abs_path.resolve())
+                gate = getattr(self, "_permission_gate", None)
+                if gate is not None:
+                    decision = gate.check(resolved)
+                    if decision == "granted":
+                        pass
+                    elif decision == "ask":
+                        decision = gate.ask(resolved, self.name, "编辑")
+                        if decision != "granted":
+                            return self.create_error_response(
+                                error_code=ErrorCode.ACCESS_DENIED,
+                                message=f"Access denied to '{path}'.",
+                                params_input=params_input,
+                            )
+                    else:
+                        return self.create_error_response(
+                            error_code=ErrorCode.ACCESS_DENIED,
+                            message="Path must be within project root.",
+                            params_input=params_input,
+                        )
+                else:
+                    return self.create_error_response(
+                        error_code=ErrorCode.ACCESS_DENIED,
+                        message="Path must be within project root.",
+                        params_input=params_input,
+                    )
             
         except OSError as e:
             return self.create_error_response(

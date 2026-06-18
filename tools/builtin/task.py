@@ -620,16 +620,26 @@ class TaskTool(Tool):
     def _create_filtered_registry(self) -> ToolRegistry:
         """Create a tool registry with only allowed tools for subagents."""
         filtered = ToolRegistry()
-        
+        main_gate = None
+
         for tool in self._tool_registry.get_all_tools():
             tool_name = tool.name
-            
+
             # Skip denied tools
             if tool_name in DENIED_TOOLS:
                 continue
-            
+
             # Include allowed tools
             if tool_name in ALLOWED_TOOLS:
+                if main_gate is None:
+                    main_gate = getattr(tool, "_permission_gate", None)
                 filtered.register_tool(tool)
-        
+
+        # Sub-agents inherit the main agent's authorization cache but
+        # must not prompt the user directly.
+        if main_gate is not None:
+            sub_gate = main_gate.subagent_gate()
+            for tool in filtered.get_all_tools():
+                tool._permission_gate = sub_gate
+
         return filtered

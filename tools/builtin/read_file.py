@@ -135,12 +135,33 @@ class ReadTool(Tool):
             # 如果 target 不在 _root 下，relative_to 会抛出 ValueError
             target.relative_to(self._root)
         except ValueError:
-            # 路径在项目根目录外，拒绝访问
-            return self.create_error_response(
-                error_code=ErrorCode.ACCESS_DENIED,
-                message=f"Access denied. Path '{path}' is outside project root.",
-                params_input=params_input,
-            )
+            # 软沙箱：弹窗确认或拒绝
+            resolved = str(target.resolve())
+            gate = getattr(self, "_permission_gate", None)
+            if gate is not None:
+                decision = gate.check(resolved)
+                if decision == "granted":
+                    pass  # 已授权，继续执行
+                elif decision == "ask":
+                    decision = gate.ask(resolved, self.name, "读取")
+                    if decision != "granted":
+                        return self.create_error_response(
+                            error_code=ErrorCode.ACCESS_DENIED,
+                            message=f"Access denied to '{path}'.",
+                            params_input=params_input,
+                        )
+                else:
+                    return self.create_error_response(
+                        error_code=ErrorCode.ACCESS_DENIED,
+                        message=f"Path '{path}' is outside project root.",
+                        params_input=params_input,
+                    )
+            else:
+                return self.create_error_response(
+                    error_code=ErrorCode.ACCESS_DENIED,
+                    message=f"Path '{path}' is outside project root.",
+                    params_input=params_input,
+                )
         except OSError as e:
             # 路径解析失败（如权限问题、符号链接循环等）
             return self.create_error_response(

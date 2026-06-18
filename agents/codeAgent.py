@@ -42,6 +42,7 @@ from tools.builtin.bash import BashTool
 from tools.builtin.ask_user import AskUserTool
 from tools.builtin.task import TaskTool
 from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
+from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
 
@@ -152,6 +153,12 @@ class CodeAgent(Agent):
         self._mcp_clients = []
         self._mcp_tools_prompt = ""
         self._register_mcp_tools()
+
+        # 软沙箱权限注入（工具注册完成后）
+        self._permission_gate = create_permission_gate(
+            project_root=self.project_root,
+        )
+        self._inject_permission_gate()
         
         # 上下文构建器
         self.context_builder = ContextBuilder(
@@ -260,6 +267,15 @@ class CodeAgent(Agent):
         except Exception as exc:
             if self.logger:
                 self.logger.warning("MCP registration skipped: %s", exc)
+
+    def _inject_permission_gate(self) -> None:
+        """将 PermissionGate 注入到所有已注册的工具实例中。
+
+        对于已有 permission_gate 属性的工具（如子代理复用），保留原值。
+        """
+        for tool in self.tool_registry.get_all_tools():
+            if getattr(tool, "_permission_gate", None) is None:
+                tool._permission_gate = self._permission_gate
 
     def run(self, input_text: str, **kwargs) -> str:
         """

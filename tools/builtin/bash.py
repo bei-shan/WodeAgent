@@ -484,14 +484,14 @@ class BashTool(Tool):
 
     def _check_cd_paths(self, command: str, base_dir: Path) -> Optional[str]:
         """
-        检查命令中的 cd 路径是否在项目根目录内
+        检查命令中的 cd 路径是否在项目根目录内（或用户已授权）
 
         Args:
             command: 要检查的命令
             base_dir: 当前工作目录
 
         Returns:
-            如果 cd 路径越界，返回错误消息；否则返回 None
+            如果 cd 路径越界且用户拒绝/无法确认，返回错误消息；否则返回 None
         """
         # 匹配 cd 命令及其目标路径（大小写不敏感）
         cd_patterns = [
@@ -522,6 +522,17 @@ class BashTool(Tool):
                     # 检查是否在项目根目录内
                     resolved.relative_to(self._root)
                 except ValueError:
+                    # 软沙箱：弹窗确认
+                    gate = getattr(self, "_permission_gate", None)
+                    if gate is not None:
+                        resolved_str = str(resolved)
+                        decision = gate.check(resolved_str)
+                        if decision == "granted":
+                            continue  # 已授权，放行
+                        elif decision == "ask":
+                            decision = gate.ask(resolved_str, self.name, "cd")
+                            if decision == "granted":
+                                continue  # 用户同意，放行
                     return f"Access denied. 'cd {cd_target}' would go outside project root."
                 except OSError:
                     # 路径解析失败，继续检查其他 cd
