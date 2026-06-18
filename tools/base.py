@@ -53,6 +53,22 @@ class ErrorCode(str, Enum):
     MCP_NOT_FOUND = "MCP_NOT_FOUND"                # MCP 工具不存在
 
 
+def map_team_error_code(code: str) -> "ErrorCode":
+    """Shared helper: map TeamManager error code string to ErrorCode enum.
+
+    Used by all team tools (SendMessage, TeamCreate, TeamDelete, etc.).
+    """
+    if code == "INVALID_PARAM":
+        return ErrorCode.INVALID_PARAM
+    if code == "NOT_FOUND":
+        return ErrorCode.NOT_FOUND
+    if code == "TIMEOUT":
+        return ErrorCode.TIMEOUT
+    if code == "CONFLICT":
+        return ErrorCode.CONFLICT
+    return ErrorCode.INTERNAL_ERROR
+
+
 # =============================================================================
 # 工具参数定义
 # =============================================================================

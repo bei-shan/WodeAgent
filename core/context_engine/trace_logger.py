@@ -208,10 +208,15 @@ class TraceLogger:
         # 更新步骤数
         if step > self._total_steps:
             self._total_steps = step
-        
+
         # 更新工具调用次数
         if event == "tool_call":
             self._tools_used += 1
+
+    @property
+    def total_usage(self) -> dict:
+        """公开只读的累计 token 用量（兼容旧代码的 _total_usage 访问）。"""
+        return dict(self._total_usage)
         
         # 更新 token 用量
         if event == "model_output" and payload.get("usage"):

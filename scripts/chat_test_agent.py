@@ -96,7 +96,7 @@ class RichConsoleCodeAgent(CodeAgent):
                 
                 # Update token tracker from trace logger if available
                 if hasattr(self, 'trace_logger') and self.trace_logger:
-                    usage = self.trace_logger._total_usage
+                    usage = self.trace_logger.total_usage
                     if usage.get("total_tokens", 0) > 0:
                         self.ui.add_token_usage(
                             usage.get("prompt_tokens", 0),

@@ -8,17 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from core.team_engine.manager import TeamManager, TeamManagerError
 from prompts.tools_prompts.team_task_list_prompt import team_task_list_prompt
-from ..base import ErrorCode, Tool, ToolParameter
-
-
-def _map_error_code(code: str) -> ErrorCode:
-    if code == "INVALID_PARAM":
-        return ErrorCode.INVALID_PARAM
-    if code == "NOT_FOUND":
-        return ErrorCode.NOT_FOUND
-    if code == "TIMEOUT":
-        return ErrorCode.TIMEOUT
-    return ErrorCode.INTERNAL_ERROR
+from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamTaskListTool(Tool):
@@ -76,7 +66,7 @@ class TeamTaskListTool(Tool):
             )
         except TeamManagerError as exc:
             return self.create_error_response(
-                error_code=_map_error_code(exc.code),
+                error_code=map_team_error_code(exc.code),
                 message=exc.message,
                 params_input=params_input,
                 time_ms=int((time.monotonic() - start_time) * 1000),
