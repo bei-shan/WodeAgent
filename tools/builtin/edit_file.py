@@ -162,13 +162,13 @@ class EditTool(Tool):
                 params_input=params_input,
             )
 
-        # 计算解析后的相对路径（用于响应和显示）
+        # 计算解析后的相对路径（统一 POSIX 格式，跨平台一致）
         try:
-            rel_path = str(abs_path.relative_to(self._root))
+            rel_path = abs_path.relative_to(self._root).as_posix()
             if not rel_path:
                 rel_path = "."
         except ValueError:
-            rel_path = str(abs_path)
+            rel_path = abs_path.as_posix()
 
         # =====================================================================
         # 文件存在性与类型检查（Edit 只能编辑已存在的文件）
@@ -398,7 +398,8 @@ class EditTool(Tool):
                 # 使用 PID + 时间戳确保临时文件名唯一
                 temp_path = abs_path.with_suffix(f".tmp.{os.getpid()}.{int(time.time() * 1000000)}")
                 try:
-                    temp_path.write_text(new_content, encoding="utf-8")
+                    with open(temp_path, "w", encoding="utf-8", newline="") as f:
+                        f.write(new_content)
                     temp_path.replace(abs_path)
                 finally:
                     if temp_path.exists():

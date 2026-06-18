@@ -144,13 +144,13 @@ class WriteTool(Tool):
                 params_input=params_input,
             )
 
-        # 计算解析后的相对路径（用于响应和显示）
+        # 计算解析后的相对路径（统一 POSIX 格式，跨平台一致）
         try:
-            rel_path = str(abs_path.relative_to(self._root))
+            rel_path = abs_path.relative_to(self._root).as_posix()
             if not rel_path:
                 rel_path = "."
         except ValueError:
-            rel_path = str(abs_path)
+            rel_path = abs_path.as_posix()
 
         # =====================================================================
         # 目标路径检查（是否为目录）
@@ -336,7 +336,8 @@ class WriteTool(Tool):
                 import os
                 temp_path = abs_path.with_suffix(f".tmp.{os.getpid()}.{int(time.time() * 1000000)}")
                 try:
-                    temp_path.write_text(content, encoding="utf-8")
+                    with open(temp_path, "w", encoding="utf-8", newline="") as f:
+                        f.write(content)
                     temp_path.replace(abs_path)
                 finally:
                     if temp_path.exists():

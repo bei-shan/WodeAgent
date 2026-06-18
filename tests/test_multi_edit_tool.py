@@ -7,6 +7,7 @@
     python -m unittest tests.test_multi_edit_tool -v
 """
 
+import os
 import unittest
 import time
 from pathlib import Path
@@ -470,8 +471,12 @@ class TestMultiEditTool(unittest.TestCase):
 
             parsed = self._validate_and_assert(response, "error")
 
-            self.assertEqual(parsed["error"]["code"], "INVALID_PARAM")
-            self.assertIn("Absolute path", parsed["error"]["message"])
+            # On Windows, /etc/passwd is not absolute (needs C:\...), so the
+            # tool rejects it as path traversal (ACCESS_DENIED) instead.
+            expected_code = "INVALID_PARAM" if os.name != "nt" else "ACCESS_DENIED"
+            self.assertEqual(parsed["error"]["code"], expected_code)
+            if expected_code == "INVALID_PARAM":
+                self.assertIn("Absolute path", parsed["error"]["message"])
 
     # ========================================================================
     # Error 场景测试 - NOT_FOUND / IS_DIRECTORY

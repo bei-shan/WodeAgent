@@ -25,10 +25,11 @@ class TempProject:
         return self.root.joinpath(*parts)
     
     def create_file(self, rel_path: str, content: str = "") -> Path:
-        """创建文件"""
+        """创建文件（统一换行符，跨平台一致）"""
         file_path = self.path(rel_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content, encoding="utf-8")
+        with open(file_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
         return file_path
     
     def create_dir(self, rel_path: str) -> Path:

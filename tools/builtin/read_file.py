@@ -149,14 +149,14 @@ class ReadTool(Tool):
                 params_input=params_input,
             )
 
-        # 计算解析后的相对路径（用于响应中显示）
+        # 计算解析后的相对路径（统一 POSIX 格式，跨平台一致）
         try:
-            rel_path = str(target.relative_to(self._root))
+            rel_path = target.relative_to(self._root).as_posix()
             if not rel_path:
                 rel_path = "."
         except ValueError:
             # 如果无法计算相对路径，使用绝对路径
-            rel_path = str(target)
+            rel_path = target.as_posix()
 
         # =====================================================================
         # 文件存在性与类型检查

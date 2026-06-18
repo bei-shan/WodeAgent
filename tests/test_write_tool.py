@@ -7,6 +7,7 @@
     python -m unittest tests.test_write_tool -v
 """
 
+import os
 import unittest
 from pathlib import Path
 from tools.builtin.write_file import WriteTool
@@ -464,24 +465,33 @@ class TestWriteTool(unittest.TestCase):
 
             parsed = self._validate_and_assert(response, "error")
 
-            self.assertEqual(parsed["error"]["code"], "INVALID_PARAM")
-            self.assertIn("absolute", parsed["error"]["message"].lower())
+            # On Windows, /tmp/test.txt is not absolute (needs C:\...), so
+            # the tool rejects it as path traversal (ACCESS_DENIED) instead.
+            expected_code = "INVALID_PARAM" if os.name != "nt" else "ACCESS_DENIED"
+            self.assertEqual(parsed["error"]["code"], expected_code)
+            if expected_code == "INVALID_PARAM":
+                self.assertIn("absolute", parsed["error"]["message"].lower())
 
     def test_error_invalid_param_absolute_path_windows_style(self):
         """Error: INVALID_PARAM - Windows 风格绝对路径被拒绝"""
         with create_temp_project() as project:
             tool = WriteTool(project_root=project.root)
-            # 在 Unix 上这被视为相对路径，但在工具逻辑中
-            # 我们检查 is_absolute()，所以 Windows 风格路径在 Unix 上不会触发绝对路径错误
-            # 这里测试标准的绝对路径拒绝
+            # On Windows, use a real absolute path (C:\...) for this test
+            if os.name == "nt":
+                test_path = "C:\\absolute\\path.txt"
+            else:
+                test_path = "/absolute/path.txt"
             response = tool.run({
-                "path": "/absolute/path.txt",
+                "path": test_path,
                 "content": "content\n"
             })
 
             parsed = self._validate_and_assert(response, "error")
 
-            self.assertEqual(parsed["error"]["code"], "INVALID_PARAM")
+            # On Windows, C:\... is absolute → INVALID_PARAM
+            # On Unix, /absolute/... is absolute → INVALID_PARAM
+            expected_code = "INVALID_PARAM"
+            self.assertEqual(parsed["error"]["code"], expected_code)
 
     # ========================================================================
     # Error - ACCESS_DENIED 场景测试
