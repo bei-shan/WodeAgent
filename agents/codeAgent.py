@@ -415,24 +415,50 @@ class CodeAgent(Agent):
     def switch_model(self, *, model: str | None = None, provider: str | None = None) -> None:
         """Switch the active LLM model mid-conversation.
 
-        Creates a new HelloAgentsLLM instance with the new model/provider,
-        preserving the current api_key and base_url.  The tool registry
-        and all other agent state are unaffected.
+        1. If *model* matches a named profile (from ``MODEL_PROFILES``),
+           use the profile's credentials (api_key, base_url, provider).
+        2. Otherwise, use *model* as a raw model ID with the current
+           credentials.
+
+        The tool registry and all other agent state are unaffected.
         """
         previous = self.llm.model
-        new_model = model or self.llm.model
-        new_provider = provider or self.llm.provider
 
-        self.llm = HelloAgentsLLM(
-            model=new_model,
-            api_key=self.llm.api_key,
-            base_url=self.llm.base_url,
-            provider=new_provider,
-            temperature=self.llm.temperature,
-            max_tokens=self.llm.max_tokens,
-            timeout=self.llm.timeout,
-        )
-        self.logger.info("Switched model: %s → %s (provider: %s)", previous, new_model, new_provider)
+        # Check named profiles first.
+        from core.model_profiles import load_model_profiles
+        profiles = getattr(self, "_model_profiles", None)
+        if profiles is None:
+            profiles = load_model_profiles()
+            self._model_profiles = profiles
+
+        profile = profiles.get((model or "").lower()) if model else None
+        if profile:
+            self.llm = HelloAgentsLLM(
+                model=profile.model,
+                api_key=profile.api_key or self.llm.api_key,
+                base_url=profile.base_url or self.llm.base_url,
+                provider=profile.provider or self.llm.provider,
+                temperature=self.llm.temperature,
+                max_tokens=self.llm.max_tokens,
+                timeout=self.llm.timeout,
+            )
+            self.logger.info(
+                "Switched model: %s → %s (profile: %s, provider: %s)",
+                previous, profile.model, profile.name, profile.provider,
+            )
+        else:
+            new_model = model or self.llm.model
+            new_provider = provider or self.llm.provider
+            self.llm = HelloAgentsLLM(
+                model=new_model,
+                api_key=self.llm.api_key,
+                base_url=self.llm.base_url,
+                provider=new_provider,
+                temperature=self.llm.temperature,
+                max_tokens=self.llm.max_tokens,
+                timeout=self.llm.timeout,
+            )
+            self.logger.info("Switched model: %s → %s (provider: %s)", previous, new_model, new_provider)
 
     @staticmethod
     def _extract_plan_steps(plan: str) -> list[str]:

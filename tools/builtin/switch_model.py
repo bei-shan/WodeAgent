@@ -51,10 +51,22 @@ class SwitchModelTool(Tool):
         params_input = dict(parameters)
         model = parameters.get("model")
         if not isinstance(model, str) or not model.strip():
-            return self.create_error_response(
-                error_code=ErrorCode.INVALID_PARAM,
-                message="Parameter 'model' is required.",
+            # No model specified — list available profiles + current model.
+            from core.model_profiles import load_model_profiles, list_model_profiles
+            profiles = load_model_profiles()
+            profile_list = list_model_profiles(profiles)
+            current = self._code_agent.llm.model
+            return self.create_success_response(
+                data={
+                    "current_model": current,
+                    "available_profiles": profile_list,
+                },
+                text=(
+                    f"Current model: {current}\n"
+                    f"Available profiles: {', '.join(p['name'] for p in profile_list) or '(none configured)'}"
+                ),
                 params_input=params_input,
+                time_ms=int((time.monotonic() - start_time) * 1000),
             )
 
         try:
