@@ -159,7 +159,35 @@ class ContextBuilder:
             return ""
         data = runpy.run_path(str(prompt_path))
         prompt = data.get("system_prompt", "")
-        return prompt if isinstance(prompt, str) else ""
+        if not isinstance(prompt, str):
+            return ""
+
+        # Append plan mode guidance if EnterPlanMode tool is available.
+        prompt = self._append_plan_mode_guidance(prompt)
+        return prompt
+
+    def _append_plan_mode_guidance(self, prompt: str) -> str:
+        """Append plan mode usage guidance to the system prompt.
+
+        Only adds the block if EnterPlanMode is registered as a tool.
+        """
+        try:
+            tools = getattr(self.tool_registry, "get_all_tools", lambda: [])()
+            has_enter = any(getattr(t, "name", "") == "EnterPlanMode" for t in tools)
+        except Exception:
+            has_enter = False
+
+        if not has_enter:
+            return prompt
+
+        guidance = (
+            "\n\n# Plan Mode\n"
+            "For complex or multi-file changes, use EnterPlanMode to analyse "
+            "the codebase first and produce a structured plan.  This avoids "
+            "premature edits and lets you gather all context before writing code.  "
+            "Call ExitPlanMode with your plan when ready to execute.\n"
+        )
+        return prompt + guidance
 
     def _load_tool_prompts(self) -> str:
         """加载所有工具的 prompt"""
