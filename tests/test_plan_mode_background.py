@@ -87,6 +87,7 @@ class TestBackgroundTaskRunner:
             barrier.wait()
             return "done", {}
 
+        runner = BackgroundTaskRunner(tmp_path)
         runner.launch("slow-task", _slow, "slow desc")
         assert runner.get_status("slow-task") == "running"
         barrier.set()  # let it finish
@@ -142,6 +143,7 @@ class TestBackgroundTaskRunner:
             barrier.wait()
             return "x", {}
 
+        runner = BackgroundTaskRunner(tmp_path)
         runner.launch("running-one", _slow, "analyzing auth module")
         summary = runner.summary_text()
         assert "running" in summary
