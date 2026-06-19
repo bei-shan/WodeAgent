@@ -261,6 +261,7 @@ def main() -> None:
         help="teammate display mode (override TEAMMATE_MODE)",
     )
     parser.add_argument("--show-raw", action="store_true", help="print raw response structure")
+    parser.add_argument("--plan", action="store_true", dest="plan_mode", help="start in plan-only mode")
     args = parser.parse_args()
 
     # Initialize config first (used for temperature fallback)
@@ -304,6 +305,11 @@ def main() -> None:
         config=config,
         ui=enhanced_ui,
     )
+
+    # Start in plan mode if --plan flag is set
+    if args.plan_mode:
+        agent.enter_plan_mode()
+        console.print("[bold yellow]Starting in plan mode (--plan). Only read-only tools available.[/bold yellow]")
 
     code_law_exists = check_code_law_exists(PROJECT_ROOT)
     _print_banner(code_law_exists, enhanced_ui)
@@ -456,10 +462,18 @@ def main() -> None:
                         f"{'ON' if enabled else 'OFF'}"
                     )
                     continue
+                elif user_input.lower().strip() == "/plan":
+                    if agent._in_plan_mode:
+                        console.print("[bold yellow]Already in plan mode. Call ExitPlanMode to leave.[/bold yellow]")
+                    else:
+                        agent.enter_plan_mode()
+                        console.print("[bold cyan]Entered plan mode. Only read-only tools available.[/bold cyan]")
+                    continue
                 elif user_input.lower() == "/help":
                     console.print(Panel(
                         "[bold]Available Commands:[/bold]\n"
                         "/model, /info - Show model and usage info\n"
+                        "/plan - Toggle plan mode (read-only analysis)\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"
                         f"{TEAM_MSG_USAGE}\n"
