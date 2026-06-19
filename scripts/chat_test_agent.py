@@ -348,10 +348,26 @@ def main() -> None:
                 
             # Handle slash commands
             if user_input.startswith("/"):
-                if user_input.lower() in ["/model", "/info"]:
+                if user_input.lower().strip() == "/model":
                     enhanced_ui.show_banner()
                     enhanced_ui.show_detailed_token_summary()
                     continue
+                elif user_input.lower().startswith("/model "):
+                    new_model = user_input.split(maxsplit=1)[1].strip()
+                    if not new_model:
+                        console.print("[bold red]✗ Usage: /model <model-id>[/bold red]")
+                    else:
+                        try:
+                            previous = agent.llm.model
+                            agent.switch_model(model=new_model)
+                            console.print(
+                                f"[bold green]✓ Switched:[/bold green] "
+                                f"{previous} → {agent.llm.model}"
+                            )
+                        except Exception as exc:
+                            console.print(f"[bold red]✗ Model switch failed:[/bold red] {exc}")
+                    continue
+                elif user_input.lower() in ["/info"]:
                 elif user_input.lower().startswith("/save"):
                     parts = user_input.split(maxsplit=1)
                     path = parts[1].strip() if len(parts) > 1 else _default_session_path()
@@ -472,7 +488,9 @@ def main() -> None:
                 elif user_input.lower() == "/help":
                     console.print(Panel(
                         "[bold]Available Commands:[/bold]\n"
-                        "/model, /info - Show model and usage info\n"
+                        "/model - Show current model\n"
+                        "/model <id> - Switch model (e.g. /model gpt-4o)\n"
+                        "/info - Show detailed token usage\n"
                         "/plan - Toggle plan mode (read-only analysis)\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"

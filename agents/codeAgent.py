@@ -47,6 +47,7 @@ from tools.builtin.exit_worktree import ExitWorktreeTool
 from tools.builtin.enter_plan_mode import EnterPlanModeTool
 from tools.builtin.exit_plan_mode import ExitPlanModeTool
 from tools.builtin.task_output import TaskOutputTool
+from tools.builtin.switch_model import SwitchModelTool
 from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
@@ -267,6 +268,10 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(
             TaskOutputTool(project_root=self.project_root, background_runner=self._background_runner)
         )
+        # Model switching
+        self.tool_registry.register_tool(
+            SwitchModelTool(project_root=self.project_root, code_agent=self)
+        )
         if self.enable_agent_teams:
             self._register_agent_teams_tools()
 
@@ -402,6 +407,32 @@ class CodeAgent(Agent):
             self._plan_text += "\n\n" + "\n".join(todo_lines)
 
         self.logger.info("Exited plan mode, plan length=%d, steps=%d", len(self._plan_text), len(steps))
+
+    # ------------------------------------------------------------------
+    # Model switching (Claude Code /model equivalent)
+    # ------------------------------------------------------------------
+
+    def switch_model(self, *, model: str | None = None, provider: str | None = None) -> None:
+        """Switch the active LLM model mid-conversation.
+
+        Creates a new HelloAgentsLLM instance with the new model/provider,
+        preserving the current api_key and base_url.  The tool registry
+        and all other agent state are unaffected.
+        """
+        previous = self.llm.model
+        new_model = model or self.llm.model
+        new_provider = provider or self.llm.provider
+
+        self.llm = HelloAgentsLLM(
+            model=new_model,
+            api_key=self.llm.api_key,
+            base_url=self.llm.base_url,
+            provider=new_provider,
+            temperature=self.llm.temperature,
+            max_tokens=self.llm.max_tokens,
+            timeout=self.llm.timeout,
+        )
+        self.logger.info("Switched model: %s → %s (provider: %s)", previous, new_model, new_provider)
 
     @staticmethod
     def _extract_plan_steps(plan: str) -> list[str]:
