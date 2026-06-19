@@ -392,7 +392,38 @@ class CodeAgent(Agent):
         """Exit plan mode, restore full tools, inject plan into context."""
         self._in_plan_mode = False
         self._plan_text = plan.strip()
-        self.logger.info("Exited plan mode, plan length=%d", len(self._plan_text))
+
+        # Append a TodoWrite reminder so the LLM tracks plan progress.
+        steps = self._extract_plan_steps(plan)
+        if steps:
+            todo_lines = ["Use TodoWrite to track the plan:"]
+            for i, step in enumerate(steps, 1):
+                todo_lines.append(f"  {i}. [pending] {step}")
+            self._plan_text += "\n\n" + "\n".join(todo_lines)
+
+        self.logger.info("Exited plan mode, plan length=%d, steps=%d", len(self._plan_text), len(steps))
+
+    @staticmethod
+    def _extract_plan_steps(plan: str) -> list[str]:
+        """Extract numbered or bulleted steps from a plan text.
+
+        Recognises lines like ``1. Do X``, ``- Do X``, ``* Do X``.
+        Returns up to 10 steps.
+        """
+        import re
+        steps: list[str] = []
+        for line in plan.splitlines():
+            stripped = line.strip()
+            # Numbered: "1. Do X" or "1) Do X"
+            m = re.match(r"^\d+[.)]\s+(.+)", stripped)
+            if m:
+                steps.append(m.group(1))
+                continue
+            # Bulleted: "- Do X" or "* Do X"
+            m = re.match(r"^[-*]\s+(.+)", stripped)
+            if m and len(m.group(1)) > 3:
+                steps.append(m.group(1))
+        return steps[:10]  # TodoWrite max is 10
 
     def _refresh_skills_prompt(self) -> None:
         refresh = os.getenv("SKILLS_REFRESH_ON_CALL", "true").lower() in {"1", "true", "yes", "y", "on"}

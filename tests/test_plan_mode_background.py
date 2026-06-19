@@ -353,3 +353,60 @@ class TestPlanModeFiltering:
         # Must include plan mode control tools
         assert "EnterPlanMode" in plan_tools
         assert "ExitPlanMode" in plan_tools
+
+    def test_extract_plan_steps_numbered(self):
+        from agents.codeAgent import CodeAgent
+        plan = "1. Refactor auth module\n2. Add OAuth support\n3. Update tests"
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert steps == ["Refactor auth module", "Add OAuth support", "Update tests"]
+
+    def test_extract_plan_steps_dotted(self):
+        from agents.codeAgent import CodeAgent
+        plan = "1) Do X\n2) Do Y"
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert steps == ["Do X", "Do Y"]
+
+    def test_extract_plan_steps_bulleted(self):
+        from agents.codeAgent import CodeAgent
+        plan = "- Refactor auth\n- Add tests\n* Update docs"
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert steps == ["Refactor auth", "Add tests", "Update docs"]
+
+    def test_extract_plan_steps_mixed_text(self):
+        from agents.codeAgent import CodeAgent
+        plan = (
+            "Here is my plan:\n\n"
+            "1. First step\n"
+            "Some explanation text\n"
+            "2. Second step\n"
+            "- Bullet item skipped (too short)\n"
+            "- Valid bullet point here"
+        )
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert steps == ["First step", "Second step", "Bullet item skipped (too short)", "Valid bullet point here"]
+
+    def test_extract_plan_steps_max_10(self):
+        from agents.codeAgent import CodeAgent
+        plan = "\n".join(f"{i}. Step {i}" for i in range(1, 15))
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert len(steps) == 10
+
+    def test_extract_plan_steps_empty(self):
+        from agents.codeAgent import CodeAgent
+        assert CodeAgent._extract_plan_steps("") == []
+        assert CodeAgent._extract_plan_steps("Just some text, no steps.") == []
+
+    def test_plan_includes_todowrite_reminder(self):
+        from agents.codeAgent import CodeAgent
+        plan = "1. Refactor auth\n2. Add tests"
+        plan_text = plan.strip()
+        steps = CodeAgent._extract_plan_steps(plan)
+        assert steps == ["Refactor auth", "Add tests"]
+        # Simulate what exit_plan_mode does
+        todo_lines = ["Use TodoWrite to track the plan:"]
+        for i, step in enumerate(steps, 1):
+            todo_lines.append(f"  {i}. [pending] {step}")
+        plan_text += "\n\n" + "\n".join(todo_lines)
+        assert "TodoWrite" in plan_text
+        assert "[pending] Refactor auth" in plan_text
+        assert "[pending] Add tests" in plan_text
