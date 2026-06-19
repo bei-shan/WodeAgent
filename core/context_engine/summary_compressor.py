@@ -43,6 +43,13 @@ def create_summary_generator(
     """
     cfg = config or Config()
     timeout = cfg.summary_timeout  # 默认 120 秒
+
+    # Use compact model pointer if configured, else use the provided LLM.
+    try:
+        from core.model_profiles import create_llm_from_pointer
+        llm = create_llm_from_pointer("compact", fallback_llm=llm)
+    except Exception:
+        pass
     
     def generate_summary(messages: List[Message]) -> Optional[str]:
         """
