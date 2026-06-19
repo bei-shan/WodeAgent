@@ -44,6 +44,9 @@ from tools.builtin.ask_user import AskUserTool
 from tools.builtin.task import TaskTool
 from tools.builtin.enter_worktree import EnterWorktreeTool
 from tools.builtin.exit_worktree import ExitWorktreeTool
+from tools.builtin.enter_plan_mode import EnterPlanModeTool
+from tools.builtin.exit_plan_mode import ExitPlanModeTool
+from tools.builtin.task_output import TaskOutputTool
 from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
@@ -74,6 +77,18 @@ class CodeAgent(Agent):
         "TeamTaskUpdate",
         "TeamTaskList",
         "TodoWrite",
+        "AskUser",
+    }
+
+    PLAN_MODE_TOOLS = {
+        "Read",
+        "Grep",
+        "Glob",
+        "LS",
+        "TodoWrite",
+        "TaskOutput",
+        "EnterPlanMode",
+        "ExitPlanMode",
         "AskUser",
     }
     
@@ -143,6 +158,14 @@ class CodeAgent(Agent):
             base_ref=worktree_base_ref,
         )
         self._active_worktree: Optional[dict] = None
+
+        # Plan mode state
+        self._in_plan_mode = False
+        self._plan_text: Optional[str] = None
+
+        # Background task runner
+        from core.background_task import BackgroundTaskRunner
+        self._background_runner = BackgroundTaskRunner(project_root=self._original_project_root)
 
         # 创建 Summary 生成器（Phase 7）
         summary_generator = create_summary_generator(
@@ -215,6 +238,7 @@ class CodeAgent(Agent):
                 main_llm=self.llm,
                 tool_registry=self.tool_registry,
                 team_manager=self.team_manager,
+                background_runner=self._background_runner,
             )
         )
         # Worktree session isolation tools
@@ -231,6 +255,17 @@ class CodeAgent(Agent):
                 worktree_manager=self._worktree_manager,
                 code_agent=self,
             )
+        )
+        # Plan mode tools
+        self.tool_registry.register_tool(
+            EnterPlanModeTool(project_root=self.project_root, code_agent=self)
+        )
+        self.tool_registry.register_tool(
+            ExitPlanModeTool(project_root=self.project_root, code_agent=self)
+        )
+        # Background task output
+        self.tool_registry.register_tool(
+            TaskOutputTool(project_root=self.project_root, background_runner=self._background_runner)
         )
         if self.enable_agent_teams:
             self._register_agent_teams_tools()
@@ -342,6 +377,22 @@ class CodeAgent(Agent):
             self.context_builder.project_root = self.project_root
 
         self.logger.info("Exited worktree '%s', restored to %s", wt_name, self.project_root)
+
+    # ------------------------------------------------------------------
+    # Plan mode
+    # ------------------------------------------------------------------
+
+    def enter_plan_mode(self) -> None:
+        """Switch to plan-only mode. Only read-only tools are available."""
+        self._in_plan_mode = True
+        self._plan_text = None
+        self.logger.info("Entered plan mode")
+
+    def exit_plan_mode(self, plan: str) -> None:
+        """Exit plan mode, restore full tools, inject plan into context."""
+        self._in_plan_mode = False
+        self._plan_text = plan.strip()
+        self.logger.info("Exited plan mode, plan length=%d", len(self._plan_text))
 
     def _refresh_skills_prompt(self) -> None:
         refresh = os.getenv("SKILLS_REFRESH_ON_CALL", "true").lower() in {"1", "true", "yes", "y", "on"}
@@ -501,10 +552,25 @@ class CodeAgent(Agent):
 
         for step in range(1, self.max_steps + 1):
             tools_schema = self._get_openai_tools_for_current_mode()
+            runtime_blocks: list[str] = []
+
+            # AgentTeams runtime state
             if self.enable_agent_teams and self.team_manager and hasattr(self.context_builder, "set_runtime_system_blocks"):
                 events = self.team_manager.drain_events()
                 runtime_state = self.team_manager.export_state()
-                runtime_blocks = self._format_runtime_system_blocks(events, runtime_state=runtime_state)
+                runtime_blocks.extend(self._format_runtime_system_blocks(events, runtime_state=runtime_state))
+
+            # Background task summary
+            bg_summary = self._background_runner.summary_text()
+            if bg_summary:
+                runtime_blocks.append(bg_summary)
+
+            # Plan text injection
+            if self._plan_text:
+                runtime_blocks.append(f"[Plan]\n{self._plan_text}")
+                self._plan_text = None  # only inject once
+
+            if runtime_blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
                 self.context_builder.set_runtime_system_blocks(runtime_blocks)
 
             if self.console_verbose:
@@ -1055,14 +1121,15 @@ class CodeAgent(Agent):
 
     def _get_openai_tools_for_current_mode(self) -> list[dict[str, Any]]:
         tools = self.tool_registry.get_openai_tools()
-        if not self.delegate_mode:
-            return tools
         filtered: list[dict[str, Any]] = []
         for item in tools:
             function = item.get("function") if isinstance(item, dict) else None
             name = function.get("name") if isinstance(function, dict) else ""
-            if self._is_tool_allowed_in_delegate_mode(str(name or "")):
-                filtered.append(item)
+            if self._in_plan_mode and str(name) not in self.PLAN_MODE_TOOLS:
+                continue
+            if self.delegate_mode and not self._is_tool_allowed_in_delegate_mode(str(name or "")):
+                continue
+            filtered.append(item)
         return filtered
 
     @staticmethod

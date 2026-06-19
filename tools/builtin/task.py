@@ -227,6 +227,7 @@ class TaskTool(Tool):
         main_llm: Optional[HelloAgentsLLM] = None,
         tool_registry: Optional[ToolRegistry] = None,
         team_manager: Optional[Any] = None,
+        background_runner: Optional[Any] = None,
     ):
         if project_root is None:
             raise ValueError("project_root must be provided by the framework")
@@ -246,6 +247,7 @@ class TaskTool(Tool):
         self._light_llm: Optional[HelloAgentsLLM] = None
         self._tool_registry = tool_registry
         self._team_manager = team_manager
+        self._background_runner = background_runner
         self._subagent_max_steps = int(os.getenv("SUBAGENT_MAX_STEPS", "50"))
     
     def get_parameters(self) -> List[ToolParameter]:
@@ -383,17 +385,52 @@ class TaskTool(Tool):
                 model_choice=model_choice,
             )
         
+        # Check for background execution
+        run_in_background = bool(parameters.get("run_in_background", False))
+
         # Select LLM
         llm = self._select_llm(model_choice)
-        
+
         # Build subagent system prompt
         role_prompt = _get_subagent_prompt(subagent_type)
         system_prompt = f"{role_prompt}\n\n# Task\n{description}"
-        
+
         # Create filtered tool registry for subagent
         subagent_tools = self._create_filtered_registry()
-        
-        # Create and run subagent
+
+        if run_in_background and self._background_runner is not None:
+            import uuid
+            task_id = f"bg_{uuid.uuid4().hex[:10]}"
+
+            def _run_sync() -> tuple:
+                runner = SubagentRunner(
+                    llm=llm,
+                    tool_registry=subagent_tools,
+                    system_prompt=system_prompt,
+                    project_root=self._project_root,
+                    max_steps=self._subagent_max_steps,
+                )
+                return runner.run(prompt)
+
+            self._background_runner.launch(
+                task_id=task_id,
+                runner_callable=_run_sync,
+                description=str(description or "")[:200],
+            )
+            return self.create_success_response(
+                data={
+                    "task_id": task_id,
+                    "status": "started",
+                    "subagent_type": subagent_type,
+                    "model_used": model_choice,
+                },
+                text=f"Background task '{task_id}' started ({subagent_type}). "
+                     "Use TaskOutput to retrieve results when ready.",
+                params_input=params_input,
+                time_ms=int((time.monotonic() - start_time) * 1000),
+            )
+
+        # Create and run subagent (synchronous)
         try:
             runner = SubagentRunner(
                 llm=llm,
