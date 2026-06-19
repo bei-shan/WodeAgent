@@ -640,18 +640,31 @@ class TaskTool(Tool):
             )
     
     def _select_llm(self, model_choice: str) -> HelloAgentsLLM:
-        """Select the appropriate LLM based on model choice."""
+        """Select the appropriate LLM based on model choice.
+
+        Priority:
+        1. MODEL_POINTER_TASK profile (if configured)
+        2. LIGHT_LLM_* env vars (legacy)
+        3. Main LLM (fallback)
+        """
         if model_choice == "light":
-            # Try to use light model
+            # Try model pointer first.
+            try:
+                from core.model_profiles import create_llm_from_pointer
+                task_llm = create_llm_from_pointer("task", fallback_llm=self._main_llm)
+                if task_llm is not self._main_llm:
+                    return task_llm
+            except Exception:
+                pass
+
+            # Legacy light model.
             if self._light_llm is None:
                 self._light_llm = _create_light_llm()
-            
             if self._light_llm is not None:
                 return self._light_llm
-            
-            # Fallback to main if light not configured
+
             logger.debug("Light model not configured, using main model")
-        
+
         return self._main_llm
     
     def _create_filtered_registry(self) -> ToolRegistry:

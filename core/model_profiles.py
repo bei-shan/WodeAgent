@@ -103,3 +103,63 @@ def load_model_profiles() -> Dict[str, ModelProfile]:
 def list_model_profiles(profiles: Dict[str, ModelProfile]) -> List[dict]:
     """Return a human-readable list of available profiles."""
     return [p.as_dict() for p in profiles.values()]
+
+
+# ------------------------------------------------------------------
+# Model pointers — automatic model selection by use-case
+# ------------------------------------------------------------------
+
+def resolve_model_pointer(pointer: str) -> ModelProfile | None:
+    """Resolve a logical pointer (main/task/compact/quick) to a profile.
+
+    Reads ``MODEL_POINTER_MAIN``, ``MODEL_POINTER_TASK``, etc. from
+    environment.  Each value should be a profile name registered in
+    ``MODEL_PROFILES``.
+
+    Returns None if the pointer is not configured or the profile is
+    not found.
+
+    Example::
+
+        MODEL_PROFILES=opus,haiku
+        MODEL_OPUS_ID=claude-opus-4-8
+        MODEL_HAIKU_ID=claude-haiku-4-5
+
+        MODEL_POINTER_MAIN=opus
+        MODEL_POINTER_TASK=haiku
+        MODEL_POINTER_COMPACT=haiku
+    """
+    pointer_key = f"MODEL_POINTER_{pointer.upper()}"
+    profile_name = os.getenv(pointer_key, "").strip().lower()
+    if not profile_name:
+        return None
+    profiles = load_model_profiles()
+    return profiles.get(profile_name)
+
+
+def create_llm_from_pointer(
+    pointer: str,
+    *,
+    fallback_llm,  # HelloAgentsLLM — used if pointer not configured
+    temperature: float | None = None,
+) -> Any:
+    """Create a HelloAgentsLLM from a model pointer.
+
+    If the pointer resolves to a profile, use the profile's credentials.
+    Otherwise fall back to *fallback_llm* (the main agent's LLM).
+    """
+    profile = resolve_model_pointer(pointer)
+    if profile is None:
+        return fallback_llm
+
+    from core.llm import HelloAgentsLLM
+
+    return HelloAgentsLLM(
+        model=profile.model,
+        api_key=profile.api_key or fallback_llm.api_key,
+        base_url=profile.base_url or fallback_llm.base_url,
+        provider=profile.provider or fallback_llm.provider,
+        temperature=temperature if temperature is not None else fallback_llm.temperature,
+        max_tokens=fallback_llm.max_tokens,
+        timeout=fallback_llm.timeout,
+    )
