@@ -413,6 +413,9 @@ def main() -> None:
                             console.print(f"[bold red]✗ Model switch failed:[/bold red] {exc}")
                     continue
                 elif user_input.lower() in ["/info"]:
+                    enhanced_ui.show_banner()
+                    enhanced_ui.show_detailed_token_summary()
+                    continue
                 elif user_input.lower().startswith("/save"):
                     parts = user_input.split(maxsplit=1)
                     path = parts[1].strip() if len(parts) > 1 else _default_session_path()
