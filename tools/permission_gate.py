@@ -72,14 +72,6 @@ class PermissionGate:
         is evicted.
     """
 
-    __slots__ = (
-        "_project_root",
-        "_interactive",
-        "_soft_sandbox",
-        "_cache",
-        "_cache_size",
-    )
-
     def __init__(
         self,
         project_root: Path,
