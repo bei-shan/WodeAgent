@@ -511,6 +511,34 @@ class CodeAgent(Agent):
             if self.logger:
                 self.logger.warning("MCP registration skipped: %s", exc)
 
+    def _retry_pending_mcp_servers(self) -> None:
+        """Retry connecting any MCP servers that failed during background init.
+
+        Called at the start of each ReAct step so that tools appear as
+        soon as the server becomes reachable — no manual trigger needed.
+        """
+        try:
+            from tools.mcp.loader import get_pending_server_names, retry_pending_server
+            pending = get_pending_server_names()
+            if not pending:
+                return
+            for name in pending:
+                ok = retry_pending_server(
+                    self.tool_registry, name, timeout=10.0,
+                )
+                if ok:
+                    self.logger.info("MCP server '%s' recovered, tools now available", name)
+                    # Rebuild MCP tools prompt so LLM sees the new tools.
+                    all_tools = self.tool_registry.get_all_tools()
+                    mcp_tools_meta = [
+                        {"name": t.name, "description": getattr(t, "description", "")}
+                        for t in all_tools
+                        if getattr(t, "name", "").startswith("mcp__")
+                    ]
+                    self._mcp_tools_prompt = format_mcp_tools_prompt(mcp_tools_meta)
+        except Exception:
+            pass
+
     def _inject_permission_gate(self) -> None:
         """将 PermissionGate 注入到所有已注册的工具实例中。
 
@@ -639,6 +667,10 @@ class CodeAgent(Agent):
         tool_choice = "auto"
 
         for step in range(1, self.max_steps + 1):
+            # Auto-retry pending MCP servers each step so tools appear
+            # as soon as the server becomes reachable.
+            self._retry_pending_mcp_servers()
+
             tools_schema = self._get_openai_tools_for_current_mode()
             runtime_blocks: list[str] = []
 
