@@ -49,6 +49,11 @@ from core.team_engine.cli_commands import (
     parse_team_watch_command,
 )
 from utils.ui_components import EnhancedUI, ToolCallTree
+from tui.status_line import StatusLine
+from tui.mention_completer import MentionCompleter
+from tui.permission_dialog import PermissionDialog
+from tui.streaming import StreamingResponse
+from core.model_profiles import load_model_profiles, list_model_profiles
 
 # Geeky Theme
 custom_theme = Theme({
@@ -316,24 +321,64 @@ def main() -> None:
     auto_save_path = _default_session_path()
     auto_save_flag = {"saved": False}
 
-    # Setup history for prompt_toolkit
+    # Setup TUI components
     history_file = os.path.join(PROJECT_ROOT, ".chat_history")
-    session = PromptSession(history=FileHistory(history_file))
-    
-    prompt_style = PromptStyle.from_dict({
-        'user': '#00ff00 bold',
-        'arrow': '#0000ff',
-        'host': '#00ffff',
-    })
+    status_line = StatusLine(agent)
+
+    # @-mention completer
+    def _get_agents():
+        names = ["general", "explore", "plan", "summary"]
+        if agent.enable_agent_teams:
+            try:
+                for t in agent.team_manager.store.list_teams():
+                    names.append(f"team:{t}")
+            except Exception:
+                pass
+        return names
+
+    def _get_models():
+        profiles = load_model_profiles()
+        if profiles:
+            return [p.name for p in profiles.values()]
+        return [agent.llm.model]
+
+    mention_completer = MentionCompleter(
+        get_agents=_get_agents,
+        get_models=_get_models,
+        project_root=Path(PROJECT_ROOT),
+    )
+
+    # Permission dialog (replaces input() in PermissionGate)
+    permission_dialog = PermissionDialog()
+    # Patch agent's permission gate to use the dialog
+    if hasattr(agent, "_permission_gate") and agent._permission_gate:
+        agent._permission_gate.ask = lambda path, tool, action: permission_dialog.ask(
+            tool=tool, path=path, action=action
+        )
+
+    # Prompt with @-mention + status line
+    prompt_style_dict = {
+        "user": "#00ff00 bold",
+        "arrow": "#0000ff",
+        "host": "#00ffff",
+        "model": "#888888 italic",
+        "plan": "#ffff00 bold",
+        "worktree": "#00ffff italic",
+    }
+    session = PromptSession(
+        history=FileHistory(history_file),
+        completer=mention_completer,
+        style=PromptStyle.from_dict(prompt_style_dict),
+    )
+
+    # Streaming response renderer
+    stream = StreamingResponse(console)
 
     try:
         while True:
             try:
-                # Cool prompt
-                user_input = session.prompt(
-                    HTML('<user>user</user> <arrow>➜</arrow> '),
-                    style=prompt_style
-                ).strip()
+                prompt_html = HTML(status_line.prompt_html())
+                user_input = session.prompt(prompt_html).strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Goodbye![/dim]")
                 _maybe_save_session(agent, auto_save_path, auto_save_flag, "keyboard interrupt")
@@ -549,21 +594,24 @@ def main() -> None:
                 # Normal chat
                 # Reset UI state for new request
                 enhanced_ui.tool_tree = ToolCallTree()
-                enhanced_ui.token_tracker.calls.clear()  # Clear previous call tracking
-                
-                # Show thinking with live timer
+                enhanced_ui.token_tracker.calls.clear()
+
+                # Show thinking with streaming response
                 start_time = time.time()
                 console.print()
-                
+
+                # Stream the response
+                stream.start("Agent")
                 response = agent.run(user_input, show_raw=args.show_raw)
-                
+                stream.finish()
+
                 elapsed = time.time() - start_time
-                
+
                 # Show tool tree and response
                 console.print()
                 enhanced_ui.show_tool_tree()
                 _print_assistant_response(response)
-                
+
                 # Show timing and token summary
                 timing_text = Text()
                 timing_text.append(f"⏱️  Completed in {elapsed:.1f}s", style="dim cyan")
