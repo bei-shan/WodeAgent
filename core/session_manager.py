@@ -105,6 +105,7 @@ class SessionManager:
             title=title,
             message_count=message_count,
             preview=preview,
+            only_overwrite_placeholder=True,
         )
 
     def load_session(self, session_id: str) -> Optional[dict[str, Any]]:
@@ -255,13 +256,15 @@ class SessionManager:
         title: str = "",
         message_count: int = 0,
         preview: str = "",
+        only_overwrite_placeholder: bool = False,
     ) -> None:
         index = self._load_index()
         for s in index:
             if s.id == session_id:
                 s.modified_at = _now_iso()
                 if title:
-                    s.title = title
+                    if not only_overwrite_placeholder or s.title.startswith("New session"):
+                        s.title = title
                 s.message_count = message_count
                 s.preview = preview
                 self._write_index(index)

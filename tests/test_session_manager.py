@@ -119,10 +119,14 @@ class TestListSessions:
         assert mgr.list_sessions() == []
 
     def test_list_sorted_by_modified_desc(self, tmp_path):
+        import time
         mgr = SessionManager(sessions_dir=str(tmp_path))
         s1 = mgr.create_session(title="First")
+        time.sleep(1.1)
         s2 = mgr.create_session(title="Second")
+        time.sleep(1.1)
         mgr.save_session(s1, _make_snapshot())
+        time.sleep(1.1)
         mgr.save_session(s2, _make_snapshot())
         sessions = mgr.list_sessions()
         assert sessions[0].title == "Second"
@@ -149,10 +153,14 @@ class TestResolveIdentifier:
         assert mgr.resolve_identifier(sid) == sid
 
     def test_numeric_index(self, tmp_path):
+        import time
         mgr = SessionManager(sessions_dir=str(tmp_path))
         s1 = mgr.create_session()
+        time.sleep(1.1)
         s2 = mgr.create_session()
+        time.sleep(1.1)
         mgr.save_session(s1, _make_snapshot())
+        time.sleep(1.1)
         mgr.save_session(s2, _make_snapshot())
         # Index 1 = most recent (s2), index 2 = s1
         assert mgr.resolve_identifier("1") == s2
@@ -217,6 +225,7 @@ class TestIndexPersistence:
     def test_index_survives_reload(self, tmp_path):
         mgr1 = SessionManager(sessions_dir=str(tmp_path))
         sid = mgr1.create_session(title="persistent")
+        # save_session only overwrites placeholder titles, so "persistent" is preserved
         mgr1.save_session(sid, _make_snapshot())
 
         # Create a new manager pointing to the same directory.
