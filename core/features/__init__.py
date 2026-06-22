@@ -38,6 +38,15 @@ BUILTIN_FEATURES: list[type[AgentFeature]] = [
 def collect_all_features(agent: "CodeAgent") -> list[AgentFeature]:
     """Instantiate and return all features (built-in + plugin), sorted by order."""
     features: list[AgentFeature] = [cls() for cls in BUILTIN_FEATURES]
-    # Plugin discovery (Phase 4): features.extend(_discover_plugins(agent))
+
+    # Plugin discovery
+    try:
+        from core.plugin_loader import PluginLoader
+        loader = PluginLoader(project_root=agent._original_project_root)
+        plugin_features = loader.discover()
+        features.extend(plugin_features)
+    except Exception:
+        pass
+
     features.sort(key=lambda f: f.order)
     return features
