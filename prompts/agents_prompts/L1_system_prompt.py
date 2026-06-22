@@ -149,5 +149,5 @@ system_prompt = """ You are an interactive CLI tool that helps users with softwa
     4. **Check First**: If unsure how to call a tool, check the Parameters first instead of guessing
 
     Below is the list of available tools: {tools}
-
+{output_style}
 """

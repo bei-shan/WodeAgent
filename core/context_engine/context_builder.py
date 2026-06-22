@@ -50,6 +50,7 @@ class ContextBuilder:
     _mcp_tools_prompt: str = field(default="", init=False)
     _skills_prompt: str = field(default="", init=False)
     _runtime_system_blocks: List[str] = field(default_factory=list, init=False)
+    _output_style_prompt: str = field(default="", init=False)
 
     def build_messages(
         self,
@@ -138,6 +139,15 @@ class ContextBuilder:
         self._skills_prompt = prompt or ""
         self._cached_system_messages = None
 
+    def set_output_style_prompt(self, prompt: str) -> None:
+        """更新输出风格提示，并清空 system cache。
+
+        风格 prompt 通过 ``{{output_style}}`` 占位符注入到 L1 系统提示末尾。
+        传入空字符串表示 default 风格（不注入任何内容）。
+        """
+        self._output_style_prompt = prompt or ""
+        self._cached_system_messages = None
+
     def set_runtime_system_blocks(self, blocks: List[str]) -> None:
         """设置 runtime 通知块（注入 system，不污染 user 轮次）。"""
         self._runtime_system_blocks = [str(block).strip() for block in (blocks or []) if str(block).strip()]
@@ -153,14 +163,19 @@ class ContextBuilder:
     def _load_system_prompt(self) -> str:
         """加载 L1 系统 prompt"""
         if self.system_prompt_override:
-            return self.system_prompt_override
-        prompt_path = Path(self.project_root) / "prompts" / "agents_prompts" / "L1_system_prompt.py"
-        if not prompt_path.exists():
-            return ""
-        data = runpy.run_path(str(prompt_path))
-        prompt = data.get("system_prompt", "")
-        if not isinstance(prompt, str):
-            return ""
+            prompt = self.system_prompt_override
+        else:
+            prompt_path = Path(self.project_root) / "prompts" / "agents_prompts" / "L1_system_prompt.py"
+            if not prompt_path.exists():
+                return ""
+            data = runpy.run_path(str(prompt_path))
+            prompt = data.get("system_prompt", "")
+            if not isinstance(prompt, str):
+                return ""
+
+        # Replace {output_style} placeholder with current style prompt.
+        # Default style (empty) → placeholder removed with no content.
+        prompt = prompt.replace("{output_style}", self._output_style_prompt)
 
         # Append plan mode guidance if EnterPlanMode tool is available.
         prompt = self._append_plan_mode_guidance(prompt)

@@ -364,6 +364,7 @@ def main() -> None:
         "model": "#888888 italic",
         "plan": "#ffff00 bold",
         "worktree": "#00ffff italic",
+        "style": "#ff8800 italic",
     }
     session = PromptSession(
         history=FileHistory(history_file),
@@ -533,6 +534,33 @@ def main() -> None:
                         agent.enter_plan_mode()
                         console.print("[bold cyan]Entered plan mode. Only read-only tools available.[/bold cyan]")
                     continue
+                elif user_input.lower().startswith("/style"):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 1:
+                        # Show current + available styles.
+                        current = agent.output_style
+                        styles = agent.list_output_styles()
+                        lines = [f"[bold]Current style:[/bold] {current}"]
+                        lines.append("\n[bold]Available styles:[/bold]")
+                        for name, desc in styles.items():
+                            marker = " ← current" if name == current else ""
+                            lines.append(f"  [cyan]{name}[/cyan] — {desc}{marker}")
+                        console.print("\n".join(lines))
+                    else:
+                        name = parts[1].strip()
+                        if not name:
+                            console.print("[bold red]✗ Usage: /style <name>[/bold red]")
+                        elif agent.set_output_style(name):
+                            console.print(
+                                f"[bold green]✓ Output style:[/bold green] {agent.output_style}"
+                            )
+                        else:
+                            available = ", ".join(agent.list_output_styles().keys())
+                            console.print(
+                                f"[bold red]✗ Unknown style:[/bold red] {name}\n"
+                                f"Available: {available}"
+                            )
+                    continue
                 elif user_input.lower() == "/help":
                     console.print(Panel(
                         "[bold]Available Commands:[/bold]\n"
@@ -540,6 +568,7 @@ def main() -> None:
                         "/model <id> - Switch model (e.g. /model gpt-4o)\n"
                         "/info - Show detailed token usage\n"
                         "/plan - Toggle plan mode (read-only analysis)\n"
+                        "/style [name] - Show or set output style\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"
                         f"{TEAM_MSG_USAGE}\n"

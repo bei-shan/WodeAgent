@@ -30,6 +30,7 @@ from core.session_store import build_session_snapshot, save_session_snapshot, lo
 from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
+from core.output_styles import OutputStyleManager
 from tools.builtin.list_files import ListFilesTool
 from tools.builtin.search_files_by_name import SearchFilesByNameTool
 from tools.builtin.search_code import GrepTool
@@ -206,6 +207,14 @@ class CodeAgent(Agent):
             mcp_tools_prompt=self._mcp_tools_prompt,
             skills_prompt=self._skills_prompt,
         )
+
+        # 输出风格管理器
+        env_style = os.getenv("AGENT_OUTPUT_STYLE", "").strip()
+        self._output_style_manager = OutputStyleManager(
+            project_root=self._original_project_root,
+            env_style=env_style if env_style else None,
+        )
+        self._sync_output_style_to_context()
 
         # Trace 日志（单实例贯穿 Agent 生命周期）
         self.trace_logger = create_trace_logger()
@@ -459,6 +468,34 @@ class CodeAgent(Agent):
                 timeout=self.llm.timeout,
             )
             self.logger.info("Switched model: %s → %s (provider: %s)", previous, new_model, new_provider)
+
+    # ------------------------------------------------------------------
+    # Output Styles
+    # ------------------------------------------------------------------
+
+    def _sync_output_style_to_context(self) -> None:
+        """Push the current output style prompt into the ContextBuilder."""
+        prompt = self._output_style_manager.get_current_prompt()
+        self.context_builder.set_output_style_prompt(prompt)
+
+    @property
+    def output_style(self) -> str:
+        """Return the currently active output style name."""
+        return self._output_style_manager.get_current()
+
+    def set_output_style(self, name: str) -> bool:
+        """Set the active output style. Returns ``True`` on success."""
+        ok = self._output_style_manager.set_current(name)
+        if ok:
+            self._sync_output_style_to_context()
+            self.logger.info(
+                "Output style set to %s", self._output_style_manager.get_current()
+            )
+        return ok
+
+    def list_output_styles(self) -> dict[str, str]:
+        """Return ``{name: description}`` for all available styles."""
+        return self._output_style_manager.list_all()
 
     @staticmethod
     def _extract_plan_steps(plan: str) -> list[str]:

@@ -37,6 +37,11 @@ class StatusLine:
         if getattr(agent, "_in_plan_mode", False):
             parts.append("<plan>[plan]</plan> ")
 
+        # Output style indicator (only when non-default)
+        style = getattr(agent, "output_style", "default")
+        if style and style != "default":
+            parts.append(f"<style>[style:{style}]</style> ")
+
         # Worktree indicator
         if getattr(agent, "_active_worktree", None):
             wt_name = agent._active_worktree.get("name", "?")
@@ -53,4 +58,5 @@ class StatusLine:
             "model": "#888888 italic",
             "plan": "#ffff00 bold",
             "worktree": "#00ffff italic",
+            "style": "#ff8800 italic",
         }
