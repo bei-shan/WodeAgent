@@ -30,10 +30,8 @@ from core.session_store import build_session_snapshot, save_session_snapshot, lo
 from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
-from core.output_styles import OutputStyleManager
-from core.vcr import VCR
-from core.hook_system import HookManager, HookResult
-from core.session_manager import SessionManager
+from core.features import collect_all_features
+from core.features.base import AgentFeature
 from tools.builtin.list_files import ListFilesTool
 from tools.builtin.search_files_by_name import SearchFilesByNameTool
 from tools.builtin.search_code import GrepTool
@@ -154,55 +152,63 @@ class CodeAgent(Agent):
             self.delegate_mode,
         )
 
-        # Worktree 会话隔离管理器
-        worktree_store_dir = os.getenv("WORKTREE_STORE_DIR", ".worktrees")
-        worktree_base_ref = os.getenv("WORKTREE_BASE_REF", "fresh")
-        self._worktree_manager = WorktreeManager(
-            project_root=self._original_project_root,
-            store_dir=worktree_store_dir,
-            base_ref=worktree_base_ref,
-        )
-        self._active_worktree: Optional[dict] = None
+        # ── Core initialisation ──
+        self._init_core()
 
-        # Plan mode state
-        self._in_plan_mode = False
-        self._plan_text: Optional[str] = None
+        # ── Features init (sets agent attributes) ──
+        self._features: list[AgentFeature] = collect_all_features(self)
+        for feat in self._features:
+            feat.init(self)
 
-        # Background task runner
-        from core.background_task import BackgroundTaskRunner
-        self._background_runner = BackgroundTaskRunner(project_root=self._original_project_root)
+        # ── Tool registration (needs feature deps like _background_runner) ──
+        self._init_tools()
 
-        # 创建 Summary 生成器（Phase 7）
+        # ── Features post_init (needs tools + context_builder ready) ──
+        for feat in self._features:
+            feat.post_init(self)
+
+        # ── Session ID fallback ──
+        if not hasattr(self, "_session_id"):
+            import uuid
+            self._session_id = uuid.uuid4().hex[:12]
+
+        # Trace 日志（单实例贯穿 Agent 生命周期）
+        self.trace_logger = create_trace_logger()
+        self._system_messages_logged = False
+        self._run_id = 0
+        self._system_messages_override: Optional[List[dict]] = None
+
+    def _init_core(self) -> None:
+        """Initialise core infrastructure that features depend on."""
+        # Summary generator
         summary_generator = create_summary_generator(
             llm=self.llm,
             config=self.config,
             verbose=self.verbose,
         )
-        
-        # 历史管理器（替代 Agent._history）
+
+        # History manager
         self.history_manager = HistoryManager(
             config=self.config,
             summary_generator=summary_generator,
         )
-        
+
         # Skills
         self._skill_loader = SkillLoader(self.project_root)
         self._skills_prompt = ""
         self._refresh_skills_prompt()
 
-        # 注册工具
-        self._register_builtin_tools()
-        self._mcp_clients = []
+        # MCP prompt placeholder (populated later in _init_tools)
         self._mcp_tools_prompt = ""
-        self._register_mcp_tools()
+        self._mcp_clients = []
 
-        # 软沙箱权限注入（工具注册完成后）
+        # Permission gate
         self._permission_gate = create_permission_gate(
             project_root=self.project_root,
         )
         self._inject_permission_gate()
-        
-        # 上下文构建器
+
+        # Context builder
         self.context_builder = ContextBuilder(
             tool_registry=self.tool_registry,
             project_root=self.project_root,
@@ -211,39 +217,13 @@ class CodeAgent(Agent):
             skills_prompt=self._skills_prompt,
         )
 
-        # 输出风格管理器
-        env_style = os.getenv("AGENT_OUTPUT_STYLE", "").strip()
-        self._output_style_manager = OutputStyleManager(
-            project_root=self._original_project_root,
-            env_style=env_style if env_style else None,
-        )
-        self._sync_output_style_to_context()
+    def _init_tools(self) -> None:
+        """Register built-in and MCP tools (after features init)."""
+        self._register_builtin_tools()
+        self._register_mcp_tools()
+        # Sync MCP prompt to context_builder (created in _init_core with empty prompt).
+        self.context_builder.set_mcp_tools_prompt(self._mcp_tools_prompt)
 
-        # VCR 录制回放
-        self._vcr = VCR.from_env()
-
-        # Hook 生命周期管理器
-        self._hook_manager = HookManager(project_root=self._original_project_root)
-        self._hook_system_messages: list[str] = []
-        self._hook_session_context: list[str] = []
-
-        # SessionStart hooks
-        if self._hook_manager.has_any_hooks:
-            session_result = self._hook_manager.run_session_start()
-            self._hook_system_messages.extend(session_result.system_messages)
-            self._hook_session_context.extend(session_result.additional_context)
-
-        # 多对话管理器
-        sessions_dir = os.path.join(self._original_project_root, "memory", "sessions")
-        self._session_manager = SessionManager(sessions_dir=sessions_dir)
-        self._session_id = self._session_manager.create_session()
-
-        # Trace 日志（单实例贯穿 Agent 生命周期）
-        self.trace_logger = create_trace_logger()
-        self._system_messages_logged = False
-        self._run_id = 0
-        self._system_messages_override: Optional[List[dict]] = None
-    
     def _register_builtin_tools(self):
         """注册内置工具"""
         self.tool_registry.register_tool(
@@ -750,31 +730,9 @@ class CodeAgent(Agent):
             tools_schema = self._get_openai_tools_for_current_mode()
             runtime_blocks: list[str] = []
 
-            # AgentTeams runtime state
-            if self.enable_agent_teams and self.team_manager and hasattr(self.context_builder, "set_runtime_system_blocks"):
-                events = self.team_manager.drain_events()
-                runtime_state = self.team_manager.export_state()
-                runtime_blocks.extend(self._format_runtime_system_blocks(events, runtime_state=runtime_state))
-
-            # Background task summary
-            bg_summary = self._background_runner.summary_text()
-            if bg_summary:
-                runtime_blocks.append(bg_summary)
-
-            # Plan text injection
-            if self._plan_text:
-                runtime_blocks.append(f"[Plan]\n{self._plan_text}")
-                self._plan_text = None  # only inject once
-
-            # Hook system messages (inject once per step)
-            if self._hook_system_messages:
-                runtime_blocks.extend(self._hook_system_messages)
-                self._hook_system_messages.clear()
-
-            # Hook session context (inject once on first step)
-            if step == 1 and self._hook_session_context:
-                runtime_blocks.extend(self._hook_session_context)
-                self._hook_session_context.clear()
+            # Collect runtime blocks from all features
+            for feat in self._features:
+                runtime_blocks.extend(feat.runtime_blocks(self, step))
 
             if runtime_blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
                 self.context_builder.set_runtime_system_blocks(runtime_blocks)
@@ -902,21 +860,18 @@ class CodeAgent(Agent):
         reasoning_content = None
 
         while True:
-            # VCR interception: replay fixture or record new.
-            if self._vcr.enabled:
-                raw_response = self._vcr.call(
-                    model=self.llm.model,
-                    messages=messages,
-                    tools=tools_schema,
-                    tool_choice=tool_choice,
-                    fallback=lambda: self.llm.invoke_raw(
-                        messages, tools=tools_schema, tool_choice=tool_choice
-                    ),
-                )
-            else:
-                raw_response = self.llm.invoke_raw(
+            # Build intercept chain (features wrap the real LLM call).
+            def _real_call():
+                return self.llm.invoke_raw(
                     messages, tools=tools_schema, tool_choice=tool_choice
                 )
+            intercept = _real_call
+            for feat in reversed(self._features):
+                prev = intercept
+                intercept = lambda f=feat, p=prev: f.llm_intercept(
+                    self, messages, tools_schema, tool_choice, p
+                )
+            raw_response = intercept()
             if show_raw:
                 self.last_response_raw = (
                     raw_response.model_dump()
@@ -1430,38 +1385,37 @@ class CodeAgent(Agent):
             }
             return json.dumps(payload, ensure_ascii=False, indent=2)
 
-        # PreToolUse hooks
+        # PreToolUse interception (features)
         normalized_input = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
-        if self._hook_manager.has_any_hooks:
-            pre_result = self._hook_manager.run_pre_tool_use(tool_name, normalized_input)
-            if pre_result.blocked:
+        for feat in self._features:
+            pre_result = feat.pre_tool_use(self, tool_name, normalized_input)
+            if pre_result and pre_result.get("blocked"):
                 self.logger.info(
-                    "Tool %s blocked by PreToolUse hook: %s", tool_name, pre_result.reason
+                    "Tool %s blocked by %s: %s",
+                    tool_name, feat.name, pre_result.get("reason", "unknown")
                 )
                 payload = {
                     "status": "error",
                     "data": {},
                     "error": {
                         "code": "HOOK_BLOCKED",
-                        "message": pre_result.reason,
+                        "message": pre_result.get("reason", "Blocked"),
                     },
                     "stats": {"time_ms": 0},
                 }
                 return json.dumps(payload, ensure_ascii=False)
-            if pre_result.system_messages:
-                self._hook_system_messages.extend(pre_result.system_messages)
-            if pre_result.updated_input:
-                normalized_input = {**normalized_input, **pre_result.updated_input}
+            if pre_result and pre_result.get("system_messages"):
+                self._hook_system_messages.extend(pre_result["system_messages"])
+            if pre_result and pre_result.get("updated_input"):
+                normalized_input = {**normalized_input, **pre_result["updated_input"]}
 
         res = self.tool_registry.execute_tool(tool_name, normalized_input)
 
-        # PostToolUse hooks
-        if self._hook_manager.has_any_hooks:
-            post_result = self._hook_manager.run_post_tool_use(
-                tool_name, normalized_input, str(res)
-            )
-            if post_result.system_messages:
-                self._hook_system_messages.extend(post_result.system_messages)
+        # PostToolUse interception (features)
+        for feat in self._features:
+            post_msgs = feat.post_tool_use(self, tool_name, normalized_input, str(res))
+            if post_msgs:
+                self._hook_system_messages.extend(post_msgs)
 
         return str(res)
 
