@@ -56,6 +56,8 @@ class TurnExecutor:
                 "done": True,
                 "final_result": self._extract_final_answer(response_text),
                 "messages": output_messages,
+                "assistant_text": response_text,
+                "tool_calls": [],
             }
 
         for call in tool_calls:
@@ -80,7 +82,16 @@ class TurnExecutor:
                 "content": observation,
             })
 
-        return {"done": False, "final_result": None, "messages": output_messages}
+        return {
+            "done": False,
+            "final_result": None,
+            "messages": output_messages,
+            "assistant_text": response_text,
+            "tool_calls": [
+                {"name": c.get("name"), "arguments": c.get("arguments")}
+                for c in tool_calls
+            ],
+        }
 
     def _get_tools_schema(self) -> list[dict[str, Any]]:
         tools = self.tool_registry.get_openai_tools()

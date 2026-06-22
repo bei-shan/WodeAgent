@@ -163,13 +163,15 @@ class SubagentRunner:
         self.messages: List[Dict[str, str]] = []
         self.tool_usage: Dict[str, int] = {}
         
-    def run(self, task_prompt: str) -> Tuple[str, Dict[str, int]]:
+    def run(self, task_prompt: str, progress_callback=None) -> Tuple[str, Dict[str, int]]:
         """
         Execute the subagent and return the final result.
-        
+
         Args:
             task_prompt: The task instructions for the subagent
-            
+            progress_callback: Optional callable(step, event_type, data)
+                for real-time progress streaming.
+
         Returns:
             Tuple of (final_result, tool_usage_summary)
         """
@@ -178,7 +180,7 @@ class SubagentRunner:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": task_prompt}
         ]
-        
+
         executor = TurnExecutor(
             llm=self.llm,
             tool_registry=self.tool_registry,
@@ -187,19 +189,36 @@ class SubagentRunner:
         )
 
         # Simple ReAct loop
-        for _ in range(self.max_steps):
+        for step in range(1, self.max_steps + 1):
             try:
                 turn = executor.execute_turn(self.messages, tool_usage=self.tool_usage)
             except Exception as e:
                 logger.error("Subagent LLM error: %s", e)
+                if progress_callback:
+                    progress_callback(step, "error", {"message": str(e)})
                 return f"Error: LLM call failed - {str(e)}", self.tool_usage
+
             self.messages = turn["messages"]
+
+            # Emit progress: assistant response
+            if progress_callback:
+                assistant_text = turn.get("assistant_text", "")[:200]
+                tool_calls_in_turn = turn.get("tool_calls", [])
+                if tool_calls_in_turn:
+                    for tc in tool_calls_in_turn:
+                        progress_callback(step, "action", {
+                            "tool": tc.get("name", "?"),
+                            "input": str(tc.get("arguments", {}))[:200],
+                        })
+                elif assistant_text:
+                    progress_callback(step, "thought", {"content": assistant_text})
+
             if turn["done"]:
                 final_result = turn.get("final_result") or ""
                 if not str(final_result).strip():
                     return "Error: Empty response from subagent", self.tool_usage
                 return str(final_result), self.tool_usage
-        
+
         # Max steps reached
         return "Subagent reached maximum steps without completing.", self.tool_usage
 
@@ -402,7 +421,7 @@ class TaskTool(Tool):
             import uuid
             task_id = f"bg_{uuid.uuid4().hex[:10]}"
 
-            def _run_sync() -> tuple:
+            def _run_sync(progress_cb=None) -> tuple:
                 runner = SubagentRunner(
                     llm=llm,
                     tool_registry=subagent_tools,
@@ -410,7 +429,7 @@ class TaskTool(Tool):
                     project_root=self._project_root,
                     max_steps=self._subagent_max_steps,
                 )
-                return runner.run(prompt)
+                return runner.run(prompt, progress_callback=progress_cb)
 
             self._background_runner.launch(
                 task_id=task_id,

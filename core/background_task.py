@@ -2,7 +2,8 @@
 
 Sub-agents launched with ``run_in_background=True`` execute in daemon
 threads.  Results are persisted to ``.tasks/output/{task_id}.json``
-with atomic writes (tmp → rename).
+with atomic writes (tmp → rename).  Step-by-step progress is written
+to ``.tasks/progress/{task_id}.jsonl`` for real-time streaming.
 
 The main agent polls completed results via TaskOutputTool and sees
 running tasks via runtime system blocks.
@@ -37,6 +38,8 @@ class BackgroundTaskRunner:
         dir_name = output_dir or os.getenv("BG_TASK_OUTPUT_DIR", ".tasks/output")
         self._output_dir = self._root / dir_name
         self._output_dir.mkdir(parents=True, exist_ok=True)
+        self._progress_dir = self._root / ".tasks/progress"
+        self._progress_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: Dict[str, dict] = {}
         self._lock = threading.Lock()
 
@@ -47,7 +50,7 @@ class BackgroundTaskRunner:
     def launch(
         self,
         task_id: str,
-        runner_callable,  # Callable[[], tuple[str, dict]]
+        runner_callable,  # Callable[[callable | None], tuple[str, dict]]
         description: str = "",
     ) -> None:
         """Launch a background task in a daemon thread.
@@ -57,9 +60,10 @@ class BackgroundTaskRunner:
         task_id:
             Unique task identifier.
         runner_callable:
-            A callable ``() -> (result: str, tool_usage: dict)`` that
-            executes the sub-agent synchronously.  Its return value is
-            persisted on success.
+            A callable ``(progress_callback) -> (result: str, tool_usage: dict)``
+            that executes the sub-agent synchronously.  The callback receives
+            ``(step, event_type, data_dict)`` for each ReAct step.
+            Its return value is persisted on success.
         description:
             Short description shown in runtime summary.
         """
@@ -73,12 +77,47 @@ class BackgroundTaskRunner:
                 "started_at": time.time(),
             }
 
+        progress_path = self._progress_dir / f"{task_id}.jsonl"
+        # Clear any stale progress file.
+        try:
+            progress_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        def _progress_callback(step: int, event_type: str, data: dict) -> None:
+            """Write a progress entry to the JSONL file."""
+            try:
+                entry = json.dumps(
+                    {"step": step, "type": event_type, **data},
+                    ensure_ascii=False,
+                )
+                with open(progress_path, "a", encoding="utf-8") as f:
+                    f.write(entry + "\n")
+            except Exception:
+                pass
+
         def _run() -> None:
             try:
-                result, tool_usage = runner_callable()
+                # Try with progress callback first, fall back to no args.
+                import inspect
+                try:
+                    sig = inspect.signature(runner_callable)
+                    if len(sig.parameters) > 0:
+                        result, tool_usage = runner_callable(_progress_callback)
+                    else:
+                        result, tool_usage = runner_callable()
+                except (ValueError, TypeError):
+                    result, tool_usage = runner_callable()
                 self._save_result(task_id, "completed", result, tool_usage)
             except Exception as exc:
                 self._save_result(task_id, "failed", str(exc), {})
+            finally:
+                # Write a final "done" marker.
+                try:
+                    with open(progress_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps({"type": "done"}) + "\n")
+                except Exception:
+                    pass
 
         thread = threading.Thread(target=_run, name=f"BgTask[{task_id[:8]}]", daemon=True)
         thread.start()
@@ -157,6 +196,33 @@ class BackgroundTaskRunner:
                     del self._tasks[tid]
                     count += 1
         return count
+
+    def get_progress(self, task_id: str, since_step: int = 0) -> list[dict]:
+        """Read progress entries for *task_id* from the JSONL file.
+
+        Returns entries with step > *since_step*.  Useful for polling.
+        """
+        progress_path = self._progress_dir / f"{task_id}.jsonl"
+        if not progress_path.exists():
+            return []
+        entries: list[dict] = []
+        try:
+            for line in progress_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "done":
+                    break
+                step = entry.get("step", 0)
+                if step > since_step:
+                    entries.append(entry)
+        except OSError:
+            pass
+        return entries
 
     # ------------------------------------------------------------------
     # Internal
