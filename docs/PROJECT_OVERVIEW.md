@@ -1,6 +1,6 @@
 # MyCodeAgent (WodeAgent) 项目总览
 
-> 版本: v2.0 | 日期: 2026-06-20 | 测试: 737 passed, 0 failed
+> 版本: v3.0 | 日期: 2026-06-22 | 测试: 841 passed, 0 failed
 
 ---
 
@@ -23,10 +23,13 @@ entrypoint: scripts/chat_test_agent.py
               ├── ContextBuilder          (system prompt + tools 组装)
               ├── HistoryManager          (消息历史 + 压缩)
               ├── SummaryCompressor       (上下文摘要)
-              ├── ToolRegistry            (工具注册表)
+              ├── ToolRegistry            (工具注册表 + 熔断)
               ├── PermissionGate          (软沙箱)
               ├── WorktreeManager         (git worktree 隔离)
               ├── BackgroundTaskRunner    (后台子代理)
+              ├── OutputStyleManager      (输出风格)
+              ├── VCR                     (LLM 录制回放)
+              ├── HookManager             (生命周期钩子)
               ├── TeamManager             (AgentTeams 团队协作)
               ├── HelloAgentsLLM          (LLM 客户端)
               └── TraceLogger             (结构化追踪)
@@ -35,27 +38,84 @@ TUI 层: tui/
   ├── StreamingResponse     (Rich Live 流式渲染)
   ├── MentionCompleter      (@-mention 补全)
   ├── PermissionDialog      (交互式权限弹窗)
-  └── StatusLine            (模型状态栏)
+  └── StatusLine            (模型/plan/style/worktree 状态栏)
 ```
 
 ---
 
-## 三、工具清单（27 个）
+## 三、工具清单（33 个）
 
-| 类别 | 工具 | 说明 |
-|------|------|------|
-| 文件 | Read, Write, Edit, MultiEdit | 文件读写编辑 |
-| 文件 | LS, Glob | 目录列表、文件名搜索 |
-| 搜索 | Grep | 正则搜索 |
-| 系统 | Bash, TodoWrite | 命令执行、任务管理 |
-| 交互 | AskUser, Skill | 询问用户、技能加载 |
-| 子代理 | Task (+ background) | 子代理委派 + 后台执行 |
-| 团队(13) | TeamCreate/SendMessage/Status/Delete/Cleanup/Fanout/Collect, TeamTaskCreate/Get/Update/List, TeamApprovals/ApprovePlan, TeamList, TeamRetry | 完整团队协作 |
-| 隔离(2) | EnterWorktree, ExitWorktree | git worktree 会话隔离 |
-| 计划(2) | EnterPlanMode, ExitPlanMode | 只读分析模式 |
-| 模型 | SwitchModel | 切换模型 |
-| 后台 | TaskOutput | 查询后台任务 |
-| MCP | 动态 | MCP 工具注册 |
+### 文件操作 (6)
+| 工具 | 说明 |
+|------|------|
+| Read | 读取文件（含乐观锁 mtime/size） |
+| Write | 创建/覆写文件 |
+| Edit | 精确字符串替换编辑 |
+| MultiEdit | 批量编辑同一文件 |
+| LS | 目录列表 |
+| Glob | 文件名 glob 搜索 |
+
+### 搜索 (1)
+| 工具 | 说明 |
+|------|------|
+| Grep | 正则内容搜索 (ripgrep) |
+
+### 系统 (3)
+| 工具 | 说明 |
+|------|------|
+| Bash | Shell 命令执行 |
+| TodoWrite | 任务管理/计划跟踪 |
+| AskUser | 向用户提问 |
+
+### 子代理 (2)
+| 工具 | 说明 |
+|------|------|
+| Task | 子代理委派 (oneshot/persistent/parallel + background) |
+| TaskOutput | 查询后台任务结果 |
+
+### 技能与交互 (2)
+| 工具 | 说明 |
+|------|------|
+| Skill | 加载命名技能 |
+| SwitchModel | 切换 LLM 模型 |
+
+### 计划模式 (2)
+| 工具 | 说明 |
+|------|------|
+| EnterPlanMode | 进入只读分析模式 |
+| ExitPlanMode | 退出并注入计划 |
+
+### Worktree 隔离 (2)
+| 工具 | 说明 |
+|------|------|
+| EnterWorktree | 创建/进入 git worktree |
+| ExitWorktree | 退出并保留/删除 worktree |
+
+### AgentTeams 团队 (16)
+| 工具 | 说明 |
+|------|------|
+| TeamCreate | 创建团队 |
+| SendMessage | 发送团队消息 |
+| TeamStatus | 查看团队状态 |
+| TeamDelete | 删除团队 |
+| TeamCleanup | 清理团队数据 |
+| TeamList | 列出所有团队 |
+| TeamRetry | 重试失败的工作项 |
+| TeamFanout | 并行分发任务 |
+| TeamCollect | 收集并行结果 |
+| TeamApprovals | 查看 plan 审批 |
+| TeamApprovePlan | 审批 plan |
+| TeamTaskCreate | 创建看板任务 |
+| TeamTaskGet | 获取任务详情 |
+| TeamTaskUpdate | 更新任务状态 |
+| TeamTaskList | 列出任务 |
+
+### MCP 外部工具
+| 服务器 | 状态 | 工具 |
+|--------|------|------|
+| fetch | ✅ | web 请求 |
+| context7 | ✅ | 文档查询 |
+| tavily-mcp | ✅ | 网络搜索 |
 
 ---
 
@@ -90,11 +150,14 @@ ExitWorktree(keep|remove) → 恢复 project_root
 ### 4.4 AgentTeams
 
 15 个工具，10/10 验收基线通过。支持：
-- 团队创建、消息通信（5 种消息类型）
+- 团队创建、消息通信（5 种消息类型，ACK 三态）
 - 任务看板（依赖解锁、自动认领）
 - plan approval 闸门
-- daemon worker 并行执行
-- 会话持久化
+- daemon worker 并行执行（信号量控制 LLM 并发）
+- 会话持久化（cursor 增量 inbox 读取）
+- role-based system prompt（developer/reviewer/planner）
+- 存储限制（`TEAM_MAX_INBOX_SIZE` / `TEAM_MAX_WORK_ITEMS`）
+- tmux 显示模式
 
 ### 4.5 Model Management
 
@@ -105,14 +168,62 @@ ExitWorktree(keep|remove) → 恢复 project_root
   /model <name>   → 手动切换 (用户或 LLM)
 ```
 
-### 4.6 Claude Code 风格 TUI
+### 4.6 Output Styles
+
+| 风格 | 效果 |
+|------|------|
+| `default` | 保持简洁高效 |
+| `explanatory` | ★ Insight 格式解释实现选择 |
+| `learning` | Learn by Doing + TODO(human) 交互 |
+
+配置: `AGENT_OUTPUT_STYLE` env var 或 `/style` 命令。通过 `{output_style}` 占位符注入 L1 系统提示末尾。
+
+### 4.7 VCR — LLM API 录制回放
+
+```
+VCR_ENABLED=true → 拦截 LLM 调用
+  ├── SHA-256(messages+tools) → fixture 文件名
+  ├── fixture 存在 → 回放 (0 API 调用)
+  └── fixture 不存在 → 调 API → 写入 fixture
+```
+
+3 种模式: `new_episodes` / `once` / `none`
+
+### 4.8 Hook System — 生命周期钩子
+
+| 事件 | 能力 |
+|------|------|
+| SessionStart | 注入上下文、设置环境变量 |
+| PreToolUse | 阻止/修改工具调用 (exit 2 block) |
+| PostToolUse | 注入系统消息 |
+| SessionEnd | 清理资源 |
+
+配置: `.mycode/hooks.json`，matcher 支持 `*` / 精确名 / glob
+
+### 4.9 Claude Code 风格 TUI
 
 | 组件 | 功能 |
 |------|------|
 | streaming | Rich Live 流式渲染 LLM 输出 |
 | @-mention | prompt_toolkit 补全 agent/model/file |
 | PermissionDialog | prompt_toolkit 交互式权限弹窗 |
-| StatusLine | prompt 行显示 `[model] [plan] [wt:name]` |
+| StatusLine | 显示 `[model] [plan] [style:xxx] [wt:name]` |
+
+### 4.10 上下文工程
+
+- **分层提示**: L1 (system+tools) + L2 (CODE_LAW) + runtime blocks
+- **历史压缩**: `COMPRESSION_THRESHOLD` 触发 LLM 摘要，超时回退截断
+- **工具输出截断**: 超限落盘 `tool-output/`，7 天自动清理
+- **@file 预处理**: 注入 system-reminder 强制 Read
+- **熔断**: 连续 3 次失败 → 临时禁用 → 300s 后半开
+- **Trace**: JSONL + HTML 双轨，自动脱敏
+- **乐观锁**: Read/Write/Edit 的 mtime/size 校验
+
+### 4.11 安全
+
+- **软沙箱**: `PERMISSION_SOFT_SANDBOX=true`，项目外路径需确认
+- **敏感目录永拒**: `/etc/shadow`, `C:\Windows\System32\`, `.ssh/id_rsa` 等
+- **子代理权限**: 子代理共享主代理的权限缓存，不可交互
 
 ---
 
@@ -140,9 +251,24 @@ MCP_CONNECT_MODE=manual
 ENABLE_AGENT_TEAMS=false
 PERMISSION_SOFT_SANDBOX=true
 
-# Paths
+# 输出风格
+# AGENT_OUTPUT_STYLE=explanatory
+
+# VCR (测试用)
+# VCR_ENABLED=true
+
+# Worktree
 WORKTREE_STORE_DIR=.worktrees
 WORKTREE_BASE_REF=fresh
+
+# 上下文
+CONTEXT_WINDOW=128000
+COMPRESSION_THRESHOLD=0.8
+MIN_RETAIN_ROUNDS=10
+
+# Trace
+TRACE_ENABLED=true
+TRACE_SANITIZE=true
 ```
 
 ---
@@ -151,35 +277,50 @@ WORKTREE_BASE_REF=fresh
 
 ```
 MyCodeAgent/
-├── agents/           # Agent 核心
-│   └── codeAgent.py  # CodeAgent (ReAct 循环)
-├── core/             # 核心引擎
-│   ├── llm.py        # HelloAgentsLLM
-│   ├── config.py     # 配置
+├── agents/               # Agent 核心
+│   └── codeAgent.py      # CodeAgent (ReAct 循环)
+├── core/                 # 核心引擎
+│   ├── llm.py            # HelloAgentsLLM
+│   ├── config.py         # 配置
+│   ├── agent.py          # Agent 基类
 │   ├── background_task.py   # 后台任务
 │   ├── model_profiles.py    # 模型 profiles + pointers
-│   ├── context_engine/      # 上下文构建
-│   ├── team_engine/         # AgentTeams
-│   └── worktree/            # git worktree
-├── tools/            # 工具
-│   ├── base.py       # Tool 基类 + 协议
-│   ├── registry.py   # ToolRegistry
+│   ├── output_styles.py     # 输出风格管理
+│   ├── vcr.py               # LLM 录制回放
+│   ├── hook_system.py       # 生命周期钩子
+│   ├── session_store.py     # 会话持久化
+│   ├── response_parser.py   # 响应解析
+│   ├── context_engine/      # 上下文构建 + 历史 + 压缩 + trace
+│   ├── team_engine/         # AgentTeams (19 文件)
+│   ├── worktree/            # git worktree
+│   └── skills/              # 技能加载器
+├── tools/                # 工具
+│   ├── base.py           # Tool 基类 + 协议
+│   ├── registry.py       # ToolRegistry
 │   ├── permission_gate.py  # 软沙箱
-│   ├── builtin/      # 内置工具 (27个)
-│   └── mcp/          # MCP 客户端
-├── tui/              # TUI 组件
-│   ├── streaming.py  # 流式渲染
+│   ├── circuit_breaker.py  # 熔断器
+│   ├── builtin/          # 33 个内置工具
+│   └── mcp/              # MCP 客户端 (6 文件)
+├── tui/                  # TUI 组件
+│   ├── streaming.py      # 流式渲染
 │   ├── mention_completer.py  # @-mention
 │   ├── permission_dialog.py  # 权限弹窗
 │   └── status_line.py        # 状态栏
-├── prompts/          # LLM 提示词
-│   ├── agents_prompts/  # Agent 系统提示
-│   └── tools_prompts/   # 工具描述
-├── scripts/          # 入口脚本
+├── prompts/              # LLM 提示词
+│   ├── agents_prompts/   # Agent 系统提示 (7 文件)
+│   ├── tools_prompts/    # 工具描述 (38 文件)
+│   └── output_styles/    # 输出风格 (default/explanatory/learning)
+├── scripts/              # 入口脚本
 │   └── chat_test_agent.py  # 主入口
-├── tests/            # 测试 (737个)
-├── docs/             # 文档
-└── mcp_servers.json  # MCP 配置
+├── tests/                # 测试 (77 文件, 841+ 用例)
+├── docs/                 # 文档
+│   ├── plans/            # 设计文档 (7 份)
+│   └── agent_teams/      # AgentTeams 设计文档
+├── memory/               # trace/session/todo 输出
+├── skills/               # 技能定义
+├── tool-output/          # 工具输出落盘
+├── .env.example          # 配置模板
+└── mcp_servers.json      # MCP 配置
 ```
 
 ---
@@ -188,49 +329,59 @@ MyCodeAgent/
 
 当前 `mcp_servers.json` 配置了 3 个服务器：
 
-```json
-{
-  "mcpServers": {
-    "fetch": {
-      "command": "uvx", "args": ["mcp-server-fetch"]
-    },
-    "context7": {
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CTX7_API_KEY}"]
-    },
-    "tavily-mcp": {
-      "command": "npx",
-      "args": ["-y", "tavily-mcp@0.1.4"]
-    }
-  }
-}
-```
-
-| 服务器 | 状态 | 需要 |
+| 服务器 | 命令 | 需要 |
 |--------|------|------|
-| fetch | ✅ 可用 | `uvx` (已安装) |
-| context7 | ❌ 缺 key | 注册 https://upstash.com 获取 `CTX7_API_KEY` |
-| tavily-mcp | ❌ 缺 key | 注册 https://tavily.com 获取 `TAVILY_API_KEY` |
+| fetch | `uvx mcp-server-fetch` | uvx |
+| context7 | `npx @upstash/context7-mcp` | CTX7_API_KEY |
+| tavily-mcp | `npx tavily-mcp@0.1.4` | TAVILY_API_KEY |
 
 连接模式：`MCP_CONNECT_MODE=manual`（后台连接 + 每步 ReAct 自动重试）
 
 ---
 
-## 八、Kode-Agent 学习计划进度
+## 八、Slash Commands
 
-| 优先级 | 功能 | 状态 |
-|--------|------|------|
-| P0 | Plan Mode | ✅ |
-| P0 | Background Task | ✅ |
-| P1 | Model Pointers | ✅ |
-| P1 | Model Profiles + /model | ✅ |
-| P1 | WebSearch/WebFetch | ⬜ (MCP 已有配置) |
-| P2 | Output Styles | ⬜ |
-| P3 | LSP / Hook / VCR | ⬜ |
+| 命令 | 说明 |
+|------|------|
+| `/model` | 显示当前模型 + token 统计 |
+| `/model <id>` | 切换模型 |
+| `/info` | 详细 token 用量 |
+| `/plan` | 切换 Plan Mode |
+| `/style [name]` | 显示/设置输出风格 |
+| `/save [path]` | 保存会话快照 |
+| `/load [path]` | 加载会话快照 |
+| `/team msg <...>` | 发送团队消息 |
+| `/team watch <...>` | 监控团队进度 |
+| `/delegate <on\|off>` | 切换委托模式 |
+| `/help` | 显示帮助 |
+| `init` | 生成 code_law.md |
+| `exit` / `quit` / `q` | 退出 |
 
 ---
 
-## 九、设计文档索引
+## 九、子代理类型
+
+| 类型 | 用途 |
+|------|------|
+| `general` | 复杂执行、子任务 |
+| `explore` | 代码库扫描、入口点发现 |
+| `plan` | 实现步骤分析、依赖评估 |
+| `summary` | 压缩长输出、多文件总结 |
+
+---
+
+## 十、Agent 模式
+
+| 模式 | 说明 |
+|------|------|
+| Plan | 只读工具，产出计划后恢复全部工具 |
+| Delegate | 仅团队管理工具，工作由 teammates 执行 |
+| Worktree | 切换到独立 git worktree 目录 |
+| Background | 子代理 daemon 线程，主循环继续 |
+
+---
+
+## 十一、设计文档索引
 
 | 文档 | 说明 |
 |------|------|
@@ -239,8 +390,27 @@ MyCodeAgent/
 | `docs/plans/2026-06-18-worktree-feature-design.md` | Worktree 功能设计 |
 | `docs/plans/2026-06-18-soft-sandbox-permission-design.md` | 软沙箱权限设计 |
 | `docs/plans/2026-06-18-kode-agent-learning-plan.md` | Kode-Agent 分析 + 优化计划 |
+| `docs/plans/2026-06-22-output-styles-design.md` | 输出风格设计 |
+| `docs/plans/2026-06-22-vcr-hook-system-design.md` | VCR + Hook 设计 |
 | `docs/plans/2026-02-17-agentteams-parallel-execution-implementation.md` | 并行执行方案 |
 | `docs/plans/2026-02-17-claudecode-teams-replication-checklist.md` | Claude Teams 复刻清单 |
 | `docs/上下文工程设计文档.md` | 上下文工程 |
 | `docs/通用工具响应协议.md` | 工具协议规范 |
-| `docs/fixed_update.md` | 早期 bug 修复记录 |
+| `docs/工具输出截断设计文档.md` | 输出截断策略 |
+| `docs/TraceLogging设计文档.md` | Trace 追踪 |
+| `docs/DEV_HANDOFF.md` | 开发者交接 |
+
+---
+
+## 十二、Kode-Agent 学习计划 — 全部完成 ✅
+
+| 优先级 | 功能 | 状态 |
+|--------|------|------|
+| P0 | Plan Mode | ✅ |
+| P0 | Background Task | ✅ |
+| P1 | Model Pointers + /model | ✅ |
+| P1 | WebSearch/WebFetch (MCP) | ✅ |
+| P2 | Output Styles | ✅ |
+| P3 | VCR | ✅ |
+| P3 | Hook System | ✅ |
+| P3 | LSP | ❌ 搁置 |
