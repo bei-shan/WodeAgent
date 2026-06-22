@@ -31,6 +31,8 @@ from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
 from core.output_styles import OutputStyleManager
+from core.vcr import VCR
+from core.hook_system import HookManager, HookResult
 from tools.builtin.list_files import ListFilesTool
 from tools.builtin.search_files_by_name import SearchFilesByNameTool
 from tools.builtin.search_code import GrepTool
@@ -215,6 +217,20 @@ class CodeAgent(Agent):
             env_style=env_style if env_style else None,
         )
         self._sync_output_style_to_context()
+
+        # VCR 录制回放
+        self._vcr = VCR.from_env()
+
+        # Hook 生命周期管理器
+        self._hook_manager = HookManager(project_root=self._original_project_root)
+        self._hook_system_messages: list[str] = []
+        self._hook_session_context: list[str] = []
+
+        # SessionStart hooks
+        if self._hook_manager.has_any_hooks:
+            session_result = self._hook_manager.run_session_start()
+            self._hook_system_messages.extend(session_result.system_messages)
+            self._hook_session_context.extend(session_result.additional_context)
 
         # Trace 日志（单实例贯穿 Agent 生命周期）
         self.trace_logger = create_trace_logger()
@@ -677,6 +693,13 @@ class CodeAgent(Agent):
 
     def close(self):
         """关闭 Agent 并写入 trace 总结"""
+        # SessionEnd hooks
+        if self._hook_manager.has_any_hooks:
+            try:
+                self._hook_manager.run_session_end()
+            except Exception as exc:
+                self.logger.warning("SessionEnd hooks failed: %s", exc)
+
         if self.trace_logger:
             self.trace_logger.finalize()
             self.trace_logger = None
@@ -726,6 +749,16 @@ class CodeAgent(Agent):
             if self._plan_text:
                 runtime_blocks.append(f"[Plan]\n{self._plan_text}")
                 self._plan_text = None  # only inject once
+
+            # Hook system messages (inject once per step)
+            if self._hook_system_messages:
+                runtime_blocks.extend(self._hook_system_messages)
+                self._hook_system_messages.clear()
+
+            # Hook session context (inject once on first step)
+            if step == 1 and self._hook_session_context:
+                runtime_blocks.extend(self._hook_session_context)
+                self._hook_session_context.clear()
 
             if runtime_blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
                 self.context_builder.set_runtime_system_blocks(runtime_blocks)
@@ -853,7 +886,21 @@ class CodeAgent(Agent):
         reasoning_content = None
 
         while True:
-            raw_response = self.llm.invoke_raw(messages, tools=tools_schema, tool_choice=tool_choice)
+            # VCR interception: replay fixture or record new.
+            if self._vcr.enabled:
+                raw_response = self._vcr.call(
+                    model=self.llm.model,
+                    messages=messages,
+                    tools=tools_schema,
+                    tool_choice=tool_choice,
+                    fallback=lambda: self.llm.invoke_raw(
+                        messages, tools=tools_schema, tool_choice=tool_choice
+                    ),
+                )
+            else:
+                raw_response = self.llm.invoke_raw(
+                    messages, tools=tools_schema, tool_choice=tool_choice
+                )
             if show_raw:
                 self.last_response_raw = (
                     raw_response.model_dump()
@@ -1262,7 +1309,40 @@ class CodeAgent(Agent):
                 "context": {"cwd": ".", "params_input": tool_input if isinstance(tool_input, dict) else {"input": tool_input}},
             }
             return json.dumps(payload, ensure_ascii=False, indent=2)
-        res = self.tool_registry.execute_tool(tool_name, tool_input)
+
+        # PreToolUse hooks
+        normalized_input = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
+        if self._hook_manager.has_any_hooks:
+            pre_result = self._hook_manager.run_pre_tool_use(tool_name, normalized_input)
+            if pre_result.blocked:
+                self.logger.info(
+                    "Tool %s blocked by PreToolUse hook: %s", tool_name, pre_result.reason
+                )
+                payload = {
+                    "status": "error",
+                    "data": {},
+                    "error": {
+                        "code": "HOOK_BLOCKED",
+                        "message": pre_result.reason,
+                    },
+                    "stats": {"time_ms": 0},
+                }
+                return json.dumps(payload, ensure_ascii=False)
+            if pre_result.system_messages:
+                self._hook_system_messages.extend(pre_result.system_messages)
+            if pre_result.updated_input:
+                normalized_input = {**normalized_input, **pre_result.updated_input}
+
+        res = self.tool_registry.execute_tool(tool_name, normalized_input)
+
+        # PostToolUse hooks
+        if self._hook_manager.has_any_hooks:
+            post_result = self._hook_manager.run_post_tool_use(
+                tool_name, normalized_input, str(res)
+            )
+            if post_result.system_messages:
+                self._hook_system_messages.extend(post_result.system_messages)
+
         return str(res)
 
     def set_delegate_mode(self, enabled: bool) -> None:
