@@ -267,6 +267,8 @@ def main() -> None:
     )
     parser.add_argument("--show-raw", action="store_true", help="print raw response structure")
     parser.add_argument("--plan", action="store_true", dest="plan_mode", help="start in plan-only mode")
+    parser.add_argument("-c", "--continue", action="store_true", dest="continue_last", help="resume the most recent session")
+    parser.add_argument("-r", "--resume", default=None, dest="resume_id", help="resume a session by ID, index, or prefix")
     args = parser.parse_args()
 
     # Initialize config first (used for temperature fallback)
@@ -315,6 +317,21 @@ def main() -> None:
     if args.plan_mode:
         agent.enter_plan_mode()
         console.print("[bold yellow]Starting in plan mode (--plan). Only read-only tools available.[/bold yellow]")
+
+    # Resume session if -c or -r
+    if args.resume_id:
+        resolved = agent.resolve_session_id(args.resume_id)
+        if resolved:
+            agent.resume_session(resolved)
+            console.print(f"[bold green]✓ Resumed session:[/bold green] {resolved}")
+        else:
+            console.print(f"[bold red]✗ Session not found:[/bold red] {args.resume_id}")
+    elif args.continue_last:
+        sessions = agent.list_sessions()
+        if sessions:
+            # sessions are sorted by modified_at desc
+            agent.resume_session(sessions[0]["id"])
+            console.print(f"[bold green]✓ Resumed most recent session:[/bold green] {sessions[0]['title']}")
 
     code_law_exists = check_code_law_exists(PROJECT_ROOT)
     _print_banner(code_law_exists, enhanced_ui)
@@ -534,6 +551,50 @@ def main() -> None:
                         agent.enter_plan_mode()
                         console.print("[bold cyan]Entered plan mode. Only read-only tools available.[/bold cyan]")
                     continue
+                elif user_input.lower().strip() == "/sessions":
+                    sessions = agent.list_sessions()
+                    if not sessions:
+                        console.print("[dim]No saved sessions.[/dim]")
+                    else:
+                        lines = [f"[bold]Sessions ({len(sessions)}):[/bold]"]
+                        for i, s in enumerate(sessions, 1):
+                            marker = " ← current" if s["id"] == agent.session_id else ""
+                            title = s["title"] or "(untitled)"
+                            lines.append(
+                                f"  [cyan]{i}.[/cyan] [bold]{title}[/bold]{marker}\n"
+                                f"      id={s['id']}  msgs={s['message_count']}  "
+                                f"modified={s['modified_at'][:16]}"
+                            )
+                        console.print("\n".join(lines))
+                    continue
+                elif user_input.lower().startswith("/resume"):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 1:
+                        console.print("[bold red]✗ Usage: /resume <id|index>[/bold red]")
+                    else:
+                        identifier = parts[1].strip()
+                        resolved = agent.resolve_session_id(identifier)
+                        if resolved:
+                            if agent.resume_session(resolved):
+                                console.print(
+                                    f"[bold green]✓ Switched to session:[/bold green] {resolved}"
+                                )
+                            else:
+                                console.print("[bold red]✗ Failed to load session.[/bold red]")
+                        else:
+                            console.print(f"[bold red]✗ Session not found:[/bold red] {identifier}")
+                    continue
+                elif user_input.lower().startswith("/rename"):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 1:
+                        console.print("[bold red]✗ Usage: /rename <title>[/bold red]")
+                    else:
+                        title = parts[1].strip()
+                        if agent.rename_session(title):
+                            console.print(f"[bold green]✓ Session renamed:[/bold green] {title}")
+                        else:
+                            console.print("[bold red]✗ Rename failed.[/bold red]")
+                    continue
                 elif user_input.lower().startswith("/style"):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) == 1:
@@ -568,6 +629,9 @@ def main() -> None:
                         "/model <id> - Switch model (e.g. /model gpt-4o)\n"
                         "/info - Show detailed token usage\n"
                         "/plan - Toggle plan mode (read-only analysis)\n"
+                        "/sessions - List all saved sessions\n"
+                        "/resume <id|index> - Switch to another session\n"
+                        "/rename <title> - Rename current session\n"
                         "/style [name] - Show or set output style\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"

@@ -33,6 +33,7 @@ from core.worktree.manager import WorktreeManager, WorktreeError
 from core.output_styles import OutputStyleManager
 from core.vcr import VCR
 from core.hook_system import HookManager, HookResult
+from core.session_manager import SessionManager
 from tools.builtin.list_files import ListFilesTool
 from tools.builtin.search_files_by_name import SearchFilesByNameTool
 from tools.builtin.search_code import GrepTool
@@ -231,6 +232,11 @@ class CodeAgent(Agent):
             session_result = self._hook_manager.run_session_start()
             self._hook_system_messages.extend(session_result.system_messages)
             self._hook_session_context.extend(session_result.additional_context)
+
+        # 多对话管理器
+        sessions_dir = os.path.join(self._original_project_root, "memory", "sessions")
+        self._session_manager = SessionManager(sessions_dir=sessions_dir)
+        self._session_id = self._session_manager.create_session()
 
         # Trace 日志（单实例贯穿 Agent 生命周期）
         self.trace_logger = create_trace_logger()
@@ -686,13 +692,23 @@ class CodeAgent(Agent):
             self._console("✅ Agent 已完成")
 
         self.logger.debug("response=%s", response_text)
-        self.logger.info("history_size=%d, rounds=%d", 
+        self.logger.info("history_size=%d, rounds=%d",
                         self.history_manager.get_message_count(),
                         self.history_manager.get_rounds_count())
+
+        # 自动保存当前对话
+        self._auto_save_session()
+
         return response_text
 
     def close(self):
         """关闭 Agent 并写入 trace 总结"""
+        # Final auto-save
+        try:
+            self._auto_save_session()
+        except Exception:
+            pass
+
         # SessionEnd hooks
         if self._hook_manager.has_any_hooks:
             try:
@@ -1095,8 +1111,112 @@ class CodeAgent(Agent):
         system_messages = self._get_system_messages_for_run()
         return list(system_messages) + list(history_messages)
 
+    # ------------------------------------------------------------------
+    # Session management (multi-conversation)
+    # ------------------------------------------------------------------
+
+    @property
+    def session_id(self) -> str:
+        """Return the current session ID."""
+        return self._session_id
+
+    def _build_snapshot(self) -> dict:
+        """Build a session snapshot dict for the current state."""
+        system_messages = self._get_system_messages_for_run()
+        history_messages = self.history_manager.serialize_messages()
+        tool_schema = self._get_openai_tools_for_current_mode()
+        teams_snapshot = self.team_manager.export_state() if self.team_manager else {}
+        worktree_state = None
+        if self._active_worktree:
+            worktree_state = {
+                "name": self._active_worktree.get("name"),
+                "path": self._active_worktree.get("path"),
+                "branch": self._active_worktree.get("branch"),
+            }
+        return build_session_snapshot(
+            system_messages=system_messages,
+            history_messages=history_messages,
+            tool_schema=tool_schema,
+            project_root=self.project_root,
+            cwd=".",
+            code_law_text=self.context_builder._cached_code_law,
+            skills_prompt=self._skills_prompt,
+            mcp_tools_prompt=self._mcp_tools_prompt,
+            read_cache=self.tool_registry.export_read_cache(),
+            tool_output_dir="tool-output",
+            schema_version=1,
+            teams_snapshot=teams_snapshot,
+            parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
+            team_store_dir=self.team_store_dir,
+            task_store_dir=self.task_store_dir,
+            worktree_state=worktree_state,
+        )
+
+    def _auto_save_session(self) -> None:
+        """Automatically persist the current session."""
+        try:
+            snapshot = self._build_snapshot()
+            self._session_manager.save_session(self._session_id, snapshot)
+        except Exception as exc:
+            self.logger.warning("Auto-save session failed: %s", exc)
+
+    def resume_session(self, session_id: str) -> bool:
+        """Switch to a different session by ID.
+
+        Saves the current session first, then loads the target.
+        Returns ``True`` on success.
+        """
+        # Save current session first.
+        self._auto_save_session()
+
+        snapshot = self._session_manager.load_session(session_id)
+        if snapshot is None:
+            return False
+
+        self._session_id = session_id
+        self._system_messages_override = snapshot.get("system_messages") or []
+        history_items = snapshot.get("history_messages") or []
+        self.history_manager.load_messages(history_items)
+        self.tool_registry.import_read_cache(snapshot.get("read_cache") or {})
+        if self.team_manager:
+            self.team_manager.import_state(snapshot.get("teams_snapshot") or {})
+        # Restore worktree state if the session was saved inside a worktree.
+        worktree_state = snapshot.get("worktree_state")
+        if isinstance(worktree_state, dict) and worktree_state.get("path"):
+            try:
+                self.enter_worktree(path=worktree_state["path"])
+            except Exception:
+                self.logger.warning(
+                    "Failed to restore worktree from session: %s",
+                    worktree_state.get("name", "unknown"),
+                )
+        return True
+
+    def list_sessions(self) -> list[dict]:
+        """Return a list of session metadata dicts."""
+        sessions = self._session_manager.list_sessions()
+        return [
+            {
+                "id": s.id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "modified_at": s.modified_at,
+                "message_count": s.message_count,
+                "preview": s.preview,
+            }
+            for s in sessions
+        ]
+
+    def rename_session(self, title: str) -> bool:
+        """Rename the current session."""
+        return self._session_manager.rename_session(self._session_id, title)
+
+    def resolve_session_id(self, identifier: str) -> str | None:
+        """Resolve a session identifier (ID, index, prefix) to a session ID."""
+        return self._session_manager.resolve_identifier(identifier)
+
     def save_session(self, path: str) -> None:
-        """保存会话快照（含 system messages）。"""
+        """保存会话快照（含 system messages）。(legacy — uses auto-save now)"""
         system_messages = self._get_system_messages_for_run()
         history_messages = self.history_manager.serialize_messages()
         tool_schema = self._get_openai_tools_for_current_mode()
