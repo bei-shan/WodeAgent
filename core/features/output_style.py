@@ -23,7 +23,8 @@ class OutputStyleFeature(AgentFeature):
     def init(self, agent: "CodeAgent") -> None:
         from core.output_styles import OutputStyleManager
 
-        env_style = os.getenv("AGENT_OUTPUT_STYLE", "").strip()
+        env_style = getattr(agent.config, "output_style", "") or os.getenv("AGENT_OUTPUT_STYLE", "")
+        env_style = env_style.strip()
         agent._output_style_manager = OutputStyleManager(
             project_root=agent._original_project_root,
             env_style=env_style if env_style else None,

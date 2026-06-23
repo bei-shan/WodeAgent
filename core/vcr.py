@@ -32,7 +32,10 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +201,18 @@ class VCR:
         tmp_path.replace(path)  # atomic rename
 
     @classmethod
-    def from_env(cls) -> "VCR":
-        """Create a VCR instance from environment variables.
+    def from_env(cls, config: "Config | None" = None) -> "VCR":
+        """Create a VCR instance from environment variables or Config object.
 
-        Reads ``VCR_ENABLED``, ``VCR_RECORD_MODE``, ``VCR_FIXTURE_DIR``.
+        If *config* is provided, reads from it; otherwise falls back to os.getenv().
         """
+        if config is not None:
+            return cls(
+                fixture_dir=config.vcr_fixture_dir,
+                enabled=config.vcr_enabled,
+                record_mode=config.vcr_record_mode,
+            )
+        # Backward-compatible path
         enabled = os.getenv("VCR_ENABLED", "").lower() in (
             "1", "true", "yes", "y", "on",
         )

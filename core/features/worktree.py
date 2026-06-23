@@ -20,8 +20,8 @@ class WorktreeFeature(AgentFeature):
     def init(self, agent: "CodeAgent") -> None:
         from core.worktree.manager import WorktreeManager
 
-        worktree_store_dir = os.getenv("WORKTREE_STORE_DIR", ".worktrees")
-        worktree_base_ref = os.getenv("WORKTREE_BASE_REF", "fresh")
+        worktree_store_dir = getattr(agent.config, "worktree_store_dir", "") or os.getenv("WORKTREE_STORE_DIR", ".worktrees")
+        worktree_base_ref = getattr(agent.config, "worktree_base_ref", "") or os.getenv("WORKTREE_BASE_REF", "fresh")
         agent._worktree_manager = WorktreeManager(
             project_root=agent._original_project_root,
             store_dir=worktree_store_dir,

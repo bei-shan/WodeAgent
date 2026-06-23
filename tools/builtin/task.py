@@ -14,7 +14,7 @@ import logging
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.llm import HelloAgentsLLM
 from core.message import Message
@@ -30,6 +30,19 @@ except Exception:  # pragma: no cover
     TeamManagerError = Exception
 
 load_env()
+
+if TYPE_CHECKING:
+    from core.config import Config
+
+# Module-level config (injected by CodeAgent, falls back to os.getenv)
+_task_config: "Optional[Config]" = None
+
+
+def set_task_config(config: "Config") -> None:
+    """注入统一配置对象。"""
+    global _task_config
+    _task_config = config
+
 
 # Import subagent prompts
 from prompts.agents_prompts.subagent_general_prompt import SUBAGENT_GENERAL_PROMPT
@@ -112,21 +125,30 @@ def _create_light_llm() -> Optional[HelloAgentsLLM]:
     Uses LIGHT_LLM_* environment variables. If not configured,
     returns None (caller should fallback to main model).
     """
-    light_model = os.getenv("LIGHT_LLM_MODEL_ID")
-    light_api_key = os.getenv("LIGHT_LLM_API_KEY")
-    light_base_url = os.getenv("LIGHT_LLM_BASE_URL")
-    
+    if _task_config is not None:
+        light_model = _task_config.light_llm_model_id
+        light_api_key = _task_config.light_llm_api_key
+        light_base_url = _task_config.light_llm_base_url
+        light_provider = _task_config.light_llm_provider
+        light_temp = _task_config.light_llm_temperature
+    else:
+        light_model = os.getenv("LIGHT_LLM_MODEL_ID")
+        light_api_key = os.getenv("LIGHT_LLM_API_KEY")
+        light_base_url = os.getenv("LIGHT_LLM_BASE_URL")
+        light_provider = os.getenv("LIGHT_LLM_PROVIDER", "auto")
+        light_temp = float(os.getenv("LIGHT_LLM_TEMPERATURE", "0.5"))
+
     # If no light model configured, return None
     if not light_model:
         return None
-    
+
     try:
         return HelloAgentsLLM(
             model=light_model,
             api_key=light_api_key,
             base_url=light_base_url,
-            provider=os.getenv("LIGHT_LLM_PROVIDER", "auto"),
-            temperature=float(os.getenv("LIGHT_LLM_TEMPERATURE", "0.5")),
+            provider=light_provider,
+            temperature=light_temp,
         )
     except Exception as e:
         logger.warning("Failed to create light LLM: %s", e)
@@ -267,7 +289,10 @@ class TaskTool(Tool):
         self._tool_registry = tool_registry
         self._team_manager = team_manager
         self._background_runner = background_runner
-        self._subagent_max_steps = int(os.getenv("SUBAGENT_MAX_STEPS", "50"))
+        if _task_config is not None:
+            self._subagent_max_steps = _task_config.subagent_max_steps
+        else:
+            self._subagent_max_steps = int(os.getenv("SUBAGENT_MAX_STEPS", "15"))
     
     def get_parameters(self) -> List[ToolParameter]:
         return [

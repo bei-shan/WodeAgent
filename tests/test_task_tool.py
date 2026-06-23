@@ -20,9 +20,18 @@ from tools.builtin.task import (
     VALID_MODELS,
     _get_subagent_prompt,
     _create_light_llm,
+    set_task_config,
 )
 from tools.registry import ToolRegistry
 from tools.base import ErrorCode
+
+
+@pytest.fixture(autouse=True)
+def _reset_task_config():
+    """Reset module-level config before each test to avoid cross-test leakage."""
+    set_task_config(None)
+    yield
+    set_task_config(None)
 
 
 # =============================================================================

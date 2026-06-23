@@ -17,7 +17,16 @@ from core.context_engine.observation_truncator import (
     truncate_observation,
     _get_max_lines,
     _get_max_bytes,
+    set_truncator_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_truncator_config():
+    """Reset module-level config before each test to avoid cross-test leakage."""
+    set_truncator_config(None)
+    yield
+    set_truncator_config(None)
 
 
 class TestObservationTruncatorBasic:

@@ -7,13 +7,25 @@ import json
 import time
 import logging
 import os
-from typing import Optional, Any, Callable, TypedDict
+from typing import TYPE_CHECKING, Optional, Any, Callable, TypedDict
 
 from .base import Tool, ToolStatus, ErrorCode, ToolParameter
 from .circuit_breaker import CircuitBreaker
 from core.env import load_env
 
+if TYPE_CHECKING:
+    from core.config import Config
+
 load_env()
+
+# Module-level config (injected by CodeAgent, falls back to os.getenv)
+_config: "Optional[Config]" = None
+
+
+def set_registry_config(config: "Config") -> None:
+    """注入统一配置对象。"""
+    global _config
+    _config = config
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -45,9 +57,14 @@ class ToolRegistry:
         # Read 元信息缓存（用于乐观锁自动注入）
         # key: path_resolved 或原始 path
         self._read_cache: dict[str, ReadMeta] = {}
+        if _config is not None:
+            ft, rt = _config.circuit_failure_threshold, _config.circuit_recovery_timeout
+        else:
+            ft = int(os.getenv("CIRCUIT_FAILURE_THRESHOLD", "3"))
+            rt = int(os.getenv("CIRCUIT_RECOVERY_TIMEOUT", "300"))
         self._circuit_breaker = CircuitBreaker(
-            failure_threshold=int(os.getenv("CIRCUIT_FAILURE_THRESHOLD", "3")),
-            recovery_timeout=int(os.getenv("CIRCUIT_RECOVERY_TIMEOUT", "300")),
+            failure_threshold=ft,
+            recovery_timeout=rt,
         )
 
 

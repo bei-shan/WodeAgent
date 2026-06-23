@@ -163,6 +163,9 @@ class CodeAgent(Agent):
 
     def _init_core(self) -> None:
         """Initialise core infrastructure that features depend on."""
+        # Inject config into modules that use module-level config singletons
+        self._inject_config_to_modules()
+
         # Summary generator
         summary_generator = create_summary_generator(
             llm=self.llm,
@@ -229,6 +232,20 @@ class CodeAgent(Agent):
         # MCP tools
         self._register_mcp_tools()
         self.context_builder.set_mcp_tools_prompt(self._mcp_tools_prompt)
+
+    def _inject_config_to_modules(self) -> None:
+        """Inject Config into modules that use module-level singletons.
+
+        This centralises config access — modules check the injected config first,
+        then fall back to os.getenv() for backward compatibility.
+        """
+        from core.context_engine.observation_truncator import set_truncator_config
+        from tools.registry import set_registry_config
+        from tools.builtin.task import set_task_config
+
+        set_truncator_config(self.config)
+        set_registry_config(self.config)
+        set_task_config(self.config)
 
     # ------------------------------------------------------------------
     # Worktree session isolation
