@@ -726,13 +726,24 @@ Step 27: TaskOutput 工具支持流式查询
 Step 28: 子代理流式测试
 ```
 
-### Phase 6: 体验优化（独立设计文档）
+### Phase 6: 体验优化
 
 ```
-Step 29: MCP 连接状态 (见 Section 3.8)
-Step 30: 首次启动向导 (见 docs/plans/2026-06-22-first-run-wizard-design.md)
-Step 31: Token 用量预算 (见 docs/plans/2026-06-22-token-budget-design.md)
+Step 29: MCP 连接状态 → Phase 2 (MCPFeature)
+Step 30: 首次启动向导 → ✅ done (b64853f)
+Step 31: Token 用量预算 → ✅ done (96d4e5e)
 ```
+
+### 全部完成清单
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| 1 | AgentFeature 协议 + env_helpers | ✅ |
+| 2 | 10 个 Feature 迁移 + MCPFeature | ✅ |
+| 3 | ReAct 循环重构 | ✅ |
+| 4 | 插件系统 | ✅ |
+| 5 | 子代理流式 | ✅ |
+| 6 | 首次向导 + Token 预算 | ✅ |
 
 ---
 
