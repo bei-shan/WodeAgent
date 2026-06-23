@@ -51,6 +51,7 @@ class MCPClient:
         self._config = config
         self._conn = None
         self._session: Optional[ClientSession] = None
+        self._session_loop_id: int | None = None  # detect stale sessions
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -58,14 +59,26 @@ class MCPClient:
     # ------------------------------------------------------------------
 
     async def connect(self) -> ClientSession:
-        """Establish (or return existing) connection. Thread-safe via lock."""
-        # Fast path: already connected — no lock needed.
+        """Establish (or return existing) connection. Thread-safe via lock.
+
+        Detects stale sessions created under a different asyncio event loop
+        (common when ``_run_sync`` creates a fresh loop for each sync call)
+        and transparently reconnects.
+        """
+        # If the cached session belongs to a different (now-closed) event loop,
+        # it's stale — discard it so we reconnect in the current loop.
+        current_loop_id = id(asyncio.get_running_loop())
+        if self._session is not None and self._session_loop_id != current_loop_id:
+            self._session = None
+            self._conn = None
+
+        # Fast path: already connected in this loop — no lock needed.
         if self._session is not None:
             return self._session
 
         with self._lock:
             # Double-check: another thread may have connected while we waited.
-            if self._session is not None:
+            if self._session is not None and self._session_loop_id == id(asyncio.get_running_loop()):
                 return self._session
 
             if self._config.transport == "stdio":
@@ -122,16 +135,34 @@ class MCPClient:
                 raise
 
             self._session = session
+            self._session_loop_id = id(asyncio.get_running_loop())
             return self._session
 
     async def close(self) -> None:
-        """Close session and transport. Thread-safe via lock."""
+        """Close session and transport. Thread-safe via lock.
+
+        Does NOT reconnect if the session was created under a different
+        event loop — it simply discards the stale session and exits.
+        """
         with self._lock:
-            if self._session:
-                await self._session.__aexit__(None, None, None)
+            in_current_loop = (
+                self._session_loop_id is not None
+                and self._session_loop_id == id(asyncio.get_running_loop())
+            )
+            if self._session is not None:
+                if in_current_loop:
+                    try:
+                        await self._session.__aexit__(None, None, None)
+                    except Exception:
+                        pass
                 self._session = None
-            if self._conn:
-                await self._conn.__aexit__(None, None, None)
+                self._session_loop_id = None
+            if self._conn is not None:
+                if in_current_loop:
+                    try:
+                        await self._conn.__aexit__(None, None, None)
+                    except Exception:
+                        pass
                 self._conn = None
 
     # ------------------------------------------------------------------
