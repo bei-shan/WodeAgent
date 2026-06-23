@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Tests](https://img.shields.io/badge/tests-841_passed-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-70+_files_240+_cases-brightgreen.svg)
 
 </div>
 
@@ -44,6 +44,9 @@
 - **Output Styles 输出风格**：default / explanatory / learning 三种交互风格
 - **VCR 录制回放**：LLM API 调用录制为 fixture，测试零成本确定
 - **Hook 生命周期钩子**：PreToolUse / PostToolUse / SessionStart / SessionEnd 自定义脚本
+- **Token Budget 追踪**：`/budget` 命令，解析并追踪 token 消耗
+- **First-Run Wizard**：首次运行交互式 CLI 配置引导
+- **多会话支持**：`/save` 与 `/load` 完整会话快照与恢复
 
 ### 上下文工程
 - **分层系统提示**：L1 (system+tools) + L2 (CODE_LAW) + runtime blocks
@@ -52,8 +55,9 @@
 - **@file 强制读取**：预处理注入 system-reminder
 - **轻量熔断**：连续失败工具自动临时禁用
 - **Trace 追踪**：JSONL + HTML 双轨日志 + 脱敏
-- **会话持久化**：`/save` 与 `/load`
+- **会话持久化**：`/save` 与 `/load` 完整快照（含 system、history、teams、read_cache）
 - **Skill 技能系统**：Markdown 文件定义，Agent 按需加载
+- **Token Budget 追踪**：实时解析 usage、累计统计、`/budget` 查看
 
 ### 安全
 - **软沙箱权限**：项目外路径需用户确认，敏感目录永拒
@@ -127,6 +131,7 @@ python scripts/chat_test_agent.py --plan
 | `/info` | 详细 token 用量 |
 | `/plan` | 切换 Plan Mode |
 | `/style [name]` | 显示/设置输出风格 |
+| `/budget` | 显示 token 预算用量 |
 | `/save [path]` | 保存会话快照 |
 | `/load [path]` | 加载会话快照 |
 | `/team msg <...>` | 发送团队消息 |
@@ -160,6 +165,7 @@ MyCodeAgent/
 │   ├── config.py            # 配置模型
 │   ├── agent.py             # Agent 基类
 │   ├── background_task.py   # 后台任务运行器
+│   ├── budget_tracker.py    # Token 预算追踪
 │   ├── model_profiles.py    # 模型 profiles + pointers
 │   ├── output_styles.py     # 输出风格管理
 │   ├── vcr.py               # LLM API 录制回放
@@ -215,8 +221,8 @@ MyCodeAgent/
 |------|------|--------|
 | LLM | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL_ID` / `LLM_BASE_URL` | 需配置 |
 | 模型 | `MODEL_PROFILES` / `MODEL_POINTER_MAIN/_TASK/_COMPACT` | 无 |
-| 上下文 | `CONTEXT_WINDOW` / `COMPRESSION_THRESHOLD` / `MIN_RETAIN_ROUNDS` | 128000 / 0.8 / 10 |
-| 子代理 | `SUBAGENT_MAX_STEPS` | 50 |
+| 上下文 | `CONTEXT_WINDOW` / `COMPRESSION_THRESHOLD` / `MIN_RETAIN_ROUNDS` | 200000 / 0.8 / 10 |
+| 子代理 | `SUBAGENT_MAX_STEPS` | 15 |
 | AgentTeams | `ENABLE_AGENT_TEAMS` | false |
 | MCP | `MCP_CONNECT_MODE` | manual |
 | 安全 | `PERMISSION_SOFT_SANDBOX` | true |
@@ -232,13 +238,16 @@ MyCodeAgent/
 ## 测试
 
 ```bash
-# 全量测试（跳过已知不稳定用例）
+# 全量测试
+pytest tests/ -v
+
+# 跳过已知不稳定用例
 pytest tests/ --ignore=tests/test_agent_teams_parallel.py \
               --ignore=tests/test_team_worker.py \
               -k "not test_grep_success_no_matches and not test_restore_requeues_running_work_items"
 
-# 仅新功能
-pytest tests/test_vcr.py tests/test_hook_system.py tests/test_output_styles.py
+# 仅新功能模块
+pytest tests/test_vcr.py tests/test_hook_system.py tests/test_output_styles.py -v
 
 # 单文件
 pytest tests/test_vcr.py -v
@@ -251,9 +260,11 @@ pytest tests/test_vcr.py -v
 ### 协议与架构
 - `docs/通用工具响应协议.md` — 工具输出规范
 - `docs/上下文工程设计文档.md` — 分层注入、压缩、截断
+- `docs/上下文工程与记忆.md` — 会话记忆、快照、文件追踪
 - `docs/工具输出截断设计文档.md` — 超限落盘策略
 - `docs/TraceLogging设计文档.md` — 双轨追踪
 - `docs/PROJECT_OVERVIEW.md` — 完整项目总览
+- `docs/DEV_HANDOFF.md` — 开发者交接文档
 
 ### 工具设计
 - `docs/ReadTool设计文档.md` / `docs/WriteTool设计文档.md` / `docs/EditTool设计文档.md`
@@ -263,11 +274,16 @@ pytest tests/test_vcr.py -v
 
 ### 功能设计
 - `docs/agent_teams/AgentTeams功能设计文档.md` — AgentTeams v2
-- `docs/plans/2026-06-18-worktree-feature-design.md` — Worktree 隔离
-- `docs/plans/2026-06-18-soft-sandbox-permission-design.md` — 软沙箱
-- `docs/plans/2026-06-18-kode-agent-learning-plan.md` — Kode-Agent 学习计划
-- `docs/plans/2026-06-22-output-styles-design.md` — 输出风格
-- `docs/plans/2026-06-22-vcr-hook-system-design.md` — VCR + Hook
+- `docs/上下文工程与记忆.md` — 会话记忆、压缩、快照、文件追踪
+- `docs/design/2026-06-18-worktree-feature-design.md` — Worktree 隔离
+- `docs/design/2026-06-18-soft-sandbox-permission-design.md` — 软沙箱
+- `docs/design/2026-06-18-kode-agent-learning-plan.md` — Kode-Agent 学习计划
+- `docs/design/2026-06-22-output-styles-design.md` — 输出风格
+- `docs/design/2026-06-22-vcr-hook-system-design.md` — VCR + Hook
+- `docs/design/2026-06-22-codeagent-architecture-refactor.md` — 架构重构
+- `docs/design/2026-06-22-token-budget-design.md` — Token 预算追踪
+- `docs/design/2026-06-22-first-run-wizard-design.md` — 首次运行向导
+- `docs/design/2026-06-22-multi-session-design.md` — 多会话支持
 
 ---
 

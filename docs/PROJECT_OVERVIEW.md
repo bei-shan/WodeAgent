@@ -314,7 +314,7 @@ MyCodeAgent/
 │   └── chat_test_agent.py  # 主入口
 ├── tests/                # 测试 (77 文件, 841+ 用例)
 ├── docs/                 # 文档
-│   ├── plans/            # 设计文档 (7 份)
+│   ├── design/           # 设计文档 (10 份)
 │   └── agent_teams/      # AgentTeams 设计文档
 ├── memory/               # trace/session/todo 输出
 ├── skills/               # 技能定义
@@ -386,14 +386,14 @@ MyCodeAgent/
 | 文档 | 说明 |
 |------|------|
 | `docs/agent_teams/AgentTeams功能设计文档.md` | AgentTeams 完整设计 (v2) |
-| `docs/plans/2026-06-18-agentteams-optimization-design.md` | AgentTeams 优化方案 |
-| `docs/plans/2026-06-18-worktree-feature-design.md` | Worktree 功能设计 |
-| `docs/plans/2026-06-18-soft-sandbox-permission-design.md` | 软沙箱权限设计 |
-| `docs/plans/2026-06-18-kode-agent-learning-plan.md` | Kode-Agent 分析 + 优化计划 |
-| `docs/plans/2026-06-22-output-styles-design.md` | 输出风格设计 |
-| `docs/plans/2026-06-22-vcr-hook-system-design.md` | VCR + Hook 设计 |
-| `docs/plans/2026-02-17-agentteams-parallel-execution-implementation.md` | 并行执行方案 |
-| `docs/plans/2026-02-17-claudecode-teams-replication-checklist.md` | Claude Teams 复刻清单 |
+| `docs/design/2026-06-18-agentteams-optimization-design.md` | AgentTeams 优化方案 |
+| `docs/design/2026-06-18-worktree-feature-design.md` | Worktree 功能设计 |
+| `docs/design/2026-06-18-soft-sandbox-permission-design.md` | 软沙箱权限设计 |
+| `docs/design/2026-06-18-kode-agent-learning-plan.md` | Kode-Agent 分析 + 优化计划 |
+| `docs/design/2026-06-22-output-styles-design.md` | 输出风格设计 |
+| `docs/design/2026-06-22-vcr-hook-system-design.md` | VCR + Hook 设计 |
+| `docs/design/2026-02-17-agentteams-parallel-execution-implementation.md` | 并行执行方案 |
+| `docs/design/2026-02-17-claudecode-teams-replication-checklist.md` | Claude Teams 复刻清单 |
 | `docs/上下文工程设计文档.md` | 上下文工程 |
 | `docs/通用工具响应协议.md` | 工具协议规范 |
 | `docs/工具输出截断设计文档.md` | 输出截断策略 |
