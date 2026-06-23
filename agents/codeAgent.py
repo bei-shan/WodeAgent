@@ -32,28 +32,11 @@ from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
 from core.features import collect_all_features
 from core.features.base import AgentFeature
-from tools.builtin.list_files import ListFilesTool
-from tools.builtin.search_files_by_name import SearchFilesByNameTool
-from tools.builtin.search_code import GrepTool
-from tools.builtin.read_file import ReadTool
-from tools.builtin.write_file import WriteTool
-from tools.builtin.edit_file import EditTool
-from tools.builtin.edit_file_multi import MultiEditTool
-from tools.builtin.todo_write import TodoWriteTool
-from tools.builtin.skill import SkillTool
-from tools.builtin.bash import BashTool
-from tools.builtin.ask_user import AskUserTool
-from tools.builtin.task import TaskTool
-from tools.builtin.enter_worktree import EnterWorktreeTool
-from tools.builtin.exit_worktree import ExitWorktreeTool
-from tools.builtin.enter_plan_mode import EnterPlanModeTool
-from tools.builtin.exit_plan_mode import ExitPlanModeTool
-from tools.builtin.task_output import TaskOutputTool
-from tools.builtin.switch_model import SwitchModelTool
 from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
+from core.tool_bootstrap import ToolBootstrap, register_team_tools
 
 
 class CodeAgent(Agent):
@@ -218,110 +201,34 @@ class CodeAgent(Agent):
         )
 
     def _init_tools(self) -> None:
-        """Register built-in and MCP tools (after features init)."""
-        self._register_builtin_tools()
+        """Register built-in and MCP tools via ToolBootstrap auto-discovery."""
+        bootstrap = ToolBootstrap(
+            registry=self.tool_registry,
+            project_root=self.project_root,
+        )
+
+        # Register dependency providers — tools receive these via constructor injection
+        bootstrap.provide("code_agent", self)
+        bootstrap.provide("team_manager", self.team_manager)
+        bootstrap.provide("background_runner", self._background_runner)
+        bootstrap.provide("skill_loader", self._skill_loader)
+        bootstrap.provide("main_llm", self.llm)
+        bootstrap.provide("tool_registry", self.tool_registry)
+        bootstrap.provide("interactive", self.interactive)
+        bootstrap.provide("worktree_manager", self._worktree_manager)
+
+        # Auto-discover and register all non-team built-in tools
+        registered = bootstrap.discover_and_register()
+        self.logger.debug("Auto-registered %d built-in tools: %s", len(registered), registered)
+
+        # Team tools (only when AgentTeams is enabled)
+        if self.enable_agent_teams and self.team_manager:
+            team_registered = register_team_tools(bootstrap)
+            self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
+
+        # MCP tools
         self._register_mcp_tools()
-        # Sync MCP prompt to context_builder (created in _init_core with empty prompt).
         self.context_builder.set_mcp_tools_prompt(self._mcp_tools_prompt)
-
-    def _register_builtin_tools(self):
-        """注册内置工具"""
-        self.tool_registry.register_tool(
-            ListFilesTool(project_root=self.project_root, working_dir=self.project_root)
-        )
-        self.tool_registry.register_tool(SearchFilesByNameTool(project_root=self.project_root))
-        self.tool_registry.register_tool(GrepTool(project_root=self.project_root))
-        self.tool_registry.register_tool(ReadTool(project_root=self.project_root))
-        self.tool_registry.register_tool(WriteTool(project_root=self.project_root))
-        self.tool_registry.register_tool(EditTool(project_root=self.project_root))
-        self.tool_registry.register_tool(MultiEditTool(project_root=self.project_root))
-        self.tool_registry.register_tool(TodoWriteTool(project_root=self.project_root))
-        self.tool_registry.register_tool(
-            SkillTool(project_root=self.project_root, skill_loader=self._skill_loader)
-        )
-        self.tool_registry.register_tool(BashTool(project_root=self.project_root))
-        self.tool_registry.register_tool(
-            AskUserTool(project_root=self.project_root, interactive=self.interactive)
-        )
-        # Task tool for subagent delegation
-        self.tool_registry.register_tool(
-            TaskTool(
-                project_root=self.project_root,
-                main_llm=self.llm,
-                tool_registry=self.tool_registry,
-                team_manager=self.team_manager,
-                background_runner=self._background_runner,
-            )
-        )
-        # Worktree session isolation tools
-        self.tool_registry.register_tool(
-            EnterWorktreeTool(
-                project_root=self.project_root,
-                worktree_manager=self._worktree_manager,
-                code_agent=self,
-            )
-        )
-        self.tool_registry.register_tool(
-            ExitWorktreeTool(
-                project_root=self.project_root,
-                worktree_manager=self._worktree_manager,
-                code_agent=self,
-            )
-        )
-        # Plan mode tools
-        self.tool_registry.register_tool(
-            EnterPlanModeTool(project_root=self.project_root, code_agent=self)
-        )
-        self.tool_registry.register_tool(
-            ExitPlanModeTool(project_root=self.project_root, code_agent=self)
-        )
-        # Background task output
-        self.tool_registry.register_tool(
-            TaskOutputTool(project_root=self.project_root, background_runner=self._background_runner)
-        )
-        # Model switching
-        self.tool_registry.register_tool(
-            SwitchModelTool(project_root=self.project_root, code_agent=self)
-        )
-        if self.enable_agent_teams:
-            self._register_agent_teams_tools()
-
-    def _register_agent_teams_tools(self) -> None:
-        try:
-            from tools.builtin.team_create import TeamCreateTool
-            from tools.builtin.send_message import SendMessageTool
-            from tools.builtin.team_status import TeamStatusTool
-            from tools.builtin.team_delete import TeamDeleteTool
-            from tools.builtin.team_cleanup import TeamCleanupTool
-            from tools.builtin.team_approvals import TeamApprovalsTool
-            from tools.builtin.team_approve_plan import TeamApprovePlanTool
-            from tools.builtin.team_fanout import TeamFanoutTool
-            from tools.builtin.team_collect import TeamCollectTool
-            from tools.builtin.team_task_create import TeamTaskCreateTool
-            from tools.builtin.team_task_get import TeamTaskGetTool
-            from tools.builtin.team_task_update import TeamTaskUpdateTool
-            from tools.builtin.team_task_list import TeamTaskListTool
-            from tools.builtin.team_list import TeamListTool
-            from tools.builtin.team_retry import TeamRetryTool
-        except Exception as exc:
-            self.logger.warning("AgentTeams enabled but team tools unavailable: %s", exc)
-            return
-
-        self.tool_registry.register_tool(TeamCreateTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(SendMessageTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamStatusTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamDeleteTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamCleanupTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamApprovalsTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamApprovePlanTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamFanoutTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamCollectTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamTaskCreateTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamTaskGetTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamTaskUpdateTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamTaskListTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamListTool(project_root=self.project_root, team_manager=self.team_manager))
-        self.tool_registry.register_tool(TeamRetryTool(project_root=self.project_root, team_manager=self.team_manager))
 
     # ------------------------------------------------------------------
     # Worktree session isolation
