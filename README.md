@@ -285,6 +285,7 @@ pytest tests/test_vcr.py -v
 - `docs/design/2026-06-22-first-run-wizard-design.md` — 首次运行向导
 - `docs/design/2026-06-22-multi-session-design.md` — 多会话支持
 - `docs/design/2026-06-23-coupling-optimization-design.md` — 耦合度优化（工具自动发现 + 统一配置）
+- `docs/design/2026-06-23-pi-agent-study-and-optimization-plan.md` — Pi Agent 设计哲学学习 + 优化规划
 
 ---
 
