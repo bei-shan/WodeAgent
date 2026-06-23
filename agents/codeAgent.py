@@ -616,7 +616,11 @@ class CodeAgent(Agent):
         self.context_builder.set_skills_prompt(self._skills_prompt)
         preprocess_result = preprocess_input(input_text)
         processed_input = preprocess_result.processed_input
-        
+
+        # 2. Parse token budget from user input
+        if hasattr(self, "_budget_tracker"):
+            self._budget_tracker.parse_from_input(input_text)
+
         if preprocess_result.mentioned_files:
             mentioned = ", ".join(preprocess_result.mentioned_files)
             if self.console_verbose:
@@ -884,6 +888,9 @@ class CodeAgent(Agent):
             usage = extract_usage(raw_response)
             if usage and usage.get("total_tokens") is not None:
                 self.history_manager.update_last_usage(usage["total_tokens"])
+                # Budget tracking
+                if hasattr(self, "_budget_tracker"):
+                    self._budget_tracker.spend(usage["total_tokens"])
 
             response_meta = extract_response_meta(raw_response)
             tool_calls = extract_tool_calls(raw_response)

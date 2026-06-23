@@ -608,6 +608,40 @@ def main() -> None:
                         else:
                             console.print("[bold red]✗ Rename failed.[/bold red]")
                     continue
+                elif user_input.lower().startswith("/budget"):
+                    if not hasattr(agent, "_budget_tracker"):
+                        console.print("[dim]Budget tracking not available.[/dim]")
+                    else:
+                        parts = user_input.split(maxsplit=1)
+                        if len(parts) == 1:
+                            tracker = agent._budget_tracker
+                            if tracker.total is None:
+                                console.print("[dim]No budget set. Use /budget 500k to set one.[/dim]")
+                            else:
+                                pct = (tracker.spent / tracker.total) * 100
+                                console.print(
+                                    f"Budget: {tracker.spent:,} / {tracker.total:,} "
+                                    f"({pct:.0f}% used, {tracker.remaining:,} remaining)"
+                                )
+                        else:
+                            arg = parts[1].strip().lower()
+                            if arg in ("none", "off", "clear"):
+                                agent._budget_tracker.set_budget(None)
+                                console.print("[green]✓ Budget cleared.[/green]")
+                            else:
+                                from core.budget_tracker import parse_budget_from_input
+                                budget = parse_budget_from_input(arg)
+                                if budget:
+                                    agent._budget_tracker.set_budget(budget)
+                                    console.print(
+                                        f"[green]✓ Budget set: {budget:,} tokens[/green]"
+                                    )
+                                else:
+                                    console.print(
+                                        "[bold red]✗ Cannot parse budget. "
+                                        "Use /budget 500k or /budget 10万[/bold red]"
+                                    )
+                    continue
                 elif user_input.lower().startswith("/style"):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) == 1:
@@ -645,6 +679,7 @@ def main() -> None:
                         "/sessions - List all saved sessions\n"
                         "/resume <id|index> - Switch to another session\n"
                         "/rename <title> - Rename current session\n"
+                        "/budget [amount|none] - Show/set/clear token budget\n"
                         "/style [name] - Show or set output style\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"

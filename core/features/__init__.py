@@ -10,6 +10,7 @@ from core.features.mcp import MCPFeature
 from core.features.agent_teams import AgentTeamsFeature
 from core.features.delegate import DelegateModeFeature
 from core.features.plan_mode import PlanModeFeature
+from core.features.budget import BudgetFeature
 from core.features.background_task import BackgroundTaskFeature
 from core.features.output_style import OutputStyleFeature
 from core.features.hooks import HookFeature
@@ -27,6 +28,7 @@ BUILTIN_FEATURES: list[type[AgentFeature]] = [
     AgentTeamsFeature,     # 30
     DelegateModeFeature,   # 40
     PlanModeFeature,       # 60
+    BudgetFeature,         # 55
     BackgroundTaskFeature, # 70
     OutputStyleFeature,    # 80
     HookFeature,           # 85
