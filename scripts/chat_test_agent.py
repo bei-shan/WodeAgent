@@ -269,7 +269,20 @@ def main() -> None:
     parser.add_argument("--plan", action="store_true", dest="plan_mode", help="start in plan-only mode")
     parser.add_argument("-c", "--continue", action="store_true", dest="continue_last", help="resume the most recent session")
     parser.add_argument("-r", "--resume", default=None, dest="resume_id", help="resume a session by ID, index, or prefix")
+    parser.add_argument("--wizard", action="store_true", help="force first-run setup wizard")
+    parser.add_argument("--skip-wizard", action="store_true", help="skip first-run setup wizard")
     args = parser.parse_args()
+
+    # First-run wizard
+    if args.wizard:
+        from scripts.first_run_wizard import run_wizard
+        if not run_wizard():
+            return
+    elif not args.skip_wizard:
+        from scripts.first_run_wizard import should_run_wizard, run_wizard
+        if should_run_wizard():
+            if not run_wizard():
+                return
 
     # Initialize config first (used for temperature fallback)
     config = Config.from_env()
