@@ -284,6 +284,7 @@ pytest tests/test_vcr.py -v
 - `docs/design/2026-06-22-token-budget-design.md` — Token 预算追踪
 - `docs/design/2026-06-22-first-run-wizard-design.md` — 首次运行向导
 - `docs/design/2026-06-22-multi-session-design.md` — 多会话支持
+- `docs/design/2026-06-23-coupling-optimization-design.md` — 耦合度优化（工具自动发现 + 统一配置）
 
 ---
 
