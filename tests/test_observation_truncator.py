@@ -304,7 +304,7 @@ class TestBackwardCompatibility:
     
     def test_compress_tool_result_import(self):
         """旧的 compress_tool_result 导入仍可用"""
-        from core.context_engine.tool_result_compressor import compress_tool_result
+        from core.context_engine.observation_truncator import truncate_observation as compress_tool_result
         
         result = {
             "status": "success",

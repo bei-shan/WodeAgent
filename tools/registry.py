@@ -293,13 +293,30 @@ class ToolRegistry:
                 params_input={},
             )
         
-        # 熔断记录
+        # 熔断记录 — 只计执行错误，不计参数错误
+        # INVALID_PARAM / NOT_FOUND / CONFLICT 是模型调用方式问题，
+        # 不是工具本身故障，不应触发熔断
+        _CIRCUIT_SAFE_ERRORS = {
+            ErrorCode.INVALID_PARAM, ErrorCode.NOT_FOUND, ErrorCode.CONFLICT,
+            ErrorCode.IS_DIRECTORY, ErrorCode.BINARY_FILE,
+            ErrorCode.ASK_USER_UNAVAILABLE,
+        }
         if isinstance(result_payload, dict):
             status = result_payload.get("status")
             if status == ToolStatus.ERROR.value:
                 err = result_payload.get("error", {}) or {}
+                err_code_raw = err.get("code") if isinstance(err, dict) else None
                 err_msg = err.get("message") if isinstance(err, dict) else None
-                self._circuit_breaker.record_failure(name, str(err_msg or result_payload.get("text") or ""))
+                # 白名单错误码不计入熔断
+                try:
+                    err_code = ErrorCode(err_code_raw) if err_code_raw else None
+                except ValueError:
+                    err_code = None
+                if err_code in _CIRCUIT_SAFE_ERRORS:
+                    self._circuit_breaker.record_success(name)
+                else:
+                    self._circuit_breaker.record_failure(
+                        name, str(err_msg or result_payload.get("text") or ""))
             else:
                 self._circuit_breaker.record_success(name)
         

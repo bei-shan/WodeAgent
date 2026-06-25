@@ -98,7 +98,7 @@ class CodeAgent(Agent):
             level=self.config.log_level,
         )
         self.last_response_raw: Optional[Any] = None
-        self.max_steps = 50
+        self.max_steps = int(getattr(self.config, "max_steps", 50))
         self.verbose = bool(self.config.debug)
         self.console_verbose = bool(self.config.show_react_steps)
         self.console_progress = bool(self.config.show_progress)

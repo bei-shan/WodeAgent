@@ -20,24 +20,23 @@ class Agent(ABC):
         self.llm = llm
         self.system_prompt = system_prompt
         self.config = config or Config.from_env()
-        self._history: list[Message] = []
-    
+
     @abstractmethod
     def run(self, input_text: str, **kwargs) -> str:
         """运行Agent"""
         pass
-    
+
     def add_message(self, message: Message):
-        """添加消息到历史记录"""
-        self._history.append(message)
-    
+        """添加消息到历史记录（子类覆写，委托到 HistoryManager）。"""
+        pass
+
     def clear_history(self):
-        """清空历史记录"""
-        self._history.clear()
-    
+        """清空历史记录（子类覆写，委托到 HistoryManager）。"""
+        pass
+
     def get_history(self) -> list[Message]:
-        """获取历史记录"""
-        return self._history.copy()
+        """获取历史记录（子类覆写，委托到 HistoryManager）。"""
+        return []
     
     def __str__(self) -> str:
         return f"Agent(name={self.name}, provider={self.llm.provider})"

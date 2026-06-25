@@ -38,6 +38,7 @@ class Config(BaseModel):
     # ===== Agent =====
     max_history_length: int = 100
     agent_interactive: bool = True
+    max_steps: int = 50  # ReAct loop max steps
 
     # ===== AgentTeams =====
     enable_agent_teams: bool = False
@@ -136,6 +137,7 @@ class Config(BaseModel):
             # Agent
             max_history_length=100,
             agent_interactive=env_bool("AGENT_INTERACTIVE", True),
+            max_steps=env_int("MAX_STEPS", 50),
             # AgentTeams
             enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),

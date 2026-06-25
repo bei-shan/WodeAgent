@@ -213,17 +213,17 @@ class TraceLogger:
         if event == "tool_call":
             self._tools_used += 1
 
-    @property
-    def total_usage(self) -> dict:
-        """公开只读的累计 token 用量（兼容旧代码的 _total_usage 访问）。"""
-        return dict(self._total_usage)
-        
         # 更新 token 用量
         if event == "model_output" and payload.get("usage"):
             usage = payload["usage"]
             self._total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
             self._total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
             self._total_usage["total_tokens"] += usage.get("total_tokens", 0)
+
+    @property
+    def total_usage(self) -> dict:
+        """公开只读的累计 token 用量（兼容旧代码的 _total_usage 访问）。"""
+        return dict(self._total_usage)
 
     def _write_html_header(self):
         if not self._html_handle:
