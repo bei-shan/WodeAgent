@@ -13,7 +13,7 @@ from prompt_toolkit.document import Document
 
 
 class MentionCompleter(Completer):
-    """prompt_toolkit Completer that activates on @ for agent/model/file mentions.
+    """prompt_toolkit Completer that activates on @ for agent/model/file/skill mentions.
 
     Parameters
     ----------
@@ -21,6 +21,8 @@ class MentionCompleter(Completer):
         Callable returning a list of agent names.
     get_models:
         Callable returning a list of model names/profiles.
+    get_skills:
+        Callable returning a list of skill names.
     project_root:
         Root directory for @file path completion.
     """
@@ -29,10 +31,12 @@ class MentionCompleter(Completer):
         self,
         get_agents: Optional[Callable[[], list[str]]] = None,
         get_models: Optional[Callable[[], list[str]]] = None,
+        get_skills: Optional[Callable[[], list[str]]] = None,
         project_root: Optional[Path] = None,
     ):
         self._get_agents = get_agents or (lambda: [])
         self._get_models = get_models or (lambda: [])
+        self._get_skills = get_skills or (lambda: [])
         self._project_root = Path(project_root) if project_root else None
 
     def get_completions(self, document: Document, complete_event: CompleteEvent):
@@ -67,6 +71,16 @@ class MentionCompleter(Completer):
                         display=f"@{name}",
                         display_meta="model",
                     )
+        elif prefix.startswith("skill:"):
+            search = prefix[6:]
+            for name in self._get_skills():
+                if search in name.lower():
+                    yield Completion(
+                        name,
+                        start_position=-len(prefix),
+                        display=f"@{name}",
+                        display_meta="skill",
+                    )
         elif prefix.startswith("file:"):
             search = prefix[5:]
             if self._project_root:
@@ -89,3 +103,6 @@ class MentionCompleter(Completer):
             for name in self._get_models():
                 if prefix in name.lower():
                     yield Completion(name, start_position=-len(prefix), display=f"@{name}", display_meta="model")
+            for name in self._get_skills():
+                if prefix in name.lower():
+                    yield Completion(name, start_position=-len(prefix), display=f"@{name}", display_meta="skill")

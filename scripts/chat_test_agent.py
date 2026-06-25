@@ -459,9 +459,17 @@ def main() -> None:
             return [p.name for p in profiles.values()]
         return [agent.llm.model]
 
+    def _get_skills():
+        try:
+            skills = agent._skill_loader.list_skills()
+            return [s.name for s in skills]
+        except Exception:
+            return []
+
     mention_completer = MentionCompleter(
         get_agents=_get_agents,
         get_models=_get_models,
+        get_skills=_get_skills,
         project_root=Path(PROJECT_ROOT),
     )
 
