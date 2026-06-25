@@ -8,7 +8,8 @@
 
 | 计划 | 设计文档 | 优先级 | 状态 |
 |------|---------|--------|------|
-| Pi Agent 学习 + 优化 | `docs/design/2026-06-23-pi-agent-study-and-optimization-plan.md` | P0-P2 | 📝 设计完成，待实施 |
+| Pi Agent 学习 + 优化 | `docs/design/2026-06-23-pi-agent-study-and-optimization-plan.md` | P0-P2 | ✅ Phase A 完成，Phase B-E 待定 |
+| 会话树设计 | `docs/design/2026-06-25-session-tree-design.md` | P1 | 📝 设计完成，待实施 |
 
 ## 已完成的计划
 
