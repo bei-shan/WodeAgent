@@ -40,20 +40,13 @@ from agents.codeAgent import CodeAgent
 from tools.registry import ToolRegistry
 from prompts.agents_prompts.init_prompt import CODE_LAW_GENERATION_PROMPT
 from core.config import Config
-from core.team_engine.cli_commands import (
-    DELEGATE_USAGE,
-    TEAM_MSG_USAGE,
-    TEAM_WATCH_USAGE,
-    parse_delegate_command,
-    parse_team_message_command,
-    parse_team_watch_command,
-)
 from utils.ui_components import EnhancedUI, ToolCallTree
 from tui.status_line import StatusLine
 from tui.mention_completer import MentionCompleter
 from tui.permission_dialog import PermissionDialog
 from tui.streaming import StreamingResponse
 from core.model_profiles import load_model_profiles, list_model_profiles
+from scripts.slash_commands import SlashCommandRegistry, register_all_commands
 
 # Geeky Theme
 custom_theme = Theme({
@@ -500,6 +493,10 @@ def main() -> None:
     # Streaming response renderer
     stream = StreamingResponse(console)
 
+    # Initialize slash command registry
+    slash_registry = SlashCommandRegistry()
+    register_all_commands(slash_registry, agent)
+
     try:
         while True:
             try:
@@ -517,311 +514,9 @@ def main() -> None:
                 _maybe_save_session(agent, auto_save_path, auto_save_flag, "exit")
                 break
                 
-            # Handle slash commands
+            # Handle slash commands (via SlashCommandRegistry)
             if user_input.startswith("/"):
-                if user_input.lower().strip() == "/model":
-                    enhanced_ui.show_banner()
-                    enhanced_ui.show_detailed_token_summary()
-                    continue
-                elif user_input.lower().startswith("/model "):
-                    new_model = user_input.split(maxsplit=1)[1].strip()
-                    if not new_model:
-                        console.print("[bold red]✗ Usage: /model <model-id>[/bold red]")
-                    else:
-                        try:
-                            previous = agent.llm.model
-                            agent.switch_model(model=new_model)
-                            console.print(
-                                f"[bold green]✓ Switched:[/bold green] "
-                                f"{previous} → {agent.llm.model}"
-                            )
-                        except Exception as exc:
-                            console.print(f"[bold red]✗ Model switch failed:[/bold red] {exc}")
-                    continue
-                elif user_input.lower() in ["/info"]:
-                    enhanced_ui.show_banner()
-                    enhanced_ui.show_detailed_token_summary()
-                    continue
-                elif user_input.lower().startswith("/save"):
-                    parts = user_input.split(maxsplit=1)
-                    path = parts[1].strip() if len(parts) > 1 else _default_session_path()
-                    try:
-                        agent.save_session(path)
-                        console.print(f"[bold green]✓ Session saved:[/bold green] {path}")
-                    except Exception as exc:
-                        console.print(f"[bold red]✗ Save failed:[/bold red] {exc}")
-                    continue
-                elif user_input.lower().startswith("/load"):
-                    parts = user_input.split(maxsplit=1)
-                    path = parts[1].strip() if len(parts) > 1 else _default_session_path()
-                    if not os.path.exists(path):
-                        console.print(f"[bold red]✗ Session not found:[/bold red] {path}")
-                        continue
-                    try:
-                        agent.load_session(path)
-                        console.print(f"[bold green]✓ Session loaded:[/bold green] {path}")
-                    except Exception as exc:
-                        console.print(f"[bold red]✗ Load failed:[/bold red] {exc}")
-                    continue
-                elif user_input.lower().startswith("/team msg "):
-                    if not agent.enable_agent_teams or agent.team_manager is None:
-                        console.print("[bold red]✗ AgentTeams is disabled.[/bold red]")
-                        continue
-                    try:
-                        payload = parse_team_message_command(user_input, from_member=agent.name)
-                    except ValueError as exc:
-                        console.print(f"[bold red]✗ {exc}[/bold red]")
-                        continue
-                    try:
-                        sent = agent.team_manager.send_message(
-                            team_name=payload["team_name"],
-                            from_member=payload["from_member"],
-                            to_member=payload["to_member"],
-                            text=payload["text"],
-                            message_type=payload["type"],
-                            summary=payload["summary"],
-                        )
-                        console.print(
-                            "[bold green]✓ Team message sent:[/bold green] "
-                            f"{payload['team_name']} -> {payload['to_member']} "
-                            f"({sent.get('status', 'pending')})"
-                        )
-                    except Exception as exc:
-                        console.print(f"[bold red]✗ Team message failed:[/bold red] {exc}")
-                    continue
-                elif user_input.lower().startswith("/team watch "):
-                    if not agent.enable_agent_teams or agent.team_manager is None:
-                        console.print("[bold red]✗ AgentTeams is disabled.[/bold red]")
-                        continue
-                    try:
-                        cmd = parse_team_watch_command(user_input)
-                    except ValueError as exc:
-                        console.print(f"[bold red]✗ {exc}[/bold red]")
-                        continue
-                    team_name = str(cmd.get("team_name"))
-                    rounds = int(cmd.get("rounds", 15))
-                    console.print(
-                        f"[bold cyan]Watching team[/bold cyan] {team_name} "
-                        f"for {rounds} rounds..."
-                    )
-                    for i in range(rounds):
-                        try:
-                            snapshot = agent.team_manager.collect_work(team_name)
-                            state = agent.team_manager.export_state()
-                        except Exception as exc:
-                            console.print(f"[bold red]✗ Team watch failed:[/bold red] {exc}")
-                            break
-                        counts = snapshot.get("counts", {}) if isinstance(snapshot, dict) else {}
-                        queued = int(counts.get("queued", 0) or 0)
-                        running = int(counts.get("running", 0) or 0)
-                        succeeded = int(counts.get("succeeded", 0) or 0)
-                        failed = int(counts.get("failed", 0) or 0)
-                        team_state = (
-                            state.get("teams", {}).get(team_name, {})
-                            if isinstance(state, dict)
-                            else {}
-                        )
-                        active = len(team_state.get("active_teammates", [])) if isinstance(team_state, dict) else 0
-                        idle = len(team_state.get("idle_teammates", [])) if isinstance(team_state, dict) else 0
-                        console.print(
-                            f"[dim][{i+1}/{rounds}] "
-                            f"queued={queued} running={running} succeeded={succeeded} failed={failed} "
-                            f"active={active} idle={idle}[/dim]"
-                        )
-                        if queued == 0 and running == 0:
-                            console.print("[bold green]✓ Team watch reached steady state.[/bold green]")
-                            break
-                        time.sleep(1.0)
-                    continue
-                elif user_input.lower().startswith("/delegate"):
-                    try:
-                        cmd = parse_delegate_command(user_input)
-                    except ValueError as exc:
-                        console.print(f"[bold red]✗ {exc}[/bold red]")
-                        continue
-                    if cmd.get("action") == "status":
-                        console.print(
-                            "[bold cyan]Delegate mode:[/bold cyan] "
-                            f"{'ON' if agent.delegate_mode else 'OFF'}"
-                        )
-                        continue
-                    enabled = bool(cmd.get("enabled"))
-                    agent.set_delegate_mode(enabled)
-                    console.print(
-                        "[bold green]✓ Delegate mode updated:[/bold green] "
-                        f"{'ON' if enabled else 'OFF'}"
-                    )
-                    continue
-                elif user_input.lower().strip() == "/plan":
-                    if agent._in_plan_mode:
-                        console.print("[bold yellow]Already in plan mode. Call ExitPlanMode to leave.[/bold yellow]")
-                    else:
-                        agent.enter_plan_mode()
-                        console.print("[bold cyan]Entered plan mode. Only read-only tools available.[/bold cyan]")
-                    continue
-                elif user_input.lower().strip() == "/sessions":
-                    sessions = agent.list_sessions()
-                    if not sessions:
-                        console.print("[dim]No saved sessions.[/dim]")
-                    else:
-                        lines = [f"[bold]Sessions ({len(sessions)}):[/bold]"]
-                        for i, s in enumerate(sessions, 1):
-                            marker = " ← current" if s["id"] == agent.session_id else ""
-                            title = s["title"] or "(untitled)"
-                            lines.append(
-                                f"  [cyan]{i}.[/cyan] [bold]{title}[/bold]{marker}\n"
-                                f"      id={s['id']}  msgs={s['message_count']}  "
-                                f"modified={s['modified_at'][:16]}"
-                            )
-                        console.print("\n".join(lines))
-                    continue
-                elif user_input.lower().startswith("/resume"):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) == 1:
-                        console.print("[bold red]✗ Usage: /resume <id|index>[/bold red]")
-                    else:
-                        identifier = parts[1].strip()
-                        resolved = agent.resolve_session_id(identifier)
-                        if resolved:
-                            if agent.resume_session(resolved):
-                                console.print(
-                                    f"[bold green]✓ Switched to session:[/bold green] {resolved}"
-                                )
-                            else:
-                                console.print("[bold red]✗ Failed to load session.[/bold red]")
-                        else:
-                            console.print(f"[bold red]✗ Session not found:[/bold red] {identifier}")
-                    continue
-                elif user_input.lower().startswith("/rename"):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) == 1:
-                        console.print("[bold red]✗ Usage: /rename <title>[/bold red]")
-                    else:
-                        title = parts[1].strip()
-                        if agent.rename_session(title):
-                            console.print(f"[bold green]✓ Session renamed:[/bold green] {title}")
-                        else:
-                            console.print("[bold red]✗ Rename failed.[/bold red]")
-                    continue
-                elif user_input.lower().startswith("/budget"):
-                    if not hasattr(agent, "_budget_tracker"):
-                        console.print("[dim]Budget tracking not available.[/dim]")
-                    else:
-                        parts = user_input.split(maxsplit=1)
-                        if len(parts) == 1:
-                            tracker = agent._budget_tracker
-                            if tracker.total is None:
-                                console.print("[dim]No budget set. Use /budget 500k to set one.[/dim]")
-                            else:
-                                pct = (tracker.spent / tracker.total) * 100
-                                console.print(
-                                    f"Budget: {tracker.spent:,} / {tracker.total:,} "
-                                    f"({pct:.0f}% used, {tracker.remaining:,} remaining)"
-                                )
-                        else:
-                            arg = parts[1].strip().lower()
-                            if arg in ("none", "off", "clear"):
-                                agent._budget_tracker.set_budget(None)
-                                console.print("[green]✓ Budget cleared.[/green]")
-                            else:
-                                from core.budget_tracker import parse_budget_from_input
-                                budget = parse_budget_from_input(arg)
-                                if budget:
-                                    agent._budget_tracker.set_budget(budget)
-                                    console.print(
-                                        f"[green]✓ Budget set: {budget:,} tokens[/green]"
-                                    )
-                                else:
-                                    console.print(
-                                        "[bold red]✗ Cannot parse budget. "
-                                        "Use /budget 500k or /budget 10万[/bold red]"
-                                    )
-                    continue
-                elif user_input.lower().startswith("/style"):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) == 1:
-                        # Show current + available styles.
-                        current = agent.output_style
-                        styles = agent.list_output_styles()
-                        lines = [f"[bold]Current style:[/bold] {current}"]
-                        lines.append("\n[bold]Available styles:[/bold]")
-                        for name, desc in styles.items():
-                            marker = " ← current" if name == current else ""
-                            lines.append(f"  [cyan]{name}[/cyan] — {desc}{marker}")
-                        console.print("\n".join(lines))
-                    else:
-                        name = parts[1].strip()
-                        if not name:
-                            console.print("[bold red]✗ Usage: /style <name>[/bold red]")
-                        elif agent.set_output_style(name):
-                            console.print(
-                                f"[bold green]✓ Output style:[/bold green] {agent.output_style}"
-                            )
-                        else:
-                            available = ", ".join(agent.list_output_styles().keys())
-                            console.print(
-                                f"[bold red]✗ Unknown style:[/bold red] {name}\n"
-                                f"Available: {available}"
-                            )
-                    continue
-                # ── /tree command ──
-                elif user_input.lower().strip() == "/tree":
-                    tree = agent.history_manager.get_tree()
-                    _print_session_tree(tree, console)
-                    continue
-                elif user_input.lower().startswith("/tree "):
-                    target_id = user_input[6:].strip()
-                    tree = agent.history_manager.get_tree()
-                    _print_session_tree(tree, console, highlight_id=target_id)
-                    continue
-                # ── /fork command ──
-                elif user_input.lower().startswith("/fork "):
-                    target_id = user_input[6:].strip()
-                    try:
-                        agent.history_manager.fork(target_id)
-                        console.print(f"[bold green]✓ Forked to {target_id}[/bold green]")
-                    except ValueError as e:
-                        console.print(f"[bold red]✗ {e}[/bold red]")
-                    continue
-                # ── /thinking command ──
-                elif user_input.lower().strip() == "/thinking":
-                    level = agent.history_manager.get_thinking_level()
-                    console.print(f"[bold]Thinking level:[/bold] {level}")
-                    continue
-                elif user_input.lower().startswith("/thinking "):
-                    level = user_input[10:].strip().lower()
-                    if level in ("on", "off"):
-                        agent.history_manager.append_thinking_change(level)
-                        console.print(f"[bold green]✓ Thinking:[/bold green] {level}")
-                    else:
-                        console.print("[bold red]✗ Use /thinking on or /thinking off[/bold red]")
-                    continue
-                elif user_input.lower() == "/help":
-                    console.print(Panel(
-                        "[bold]Available Commands:[/bold]\n"
-                        "/model - Show current model\n"
-                        "/model <id> - Switch model (e.g. /model gpt-4o)\n"
-                        "/info - Show detailed token usage\n"
-                        "/plan - Toggle plan mode (read-only analysis)\n"
-                        "/sessions - List all saved sessions\n"
-                        "/resume <id|index> - Switch to another session\n"
-                        "/rename <title> - Rename current session\n"
-                        "/budget [amount|none] - Show/set/clear token budget\n"
-                        "/style [name] - Show or set output style\n"
-                        "/tree - Show session tree\n"
-                        "/fork <msg-id> - Fork to a message (new branch)\n"
-                        "/thinking [on|off] - Show or toggle thinking level\n"
-                        "/save [path] - Save session snapshot\n"
-                        "/load [path] - Load session snapshot\n"
-                        f"{TEAM_MSG_USAGE}\n"
-                        f"{TEAM_WATCH_USAGE}\n"
-                        f"{DELEGATE_USAGE}\n"
-                        "/help - Show this help\n"
-                        "exit, quit, q - Exit the chat\n"
-                        "init - Generate code_law.md",
-                        title="Help",
-                        border_style="cyan"
-                    ))
+                if slash_registry.dispatch(agent, user_input, console):
                     continue
 
             # Init command handling
