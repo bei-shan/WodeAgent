@@ -28,3 +28,20 @@ class DelegateModeFeature(AgentFeature):
             getattr(agent.config, "delegate_mode", False)
         )
         agent.DELEGATION_ALLOWED_TOOLS = self.DELEGATION_ALLOWED_TOOLS
+
+    def pre_tool_use(
+        self, agent: "CodeAgent", tool_name: str, tool_input: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Block non-whitelisted tools in delegate mode.
+
+        Previously hardcoded in ``CodeAgent._execute_tool`` (P1 #11 fix).
+        """
+        if not agent.delegate_mode:
+            return None
+        if str(tool_name or "") in agent.DELEGATION_ALLOWED_TOOLS:
+            return None
+        return {
+            "blocked": True,
+            "reason": f"Tool '{tool_name}' is not allowed in delegate mode.",
+            "error_code": "PERMISSION_DENIED",
+        }

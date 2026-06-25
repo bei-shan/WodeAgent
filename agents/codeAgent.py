@@ -1248,21 +1248,8 @@ class CodeAgent(Agent):
         return TeamRuntimeView.format(events, runtime_state, max_lines)
 
     def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
-        if not self._is_tool_allowed_in_delegate_mode(tool_name):
-            payload = {
-                "status": "error",
-                "data": {},
-                "text": f"Tool '{tool_name}' is blocked in delegate mode.",
-                "error": {
-                    "code": "PERMISSION_DENIED",
-                    "message": f"Tool '{tool_name}' is not allowed in delegate mode.",
-                },
-                "stats": {"time_ms": 0},
-                "context": {"cwd": ".", "params_input": tool_input if isinstance(tool_input, dict) else {"input": tool_input}},
-            }
-            return json.dumps(payload, ensure_ascii=False, indent=2)
-
-        # PreToolUse interception (features)
+        # PreToolUse interception — unified Feature pipeline
+        # (DelegateModeFeature → block non-whitelisted; HookFeature → shell hooks)
         normalized_input = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
         t_start = time.monotonic()
         if not hasattr(self, "_last_tool_timing"):
@@ -1278,7 +1265,7 @@ class CodeAgent(Agent):
                     "status": "error",
                     "data": {},
                     "error": {
-                        "code": "HOOK_BLOCKED",
+                        "code": pre_result.get("error_code", "HOOK_BLOCKED"),
                         "message": pre_result.get("reason", "Blocked"),
                     },
                     "stats": {"time_ms": 0},
