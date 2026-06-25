@@ -1041,12 +1041,18 @@ class CodeAgent(Agent):
             mcp_tools_prompt=self._mcp_tools_prompt,
             read_cache=self.tool_registry.export_read_cache(),
             tool_output_dir="tool-output",
-            schema_version=1,
+            schema_version=2,
             teams_snapshot=teams_snapshot,
             parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
             team_store_dir=self.team_store_dir,
             task_store_dir=self.task_store_dir,
             worktree_state=worktree_state,
+            # ── v2 tree fields ──
+            cursor_id=self.history_manager.get_cursor_id(),
+            history_entries=self.history_manager.serialize_entries(),
+            labels=self.history_manager._labels,
+            current_model=self.history_manager.get_current_model(),
+            thinking_level=self.history_manager.get_thinking_level(),
         )
 
     def _auto_save_session(self) -> None:
@@ -1072,8 +1078,15 @@ class CodeAgent(Agent):
 
         self._session_id = session_id
         self._system_messages_override = snapshot.get("system_messages") or []
-        history_items = snapshot.get("history_messages") or []
-        self.history_manager.load_messages(history_items)
+
+        # Restore tree entries (v2) or legacy messages (v1)
+        tree_entries = snapshot.get("history_entries")
+        if tree_entries:
+            self.history_manager.load_entries(tree_entries)
+        else:
+            history_items = snapshot.get("history_messages") or []
+            self.history_manager.load_messages(history_items)
+
         self.tool_registry.import_read_cache(snapshot.get("read_cache") or {})
         if self.team_manager:
             self.team_manager.import_state(snapshot.get("teams_snapshot") or {})
@@ -1136,12 +1149,17 @@ class CodeAgent(Agent):
             mcp_tools_prompt=self._mcp_tools_prompt,
             read_cache=self.tool_registry.export_read_cache(),
             tool_output_dir="tool-output",
-            schema_version=1,
+            schema_version=2,
             teams_snapshot=teams_snapshot,
             parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
             team_store_dir=self.team_store_dir,
             task_store_dir=self.task_store_dir,
             worktree_state=worktree_state,
+            cursor_id=self.history_manager.get_cursor_id(),
+            history_entries=self.history_manager.serialize_entries(),
+            labels=self.history_manager._labels,
+            current_model=self.history_manager.get_current_model(),
+            thinking_level=self.history_manager.get_thinking_level(),
         )
         save_session_snapshot(path, snapshot)
 
