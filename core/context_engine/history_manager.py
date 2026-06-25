@@ -225,16 +225,27 @@ class HistoryManager:
                 try:
                     summary_text = self._summary_generator(old_branch_msgs)
                     if summary_text:
+                        bs_id = generate_short_id()
                         bs_entry = {
                             "type": ENTRY_BRANCH_SUMMARY,
-                            "id": generate_short_id(),
+                            "id": bs_id,
                             "parentId": target_id,
                             "timestamp": datetime.now().isoformat(),
                             "summary": summary_text,
                             "fromId": old_cursor,
                         }
                         self._entries.append(bs_entry)
-                        self._cursor_id = bs_entry["id"]
+                        # Also add as a summary message so it appears in get_current_branch()
+                        bs_msg = Message(
+                            content=summary_text,
+                            role="summary",
+                            metadata={"branch_summary": True, "from_id": old_cursor},
+                            message_id=bs_id,
+                            parent_id=target_id,
+                        )
+                        self._id_index[bs_id] = bs_msg
+                        self._messages.append(bs_msg)
+                        self._cursor_id = bs_id
                 except Exception as exc:
                     logger.warning("Failed to generate branch summary: %s", exc)
 
