@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.team_engine.manager import TeamManager, TeamManagerError
-from prompts.tools_prompts.team_task_update_prompt import team_task_update_prompt
 from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
@@ -24,7 +23,7 @@ class TeamTaskUpdateTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=team_task_update_prompt,
+            description='Update one task on the team shared task board.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

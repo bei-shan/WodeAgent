@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from prompts.tools_prompts.multi_edit_prompt import multi_edit_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -53,7 +52,7 @@ class MultiEditTool(Tool):
         
         super().__init__(
             name=name,
-            description=multi_edit_prompt,
+            description='MultiEdit: Apply multiple independent edits to ONE file atomically.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

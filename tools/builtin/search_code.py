@@ -11,7 +11,6 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, TypedDict
 
-from prompts.tools_prompts.grep_prompt import grep_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -68,7 +67,7 @@ class GrepTool(Tool):
         # 调用基类初始化（注入 project_root）
         super().__init__(
             name=name,
-            description=grep_prompt,
+            description='Searches file contents using regular expressions. Results are sorted by file modification time (newest first).',
             project_root=project_root,
         )
         

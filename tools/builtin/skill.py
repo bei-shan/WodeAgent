@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.skills.skill_loader import SkillLoader, _parse_frontmatter
-from prompts.tools_prompts.skill_prompt import skill_prompt
 from ..base import Tool, ToolParameter, ErrorCode
 from core.env import load_env
 
@@ -29,7 +28,7 @@ class SkillTool(Tool):
 
         super().__init__(
             name=name,
-            description=skill_prompt,
+            description='Loads a skill (structured instructions) from the local skills directory.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

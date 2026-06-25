@@ -9,7 +9,6 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
-from prompts.tools_prompts.glob_prompt import glob_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -60,7 +59,7 @@ class SearchFilesByNameTool(Tool):
         # 调用基类初始化（注入 project_root）
         super().__init__(
             name=name,
-            description=glob_prompt,
+            description='Finds files by name using glob patterns (e.g. **/*.ts).',
             project_root=project_root,
         )
         

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from prompts.tools_prompts.write_prompt import write_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -42,7 +41,7 @@ class WriteTool(Tool):
         
         super().__init__(
             name=name,
-            description=write_prompt,
+            description='Write: Create or overwrite a file with FULL content.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

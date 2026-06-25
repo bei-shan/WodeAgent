@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from prompts.tools_prompts.bash_prompt import bash_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
 
@@ -69,7 +68,7 @@ class BashTool(Tool):
         
         super().__init__(
             name=name,
-            description=bash_prompt,
+            description='Execute a shell command within the project sandbox. Supports command chaining (&&, ||, ;) and limited cd inside the project root.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

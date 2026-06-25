@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from prompts.tools_prompts.switch_model_prompt import switch_model_prompt
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -29,7 +28,7 @@ class SwitchModelTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=switch_model_prompt,
+            description='Switch the active LLM model during the conversation.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

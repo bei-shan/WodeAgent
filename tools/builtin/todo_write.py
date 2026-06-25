@@ -16,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from prompts.tools_prompts.todo_write_prompt import TodoWrite_prompt
 from ..base import Tool, ToolParameter, ErrorCode
 
 
@@ -54,7 +53,7 @@ class TodoWriteTool(Tool):
         """
         super().__init__(
             name=name,
-            description=TodoWrite_prompt,
+            description='Manages a task list for multi-step tasks. Overwrites the todo list with the current complete list.',
             project_root=project_root,
             working_dir=project_root,
         )

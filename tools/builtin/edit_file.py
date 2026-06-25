@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from prompts.tools_prompts.edit_prompt import edit_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -46,7 +45,7 @@ class EditTool(Tool):
         
         super().__init__(
             name=name,
-            description=edit_prompt,
+            description='Edit: Replace a single, unique text snippet in an existing file.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

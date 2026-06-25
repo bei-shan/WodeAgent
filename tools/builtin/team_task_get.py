@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.team_engine.manager import TeamManager, TeamManagerError
-from prompts.tools_prompts.team_task_get_prompt import team_task_get_prompt
 from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
@@ -24,7 +23,7 @@ class TeamTaskGetTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=team_task_get_prompt,
+            description='Get one task from the team shared task board by task_id.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 from core.worktree.manager import WorktreeError, WorktreeManager
-from prompts.tools_prompts.exit_worktree_prompt import exit_worktree_prompt
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -30,7 +29,7 @@ class ExitWorktreeTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=exit_worktree_prompt,
+            description='Exit the current worktree and restore the agent's working directory',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

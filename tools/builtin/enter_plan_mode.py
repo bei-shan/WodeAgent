@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from prompts.tools_prompts.enter_plan_mode_prompt import enter_plan_mode_prompt
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -25,7 +24,7 @@ class EnterPlanModeTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=enter_plan_mode_prompt,
+            description='Switch the agent into plan-only mode.  In this mode only **read-only**',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from prompts.tools_prompts.read_prompt import read_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -58,7 +57,7 @@ class ReadTool(Tool):
         
         super().__init__(
             name=name,
-            description=read_prompt,
+            description='Reads a file from the local filesystem with line numbers. Optimized for code editing.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

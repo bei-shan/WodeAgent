@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.team_engine.manager import TeamManager
-from prompts.tools_prompts.team_list_prompt import team_list_prompt
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -24,7 +23,7 @@ class TeamListTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=team_list_prompt,
+            description='List all existing teams with member counts and active/inactive worker counts.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

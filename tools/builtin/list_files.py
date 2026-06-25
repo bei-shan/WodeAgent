@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from prompts.tools_prompts.list_file_prompt import LS_prompt
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
@@ -54,7 +53,7 @@ class ListFilesTool(Tool):
         # 调用基类初始化（注入 project_root 和 working_dir）
         super().__init__(
             name=name,
-            description=LS_prompt,
+            description='Lists files and directories in a target directory. Safe and sandboxed to the project root.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

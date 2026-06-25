@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.background_task import BackgroundTaskRunner
-from prompts.tools_prompts.task_output_prompt import task_output_prompt
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -26,7 +25,7 @@ class TaskOutputTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description=task_output_prompt,
+            description='Retrieve the result of a background task launched with',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )

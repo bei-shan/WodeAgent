@@ -20,7 +20,6 @@ from core.llm import HelloAgentsLLM
 from core.message import Message
 from core.team_engine.turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
-from prompts.tools_prompts.task_prompt import task_prompt
 from ..base import Tool, ToolParameter, ErrorCode
 from core.env import load_env
 
@@ -57,6 +56,11 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Tool filtering: deny list (always blocked for subagents)
+TASK_DESCRIPTION = (
+    "Launches a subagent to handle complex, multi-step tasks in an isolated session. "
+    "Supports oneshot (temporary), persistent (long-lived teammate), and parallel (fanout) modes."
+)
+
 DENIED_TOOLS = frozenset({"Task", "Write", "Edit", "MultiEdit", "Bash"})
 
 # Tool filtering: allow list (default tools for subagents)
@@ -280,7 +284,7 @@ class TaskTool(Tool):
         
         super().__init__(
             name=name,
-            description=task_prompt,
+            description=TASK_DESCRIPTION,
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )
