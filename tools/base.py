@@ -106,20 +106,24 @@ class Tool(ABC):
         project_root: Optional[Path] = None,
         working_dir: Optional[Path] = None,
         permission_gate=None,
+        usage_notes: str = "",
     ):
         """
         初始化工具
 
         Args:
             name: 工具名称
-            description: 工具描述
+            description: 工具描述（注入 function calling schema）
             project_root: 项目根目录（必须由框架注入）
             working_dir: 工作目录（默认等于 project_root）
             permission_gate: 软沙箱权限管理器（可选，框架注入）
+            usage_notes: 使用建议和约束规则（注入 system prompt，schema 不包含的信息）
         """
         self.name = name
         self.description = description
         self._permission_gate = permission_gate  # 软沙箱权限
+        # usage_notes: constructor arg > class attr > ""
+        self.usage_notes = usage_notes or getattr(self.__class__, "usage_notes", "")
 
         # 路径注入（框架统一管理，避免工具自行猜测）
         if project_root is not None:

@@ -24,6 +24,7 @@ class MatchItem(TypedDict):
 
 class GrepTool(Tool):
     """搜索文件内容（优先使用 ripgrep，缺失则回退到 Python 实现）"""
+    usage_notes = 'Grep: Search file contents with regex. Use include param to filter files (e.g. *.py). Results sorted by mtime desc. Do NOT use bash grep; use this tool.'
 
     # 总是忽略的目录/文件列表
     ALWAYS_IGNORE = {

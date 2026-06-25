@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamTaskListTool(Tool):
+    usage_notes = 'TeamTaskList: List all tasks on the team task board.'
     def __init__(
         self,
         name: str = "TeamTaskList",

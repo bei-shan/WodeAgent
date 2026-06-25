@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamRetryTool(Tool):
+    usage_notes = 'TeamRetry: Retry a failed work item for a teammate.'
     def __init__(
         self,
         name: str = "TeamRetry",

@@ -16,6 +16,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 class SwitchModelTool(Tool):
     """Switch the active LLM model during a conversation."""
+    usage_notes = 'SwitchModel: Switch the active LLM model mid-conversation. Use model name from available profiles.'
 
     def __init__(
         self,

@@ -205,22 +205,32 @@ class ContextBuilder:
         return prompt + guidance
 
     def _load_tool_prompts(self) -> str:
-        """加载所有工具的 prompt"""
-        prompts_dir = Path(self.project_root) / "prompts" / "tools_prompts"
-        if not prompts_dir.exists():
-            return ""
-        prompts: List[str] = []
-        for path in sorted(prompts_dir.glob("*.py")):
-            if path.name.startswith("__"):
-                continue
-            data = runpy.run_path(str(path))
-            for name, value in data.items():
-                if name.endswith("_prompt") and isinstance(value, str):
-                    prompt_value = value.strip()
-                    if self._skills_prompt and "{{available_skills}}" in prompt_value:
-                        prompt_value = prompt_value.replace("{{available_skills}}", self._skills_prompt)
-                    prompts.append(prompt_value)
-        # 追加被熔断禁用的工具提示（避免无效调用）
+        """生成精简工具提示词（仅 usage_notes，不重复 schema 已有信息）。
+
+        之前：加载 prompts/tools_prompts/*.py 的所有文本 (~15K tokens)
+        现在：从 Tool.usage_notes 提取使用建议 (~2K tokens)
+
+        OpenAI function calling schema 已包含 name/description/parameters，
+        系统提示词只需要补充 schema 无法表达的使用约束和规则。
+        """
+        lines: List[str] = []
+        try:
+            tools = self.tool_registry.get_all_tools()
+        except Exception:
+            tools = []
+
+        for tool in tools:
+            notes = getattr(tool, "usage_notes", "")
+            if notes and notes.strip():
+                lines.append(notes.strip())
+
+        # Skill tool 仍然需要动态注入可用 skills 列表
+        if self._skills_prompt:
+            skill_line = self._skills_prompt.strip()
+            if skill_line:
+                lines.append(skill_line)
+
+        # 追加被熔断禁用的工具提示
         disabled_tools = []
         if hasattr(self.tool_registry, "get_disabled_tools"):
             try:
@@ -228,11 +238,11 @@ class ContextBuilder:
             except Exception:
                 disabled_tools = []
         if disabled_tools:
-            block = ["## Disabled Tools (temporary)\n"]
+            lines.append("## Disabled Tools (temporary)")
             for name in disabled_tools:
-                block.append(f"- {name}\n")
-            prompts.append("".join(block))
-        return "\n\n".join(p for p in prompts if p)
+                lines.append(f"- {name}")
+
+        return "\n".join(lines)
 
     def _load_code_law(self) -> str:
         """加载 CODE_LAW.md（带 mtime 缓存）"""

@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamApprovePlanTool(Tool):
+    usage_notes = 'TeamApprovePlan: Approve or reject a plan submitted by a teammate.'
     def __init__(
         self,
         name: str = "TeamApprovePlan",

@@ -15,6 +15,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 class WriteTool(Tool):
     """文件写入工具，支持全量覆盖、自动创建目录、diff 预览、dry_run"""
+    usage_notes = 'Write: Create or overwrite a file with FULL content. Parent dirs auto-created. Use dry_run=true to preview. For existing files: Read first (framework auto-injects mtime/size). For new files: no prior Read needed.'
 
     # Diff 预览的最大行数（超过此行数会截断 diff 预览）
     MAX_DIFF_LINES = 100

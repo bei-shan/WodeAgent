@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamStatusTool(Tool):
+    usage_notes = 'TeamStatus: View current status of a team including members, messages, and work items.'
     def __init__(
         self,
         name: str = "TeamStatus",

@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 
 class TeamListTool(Tool):
+    usage_notes = 'TeamList: List all active teams and their status.'
     def __init__(
         self,
         name: str = "TeamList",

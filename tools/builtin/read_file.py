@@ -14,6 +14,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 class ReadTool(Tool):
     """文件读取工具，支持行号、分页、编码回退、mtime 追踪"""
+    usage_notes = 'Read: View file contents with line numbers. Max 2000 lines per call. Use start_line + limit to paginate. Empty file returns content="". Binary files return error. Do NOT use bash cat/head/tail.'
 
     # 二进制检测的采样大小（读取前 8KB 检测是否包含 null byte）
     BINARY_CHECK_SIZE = 8192

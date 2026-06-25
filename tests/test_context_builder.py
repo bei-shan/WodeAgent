@@ -31,18 +31,20 @@ class TestContextBuilder(unittest.TestCase):
             self.assertEqual(messages[2]["role"], "user")
 
     def test_system_prompt_override(self):
-        structure = {
-            "prompts/tools_prompts/ls_prompt.py": "ls_prompt = 'LS tool'",
-        }
+        """Override replaces L1, {tools} gets usage_notes from registered tools."""
+        structure = {}
         with self._make_project(structure) as project:
+            from tools.builtin.list_files import ListFilesTool
+            registry = DummyToolRegistry()
+            registry.get_all_tools = lambda: [ListFilesTool(project_root=str(project.root))]
             builder = ContextBuilder(
-                tool_registry=DummyToolRegistry(),
+                tool_registry=registry,
                 project_root=str(project.root),
                 system_prompt_override="OVERRIDE {tools}",
             )
             messages = builder.get_system_messages()
             self.assertIn("OVERRIDE", messages[0]["content"])
-            self.assertIn("LS tool", messages[0]["content"])
+            self.assertIn("LS:", messages[0]["content"])
 
     def test_code_law_lowercase_name(self):
         structure = {
@@ -73,21 +75,24 @@ class TestContextBuilder(unittest.TestCase):
             messages3 = builder.get_system_messages()
             self.assertIn("Rule B", messages3[1]["content"])
 
-    def test_tool_prompts_sorted_and_skip_private(self):
+    def test_tool_prompts_from_usage_notes(self):
+        """Tool prompts come from Tool.usage_notes, not from prompt files."""
         structure = {
             "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
-            "prompts/tools_prompts/a_prompt.py": "a_prompt = 'A'",
-            "prompts/tools_prompts/b_prompt.py": "b_prompt = 'B'",
-            "prompts/tools_prompts/__init__.py": "ignored_prompt = 'X'",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            from tools.builtin.read_file import ReadTool
+            from tools.builtin.bash import BashTool
+            registry = DummyToolRegistry()
+            registry.get_all_tools = lambda: [
+                ReadTool(project_root=str(project.root)),
+                BashTool(project_root=str(project.root)),
+            ]
+            builder = ContextBuilder(tool_registry=registry, project_root=str(project.root))
             messages = builder.get_system_messages()
             content = messages[0]["content"]
-            self.assertIn("A", content)
-            self.assertIn("B", content)
-            self.assertNotIn("X", content)
-            self.assertLess(content.find("A"), content.find("B"))
+            self.assertIn("Read:", content)
+            self.assertIn("Bash:", content)
 
     def test_missing_tool_prompts_dir(self):
         structure = {

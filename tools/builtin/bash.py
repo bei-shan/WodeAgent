@@ -21,6 +21,7 @@ load_env()
 
 class BashTool(Tool):
     """Shell 命令执行工具，支持命令串联与沙箱限制"""
+    usage_notes = 'Bash: Execute shell commands in project sandbox. Use for build/test/git/install commands. Do NOT use for: ls/cat/head/tail (use Read/LS), grep/find (use Grep/Glob). Interactive commands blocked. Network tools (curl/wget) blocked by default. Supports chaining (&&, ||, ;).'
 
     # 默认超时时间（毫秒）
     DEFAULT_TIMEOUT_MS = 120000

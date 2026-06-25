@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamTaskCreateTool(Tool):
+    usage_notes = 'TeamTaskCreate: Create a task on the shared team task board. Supports dependencies.'
     def __init__(
         self,
         name: str = "TeamTaskCreate",

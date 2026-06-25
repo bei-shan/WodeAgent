@@ -259,6 +259,7 @@ class TaskTool(Tool):
     - Two-model routing (main/light)
     - Four subagent types: general, explore, summary, plan
     """
+    usage_notes = 'Task: Delegate complex work to a subagent. Types: general (execution), explore (codebase scan), plan (implementation steps), summary (compress outputs). Modes: oneshot (default), persistent (long-lived teammate), parallel (fanout). Use for multi-step exploration or heavy computation. Do NOT use for simple Read/Glob/Grep.'
     
     def __init__(
         self,

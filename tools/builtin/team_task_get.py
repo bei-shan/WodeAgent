@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamTaskGetTool(Tool):
+    usage_notes = 'TeamTaskGet: Get details of a specific task from the task board.'
     def __init__(
         self,
         name: str = "TeamTaskGet",

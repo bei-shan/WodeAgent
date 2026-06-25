@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamTaskUpdateTool(Tool):
+    usage_notes = 'TeamTaskUpdate: Update status or details of a team task.'
     def __init__(
         self,
         name: str = "TeamTaskUpdate",

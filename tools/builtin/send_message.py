@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class SendMessageTool(Tool):
+    usage_notes = 'SendMessage: Send a message to a teammate. Use message type "broadcast" to reach all members. Messages are delivered asynchronously.'
     def __init__(
         self,
         name: str = "SendMessage",

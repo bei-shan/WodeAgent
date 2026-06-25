@@ -15,6 +15,7 @@ load_env()
 
 class SkillTool(Tool):
     """Load a skill by name and return its expanded content."""
+    usage_notes = 'Skill: Load a named skill by its identifier. Use when user mentions a skill by name (e.g. $code-review) or when task clearly matches a skill description. Do not preload all skills.'
 
     def __init__(
         self,

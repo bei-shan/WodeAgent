@@ -38,6 +38,7 @@ class TodoWriteTool(Tool):
     - 生成用户可见的任务清单文本（text 字段）
     - 在任务整体完成时写入 memory/todos/todoList-YYYYMMDD-HHMMSS.md
     """
+    usage_notes = 'TodoWrite: Track task progress for complex multi-step tasks. Always submit the FULL current list (not incremental diffs). Max 1 item in_progress at a time. Mark completed immediately when done. Summary field is required. Skip for simple single-step queries.'
 
     def __init__(
         self,

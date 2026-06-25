@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 class ExitPlanModeTool(Tool):
     """Exit plan-only mode and restore full tool access."""
+    usage_notes = 'ExitPlanMode: Exit plan mode and restore full tools. Provide your plan as the plan parameter. Plan is injected into context for execution.'
 
     def __init__(
         self,

@@ -16,6 +16,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 class EditTool(Tool):
     """单次编辑工具，支持唯一锚点替换、换行符自动处理、diff 预览、dry_run"""
+    usage_notes = 'Edit: Replace a unique text snippet in an existing file. Read the file first. old_string must be EXACT copy from Read output (include 2-5 lines of surrounding context). Must be unique in file. For multiple edits to same file, use MultiEdit.'
 
     # 二进制检测的采样大小（读取前 8KB 检测是否包含 null byte）
     BINARY_CHECK_SIZE = 8192

@@ -13,6 +13,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 class TaskOutputTool(Tool):
     """Retrieve results of a background task."""
+    usage_notes = 'TaskOutput: Fetch results from a background task. Use run_in_background=true on Task first.'
 
     def __init__(
         self,

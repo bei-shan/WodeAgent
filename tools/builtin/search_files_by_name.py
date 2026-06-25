@@ -15,6 +15,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 class SearchFilesByNameTool(Tool):
     """使用 glob 模式搜索文件（安全、可控、可复现）"""
+    usage_notes = 'Glob: Find files by pattern. Pattern is relative to path. Use ** to recurse, * for wildcard. Max 200 results, 2s timeout. Do NOT use bash find; use this tool.'
 
     # 总是忽略的目录/文件列表
     ALWAYS_IGNORE = {

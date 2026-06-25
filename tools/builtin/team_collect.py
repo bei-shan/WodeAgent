@@ -12,6 +12,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamCollectTool(Tool):
+    usage_notes = 'TeamCollect: Collect and aggregate results from parallel fanout tasks.'
     def __init__(
         self,
         name: str = "TeamCollect",
