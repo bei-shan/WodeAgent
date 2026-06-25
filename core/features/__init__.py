@@ -47,8 +47,10 @@ def collect_all_features(agent: "CodeAgent") -> list[AgentFeature]:
         loader = PluginLoader(project_root=agent._original_project_root)
         plugin_features = loader.discover()
         features.extend(plugin_features)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Plugin discovery failed (continuing without plugins): %s", exc)
 
     features.sort(key=lambda f: f.order)
     return features

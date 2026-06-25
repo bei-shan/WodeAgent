@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
+from core.constants import ALWAYS_IGNORE_DIRS
 
 
 class ListFilesTool(Tool):

@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
+from core.constants import ALWAYS_IGNORE_DIRS
 
 
 class SearchFilesByNameTool(Tool):
@@ -17,27 +18,7 @@ class SearchFilesByNameTool(Tool):
     usage_notes = 'Glob: Find files by pattern. Pattern is relative to path. Use ** to recurse, * for wildcard. Max 200 results, 2s timeout. Do NOT use bash find; use this tool.'
 
     # 总是忽略的目录/文件列表
-    ALWAYS_IGNORE = {
-        ".git",          # Git 版本控制目录
-        ".hg",           # Mercurial 版本控制目录
-        ".svn",          # Subversion 版本控制目录
-        "__pycache__",   # Python 字节码缓存
-        "node_modules",  # Node.js 依赖目录
-        "target",        # Java/Scala 构建输出目录
-        "build",         # 通用构建输出目录
-        "dist",          # 分发目录
-        ".idea",         # JetBrains IDE 配置目录
-        ".vscode",       # VS Code 配置目录
-        ".DS_Store",     # macOS 系统文件
-        "venv",          # Python 虚拟环境
-        ".venv",         # Python 虚拟环境（另一种命名）
-        ".mypy_cache",   # mypy 类型检查缓存
-        ".pytest_cache", # pytest 测试缓存
-        ".ruff_cache",   # ruff linter 缓存
-        ".tox",          # tox 测试环境目录
-        ".cache",        # 通用缓存目录
-        "site-packages", # Python 包目录
-    }
+    ALWAYS_IGNORE = ALWAYS_IGNORE_DIRS
 
     # 最大访问条目数（防止搜索过大）
     MAX_VISITED_ENTRIES = 20_000

@@ -1,13 +1,8 @@
-SUBAGENT_PLAN_PROMPT = """
-You are a planning subagent. Your role is to explore the codebase and produce an implementation plan.
+from prompts.agents_prompts.subagent_base import SUBAGENT_BASE_RULES
 
-Rules
-- STRICTLY read-only. Do NOT create, edit, or delete files.
-- Do NOT use Bash.
-- Do NOT call Task or attempt to spawn other agents.
-- Use only the tools provided (LS, Glob, Grep, Read).
-- Return file paths relative to the project root.
-- Use OpenAI function calling for tools. Do NOT output Action/ToolName text or `<tool_call>` tags.
+SUBAGENT_PLAN_PROMPT = f"""You are a planning subagent. Your role is to explore the codebase and produce an implementation plan.
+
+{SUBAGENT_BASE_RULES}
 
 Process
 1) Understand the requirements in the task prompt.

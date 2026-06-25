@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, TypedDict
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
+from core.constants import ALWAYS_IGNORE_DIRS
 
 
 class MatchItem(TypedDict):
@@ -26,26 +27,7 @@ class GrepTool(Tool):
     usage_notes = 'Grep: Search file contents with regex. Use include param to filter files (e.g. *.py). Results sorted by mtime desc. Do NOT use bash grep; use this tool.'
 
     # 总是忽略的目录/文件列表
-    ALWAYS_IGNORE = {
-        ".git",          # Git 版本控制目录
-        "node_modules",  # Node.js 依赖目录
-        "dist",          # 分发目录
-        "build",         # 构建输出目录
-        "__pycache__",   # Python 字节码缓存
-        ".venv",         # Python 虚拟环境
-        "venv",          # Python 虚拟环境
-        ".idea",         # JetBrains IDE 配置目录
-        ".vscode",       # VS Code 配置目录
-        ".DS_Store",     # macOS 系统文件
-        ".hg",           # Mercurial 版本控制目录
-        ".svn",          # Subversion 版本控制目录
-        ".mypy_cache",   # mypy 类型检查缓存
-        ".pytest_cache", # pytest 测试缓存
-        ".ruff_cache",   # ruff linter 缓存
-        ".tox",          # tox 测试环境目录
-        ".cache",        # 通用缓存目录
-        "site-packages", # Python 包目录
-    }
+    ALWAYS_IGNORE = ALWAYS_IGNORE_DIRS
 
     # 最大返回结果数
     MAX_RESULTS = 100

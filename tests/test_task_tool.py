@@ -137,7 +137,7 @@ class TestSubagentPrompts:
         """Test general prompt retrieval."""
         prompt = _get_subagent_prompt("general")
         assert "general-purpose subagent" in prompt
-        assert "Read-only" in prompt
+        assert "read-only" in prompt.lower()
     
     def test_explore_prompt(self):
         """Test explore prompt retrieval."""
