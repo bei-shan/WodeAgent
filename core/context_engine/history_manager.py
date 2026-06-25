@@ -406,7 +406,8 @@ class HistoryManager:
                 tool_name = meta.get("tool_name")
                 if tool_name:
                     total_chars += len(str(tool_name))
-        return total_chars // 3
+        # 保守估算：中文约 1.5-2 chars/token，英文约 3-4 chars/token
+        return max(total_chars // 3, total_chars // 2)
 
     # ═════════════════════════════════════════════════════════════════════
     # 压缩

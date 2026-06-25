@@ -117,6 +117,16 @@ class TeamManager:
         self._plan_approvals = self.approval_service.requests
         self._plan_approvals_lock = self.approval_service.lock
 
+        # Sweep thread: requeue stale running work_items (workers that crashed)
+        self._heartbeat_timeout = int(os.getenv("TEAM_HEARTBEAT_TIMEOUT", "300"))
+        self._sweep_interval = min(30, self._heartbeat_timeout // 2)
+        self._sweep_stop = threading.Event()
+        self._sweep_thread = threading.Thread(
+            target=self._sweep_stale_items, daemon=True,
+            name="TeamSweep",
+        )
+        self._sweep_thread.start()
+
     def create_team(self, team_name: str, members: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         normalized_team = sanitize_name(team_name)
         normalized_members = [normalize_member(m) for m in (members or [{"name": "lead"}])]
@@ -923,3 +933,32 @@ class TeamManager:
 
     def _build_teammate_registry(self, team_name: str, teammate_name: str) -> tuple[ToolRegistry, set[str]]:
         return self.execution_service._build_teammate_registry(team_name, teammate_name)
+
+    # ── Heartbeat sweep ──────────────────────────────────────────────
+
+    def _sweep_stale_items(self) -> None:
+        """后台线程：定期扫描并重新入队心跳超时的 running work_items。"""
+        import logging
+        _log = logging.getLogger(__name__)
+        while not self._sweep_stop.wait(self._sweep_interval):
+            try:
+                for team_name in self.store.list_teams():
+                    stale = self.store.find_stale_running_items(
+                        team_name, self._heartbeat_timeout)
+                    for item in stale:
+                        work_id = item.get("work_id", "?")
+                        self.store.update_work_item_status(
+                            team_name, str(work_id),
+                            status=WORK_ITEM_STATUS_QUEUED,
+                            error=f"Worker timed out (no heartbeat for {self._heartbeat_timeout}s)",
+                        )
+                        _log.warning(
+                            "Requeued stale work_item %s in team %s (worker died)", work_id, team_name)
+            except Exception:
+                pass  # defensive — sweep must not crash
+
+    def shutdown(self) -> None:
+        """停止 sweep 线程并清理资源。"""
+        self._sweep_stop.set()
+        if self._sweep_thread.is_alive():
+            self._sweep_thread.join(timeout=5)

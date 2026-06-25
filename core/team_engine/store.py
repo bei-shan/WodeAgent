@@ -240,6 +240,46 @@ class TeamStore:
         items.sort(key=lambda x: float(x.get("created_at") or 0))
         return items
 
+    def update_work_item_heartbeat(
+        self, team_name: str, work_id: str, heartbeat_ts: float | None = None
+    ) -> None:
+        """更新 work_item 的心跳时间戳（防卡死）。
+
+        由 worker 在执行循环中定期调用。sweep 线程检查心跳超时的 running item。
+        """
+        heartbeat_ts = heartbeat_ts or time.time()
+        work_dir = self._work_items_dir(team_name)
+        for path in sorted(work_dir.glob("work_items_*.jsonl")):
+            with self.lock(self._work_items_lock_path(team_name, path.stem.removeprefix("work_items_"))):
+                rows = self._read_jsonl(path)
+                for row in rows:
+                    if str(row.get("work_id")) == str(work_id):
+                        row["heartbeat_ts"] = heartbeat_ts
+                        self._write_jsonl(path, rows)
+                        return
+        raise FileNotFoundError(f"work item not found: {work_id}")
+
+    def find_stale_running_items(
+        self, team_name: str, heartbeat_timeout: float
+    ) -> list[dict]:
+        """查找心跳超时的 running work_items。
+
+        Args:
+            heartbeat_timeout: 心跳超时阈值（秒）。当前时间 - heartbeat_ts > 此值视为僵死。
+        """
+        work_dir = self._work_items_dir(team_name)
+        if not work_dir.exists():
+            return []
+        stale: list[dict] = []
+        now = time.time()
+        for path in sorted(work_dir.glob("work_items_*.jsonl")):
+            for row in self._read_jsonl(path):
+                if row.get("status") == WORK_ITEM_STATUS_RUNNING:
+                    hb = row.get("heartbeat_ts", row.get("started_at", 0))
+                    if hb and (now - float(hb)) > heartbeat_timeout:
+                        stale.append(row)
+        return stale
+
     def update_work_item_status(
         self,
         team_name: str,
@@ -271,6 +311,7 @@ class TeamStore:
                     if status == WORK_ITEM_STATUS_RUNNING:
                         row["attempt"] = int(row.get("attempt") or 0) + 1
                         row["started_at"] = now
+                        row["heartbeat_ts"] = now  # 初始化心跳
                         row["finished_at"] = None
                         row["error"] = None
                     elif status == WORK_ITEM_STATUS_QUEUED:
