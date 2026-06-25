@@ -4,6 +4,7 @@ import os
 import logging
 import sys
 import traceback as tb
+from pathlib import Path
 from typing import Any, Optional, List, Tuple
 
 from core.agent import Agent
@@ -329,7 +330,12 @@ class CodeAgent(Agent):
         self.logger.info("Entered plan mode")
 
     def exit_plan_mode(self, plan: str) -> None:
-        """Exit plan mode, restore full tools, inject plan into context."""
+        """Exit plan mode, restore full tools, inject plan into context.
+
+        Also writes ``PLAN.md`` to the project root so the plan is
+        persistent, version-controllable, and shareable (Pi philosophy).
+        The plan is still injected into context for immediate execution.
+        """
         self._in_plan_mode = False
         self._plan_text = plan.strip()
 
@@ -341,7 +347,31 @@ class CodeAgent(Agent):
                 todo_lines.append(f"  {i}. [pending] {step}")
             self._plan_text += "\n\n" + "\n".join(todo_lines)
 
+        # Write PLAN.md to project root (Pi-inspired: persistent, shareable plan)
+        self._write_plan_md(plan.strip(), steps)
+
         self.logger.info("Exited plan mode, plan length=%d, steps=%d", len(self._plan_text), len(steps))
+
+    def _write_plan_md(self, plan_text: str, steps: list[str]) -> None:
+        """Write the plan to PLAN.md in the project root."""
+        from datetime import datetime
+        plan_path = Path(self.project_root) / "PLAN.md"
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            content_parts = [
+                f"# Plan — {timestamp}",
+                "",
+                plan_text,
+            ]
+            if steps:
+                content_parts.append("")
+                content_parts.append("## Steps")
+                for i, step in enumerate(steps, 1):
+                    content_parts.append(f"{i}. {step}")
+            plan_path.write_text("\n".join(content_parts) + "\n", encoding="utf-8")
+            self.logger.info("Plan written to %s", plan_path)
+        except OSError as exc:
+            self.logger.warning("Failed to write PLAN.md: %s", exc)
 
     # ------------------------------------------------------------------
     # Model switching (Claude Code /model equivalent)
