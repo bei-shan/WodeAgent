@@ -245,6 +245,93 @@ def _print_assistant_response(text: str) -> None:
     md = Markdown(text)
     console.print(Panel(md, title="[agent]Assistant[/agent]", border_style="blue", expand=False))
 
+
+def _print_session_tree(tree: dict, console_obj, highlight_id: str = None) -> None:
+    """Print session tree as ASCII art using Rich Tree."""
+    from rich.tree import Tree as RichTree
+
+    nodes = tree.get("nodes", {})
+    children = tree.get("children", {})
+    cursor_id = tree.get("cursor_id", "")
+    labels = tree.get("labels", {})
+
+    # Find roots (parentId == None or "__root__")
+    root_ids = children.get("__root__", [])
+    if not root_ids:
+        # Try null parentId
+        for nid, node in nodes.items():
+            if node.get("parentId") is None:
+                root_ids.append(nid)
+
+    def _add_children(rt: RichTree, pid: str, depth: int = 0):
+        if depth > 50:
+            return
+        for cid in children.get(pid, []):
+            node = nodes.get(cid)
+            if not node:
+                continue
+            ntype = node.get("type", "message")
+            label = labels.get(cid, "")
+            prefix = ""
+
+            if ntype == "message":
+                role = node.get("role", "?")[0].upper()
+                content = (node.get("content", "") or "")[:40].replace("\n", " ")
+                prefix = f"[{role}]"
+            elif ntype == "model_change":
+                prefix = "[M]"
+                content = f"{node.get('provider','')}/{node.get('modelId','')}"
+            elif ntype == "thinking_level_change":
+                prefix = "[T]"
+                content = f"thinking={node.get('thinkingLevel','')}"
+            elif ntype == "branch_summary":
+                prefix = "[BS]"
+                content = (node.get("summary", "") or "")[:40]
+            elif ntype == "compaction":
+                prefix = "[C]"
+                content = "compaction"
+            elif ntype == "leaf":
+                # skip leaf entries in display
+                _add_children(rt, cid, depth + 1)
+                continue
+            elif ntype == "label":
+                prefix = "[L]"
+                content = f"label: {label}"
+            else:
+                prefix = f"[{ntype[:4]}]"
+                content = ""
+
+            style = "bold cyan" if cid == cursor_id else ""
+            marker = " ←" if cid == cursor_id else ""
+            display = f"{prefix} {cid}{marker}"
+            if label:
+                display += f" ({label})"
+            if content:
+                display += f": {content}"
+
+            child_tree = rt.add(display, style=style)
+            _add_children(child_tree, cid, depth + 1)
+
+    rt_main = RichTree("🌳 Session Tree")
+    for rid in root_ids:
+        node = nodes.get(rid)
+        if not node:
+            continue
+        ntype = node.get("type", "message")
+        role = node.get("role", "?")[0].upper() if ntype == "message" else ""
+        content = (node.get("content", "") or "")[:40].replace("\n", " ")
+        label = labels.get(rid, "")
+        style = "bold cyan" if rid == cursor_id else ""
+        marker = " ←" if rid == cursor_id else ""
+        display = f"[{role}] {rid}{marker}: {content}"
+        if label:
+            display += f" ({label})"
+        child = rt_main.add(display, style=style)
+        _add_children(child, rid)
+
+    console_obj.print(rt_main)
+
+
 def check_code_law_exists(project_root: str) -> bool:
     """Check if code_law.md exists"""
     code_law_path = Path(project_root) / "code_law.md"
@@ -669,6 +756,38 @@ def main() -> None:
                                 f"Available: {available}"
                             )
                     continue
+                # ── /tree command ──
+                elif user_input.lower().strip() == "/tree":
+                    tree = agent.history_manager.get_tree()
+                    _print_session_tree(tree, console)
+                    continue
+                elif user_input.lower().startswith("/tree "):
+                    target_id = user_input[6:].strip()
+                    tree = agent.history_manager.get_tree()
+                    _print_session_tree(tree, console, highlight_id=target_id)
+                    continue
+                # ── /fork command ──
+                elif user_input.lower().startswith("/fork "):
+                    target_id = user_input[6:].strip()
+                    try:
+                        agent.history_manager.fork(target_id)
+                        console.print(f"[bold green]✓ Forked to {target_id}[/bold green]")
+                    except ValueError as e:
+                        console.print(f"[bold red]✗ {e}[/bold red]")
+                    continue
+                # ── /thinking command ──
+                elif user_input.lower().strip() == "/thinking":
+                    level = agent.history_manager.get_thinking_level()
+                    console.print(f"[bold]Thinking level:[/bold] {level}")
+                    continue
+                elif user_input.lower().startswith("/thinking "):
+                    level = user_input[10:].strip().lower()
+                    if level in ("on", "off"):
+                        agent.history_manager.append_thinking_change(level)
+                        console.print(f"[bold green]✓ Thinking:[/bold green] {level}")
+                    else:
+                        console.print("[bold red]✗ Use /thinking on or /thinking off[/bold red]")
+                    continue
                 elif user_input.lower() == "/help":
                     console.print(Panel(
                         "[bold]Available Commands:[/bold]\n"
@@ -681,6 +800,9 @@ def main() -> None:
                         "/rename <title> - Rename current session\n"
                         "/budget [amount|none] - Show/set/clear token budget\n"
                         "/style [name] - Show or set output style\n"
+                        "/tree - Show session tree\n"
+                        "/fork <msg-id> - Fork to a message (new branch)\n"
+                        "/thinking [on|off] - Show or toggle thinking level\n"
                         "/save [path] - Save session snapshot\n"
                         "/load [path] - Load session snapshot\n"
                         f"{TEAM_MSG_USAGE}\n"

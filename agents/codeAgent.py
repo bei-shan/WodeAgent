@@ -381,6 +381,8 @@ class CodeAgent(Agent):
                 "Switched model: %s → %s (profile: %s, provider: %s)",
                 previous, profile.model, profile.name, profile.provider,
             )
+            provider_name = profile.provider or self.llm.provider
+            model_name = profile.model
         else:
             new_model = model or self.llm.model
             new_provider = provider or self.llm.provider
@@ -394,6 +396,15 @@ class CodeAgent(Agent):
                 timeout=self.llm.timeout,
             )
             self.logger.info("Switched model: %s → %s (provider: %s)", previous, new_model, new_provider)
+            provider_name = new_provider
+            model_name = new_model
+
+        # Record model change in session tree
+        if hasattr(self, "history_manager"):
+            self.history_manager.append_model_change(
+                provider=provider_name,
+                model_id=model_name,
+            )
 
     # ------------------------------------------------------------------
     # Output Styles
