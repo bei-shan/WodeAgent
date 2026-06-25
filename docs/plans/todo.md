@@ -1,49 +1,92 @@
-# 待办计划
+# 全局进度追踪
 
-> 最新: 审计报告 32 条发现 → `docs/design/2026-06-26-audit-response-and-roadmap.md`
+> 最后更新: 2026-06-25
 
 ---
 
-## 第 1 批 (本周, ~1小时)
+## ✅ 已完成
 
-| # | 问题 | 审计编号 | 状态 |
-|---|------|---------|------|
-| trace_logger 死代码 | P0 #2: token 累加在 `return` 后 | 📝 |
-| CircuitBreaker 白名单 INVALID_PARAM | P0 #7 | 📝 |
-| max_steps 加进 Config | P1 #18 | 📝 |
-| 删除 tool_result_compressor.py | P2 #30 | 📝 |
-| 删除 Agent._history dead state | P2 #28 | 📝 |
+| 来源 | Phase | 内容 |
+|------|-------|------|
+| 耦合度优化 | 1 | Config 统一 55 项 |
+| 耦合度优化 | 2 | ToolBootstrap 自动发现 (33 import→0) |
+| 耦合度优化 | 3 | Config 注入 8 模块 |
+| 架构重构 | 1 | AgentFeature 协议 + env_helpers |
+| 架构重构 | 2 | 10 个 Feature 迁移 + MCPFeature |
+| Pi 学习 | A | 提示词瘦身 (~19K→~2.2K tokens) |
+| Pi 学习 | B | 会话树 (JSONL / fork / /tree / model_change / thinking) |
+| Pi 学习 | C | Plan Mode 文件化 (PLAN.md) |
+| Pi 学习 | D | Late Binding ContextBuilder |
+| Pi 学习 | E | 工具描述内联 (33 prompt 文件) |
+| MCP 修复 | — | 跨事件循环 stale session 检测 |
+| 审计批量 | 1-5 | 17/32 条修复 |
 
-## 第 2 批 (本周, 1-2 天)
+---
 
-| # | 问题 | 审计编号 | 状态 |
-|---|------|---------|------|
-| Bash 长输出截断 | P0 #6 | 📝 |
-| Bash 沙箱加固 | P0 #5 | 📝 |
-| 删除 _is_minimax_backend 硬编码 | P1 #13 | 📝 |
-| 删除双份工具定义 | P1 #9 | 📝 |
+## 🔴 待实施 — 架构重构 (P1-P2)
 
-## 第 3 批 (下周, 3-5 天)
+| Phase | 内容 | 步骤 | 状态 |
+|-------|------|------|------|
+| 架构重构 3 | ReAct 循环重构 | Steps 16-20 | ❌ |
+| 架构重构 4 | 插件系统 | Steps 21-24 | ❌ (基础已实现，缺测试) |
+| 架构重构 5 | 子代理流式 | Steps 25-28 | ❌ |
+| 架构重构 6 | 体验优化 | MCP 连接状态显示 | ❌ |
 
-| # | 问题 | 审计编号 | 状态 |
-|---|------|---------|------|
-| Team Engine work_item 心跳 | P0 #3 | 📝 |
-| Token 估算替换为 tiktoken | P1 #16 | 📝 |
-| CodeAgent 拆分 | P1 #8 | 📝 |
+### 架构重构 Phase 3 详细 (ReAct 循环瘦身)
 
-## 已完成的计划
+| Step | 内容 | 难度 |
+|------|------|------|
+| 16 | 实现 `_collect_runtime_blocks()` — 统一 Feature 上下文收集 | 小 |
+| 17 | 实现 `_invoke_llm_with_interception()` — VCR 拦截在此 | 中 |
+| 18 | 重构 `_execute_tool()` 使用 Feature 拦截 | 中 |
+| 19 | 添加工具耗时统计 | 小 |
+| 20 | 废弃旧 /save /load API | 小 |
 
-| 计划 | 设计文档 | 完成日期 |
-|------|---------|---------|
-| Pi Agent 学习 + 优化 Phase A-E | `2026-06-23-pi-agent-study-and-optimization-plan.md` | 2026-06-25 |
-| 会话树 Phase B (Steps 1-6) | `2026-06-25-session-tree-design.md` | 2026-06-25 |
-| 耦合度优化 Phase 1-3 | `2026-06-23-coupling-optimization-design.md` | 2026-06-23 |
-| 架构重构 Phase 1-6 | `2026-06-22-codeagent-architecture-refactor.md` | 2026-06-22 |
-| MCP 连接修复 | `160d857` | 2026-06-25 |
+### 架构重构 Phase 4 详细 (插件系统)
 
-## 未来可能的计划
+| Step | 内容 | 难度 |
+|------|------|------|
+| 21-24 | Plugin loader 完善 + 测试 | 中 |
 
-- LSP 集成（搁置 — 非核心需求）
-- VCR fixtures e2e 验证
-- TUI 流式渲染激活
-- @skill 自动补全
+### 架构重构 Phase 5 详细 (子代理流式)
+
+| Step | 内容 | 难度 |
+|------|------|------|
+| 25-28 | BackgroundTaskRunner 进度回调 + TUI 展示 | 大 |
+
+---
+
+## 🟡 待实施 — 审计剩余 (P1-P2)
+
+| # | 问题 | 难度 |
+|---|------|------|
+| P1 #10 | MCPFeature 不注册 MCP 工具 — 搬过来 | 中 |
+| P1 #11 | Hook + Feature 双层拦截合并 | 大 |
+| P1 #12 | 14 team 工具重叠合并 | 中 |
+| P1 #14 | 每次 run save 3 次优化 | 中 |
+| P1 #20 | TUI 流式渲染激活 (streaming.py 是骨架) | 大 |
+| P2 #21 | VCR fixtures 目录创建 | 小 |
+| P2 #23 | test_ui_components.py 假测试重写 | 小 |
+| P2 #24 | TUI 组件 0 测试 | 中 |
+| P2 #27 | agent_teams 双重 init | 中 |
+| P2 #31 | CLI 530 行 if-elif → SlashCommandRegistry | 中 |
+| P2 #32 | @skill 自动补全 | 小 |
+
+---
+
+## 建议实施顺序
+
+```
+本周:
+  1. 架构重构 Phase 3 (Steps 16-20) — ReAct 循环瘦身
+  2. P2 #21 VCR fixtures 目录 + P2 #32 @skill 补全
+
+下周:
+  3. P1 #10 MCPFeature 接管工具注册
+  4. P1 #11 Hook + Feature 双层拦截合并
+  5. 架构重构 Phase 4 插件系统完善
+
+长期:
+  6. P1 #20 TUI 流式渲染激活
+  7. 架构重构 Phase 5 子代理流式
+```

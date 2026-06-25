@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 import os
 import logging
@@ -674,14 +675,7 @@ class CodeAgent(Agent):
             self._retry_pending_mcp_servers()
 
             tools_schema = self._get_openai_tools_for_current_mode()
-            runtime_blocks: list[str] = []
-
-            # Collect runtime blocks from all features
-            for feat in self._features:
-                runtime_blocks.extend(feat.runtime_blocks(self, step))
-
-            if runtime_blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
-                self.context_builder.set_runtime_system_blocks(runtime_blocks)
+            self._collect_runtime_blocks(step)
 
             if self.console_verbose:
                 self._console(f"\n--- Step {step}/{self.max_steps} ---")
@@ -728,6 +722,19 @@ class CodeAgent(Agent):
     # ------------------------------------------------------------------
     # ReAct 子方法
     # ------------------------------------------------------------------
+
+    def _collect_runtime_blocks(self, step: int) -> None:
+        """Collect system prompt blocks from all Features.
+
+        Each Feature contributes zero or more system-level text blocks
+        that are injected into the next LLM call without polluting the
+        user message history.
+        """
+        blocks: list[str] = []
+        for feat in self._features:
+            blocks.extend(feat.runtime_blocks(self, step))
+        if blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
+            self.context_builder.set_runtime_system_blocks(blocks)
 
     def _maybe_compress_history(self, pending_input: str, trace_logger, step: int) -> None:
         """检查并在需要时压缩历史。"""
@@ -1257,6 +1264,9 @@ class CodeAgent(Agent):
 
         # PreToolUse interception (features)
         normalized_input = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
+        t_start = time.monotonic()
+        if not hasattr(self, "_last_tool_timing"):
+            self._last_tool_timing: dict[str, int] = {}
         for feat in self._features:
             pre_result = feat.pre_tool_use(self, tool_name, normalized_input)
             if pre_result and pre_result.get("blocked"):
@@ -1280,6 +1290,8 @@ class CodeAgent(Agent):
                 normalized_input = {**normalized_input, **pre_result["updated_input"]}
 
         res = self.tool_registry.execute_tool(tool_name, normalized_input)
+        elapsed_ms = int((time.monotonic() - t_start) * 1000)
+        self._last_tool_timing[tool_name] = elapsed_ms
 
         # PostToolUse interception (features)
         for feat in self._features:
