@@ -36,7 +36,6 @@ class Config(BaseModel):
     show_progress: bool = True
 
     # ===== Agent =====
-    max_history_length: int = 100
     agent_interactive: bool = True
     max_steps: int = 50  # ReAct loop max steps
 
@@ -135,7 +134,6 @@ class Config(BaseModel):
             show_react_steps=env_bool("SHOW_REACT_STEPS", True),
             show_progress=env_bool("SHOW_PROGRESS", True),
             # Agent
-            max_history_length=100,
             agent_interactive=env_bool("AGENT_INTERACTIVE", True),
             max_steps=env_int("MAX_STEPS", 50),
             # AgentTeams

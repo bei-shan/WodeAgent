@@ -186,17 +186,19 @@ class TestVCRRecordModes:
                 fallback=lambda: _make_mock_response("x"),
             )
 
-    def test_once_mode_records_new(self, tmp_path):
+    def test_once_mode_calls_through_without_persisting(self, tmp_path):
+        """once mode calls real API but doesn't persist fixtures."""
         fixture_dir = tmp_path / "fixtures"
         vcr = VCR(fixture_dir=str(fixture_dir), enabled=True, record_mode="once")
 
         result = vcr.call(
             model="test",
             messages=_make_messages(),
-            fallback=lambda: _make_mock_response("once-recorded"),
+            fallback=lambda: _make_mock_response("once-through"),
         )
-        assert result.choices[0].message.content == "once-recorded"
-        assert len(list(fixture_dir.glob("*.json"))) == 1
+        assert result.choices[0].message.content == "once-through"
+        # once mode does NOT record — no fixture file created
+        assert len(list(fixture_dir.glob("*.json"))) == 0
 
 
 class TestDehydrate:

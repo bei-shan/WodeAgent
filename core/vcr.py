@@ -78,9 +78,9 @@ class VCR:
     enabled:
         When ``False`` (default for non-test), VCR is a transparent pass-through.
     record_mode:
-        ``"new_episodes"`` — replay existing, record new.
-        ``"once"`` — replay existing, record new (same behaviour in v1).
-        ``"none"`` — replay existing, raise on missing.
+        ``"new_episodes"`` — replay existing fixtures, record new ones.
+        ``"once"`` — replay existing fixtures, use real API without persisting.
+        ``"none"`` — replay existing fixtures, raise on missing.
     """
 
     def __init__(
@@ -158,12 +158,15 @@ class VCR:
                 f"Run with VCR_RECORD_MODE=new_episodes to generate it."
             )
 
-        # Record
-        logger.info("VCR record: %s", fixture_path.name)
-        result = fallback()
-
-        if self._record_mode in ("new_episodes", "once"):
+        # Record (new_episodes) or call-through (once/none handled above)
+        if self._record_mode == "new_episodes":
+            logger.info("VCR record: %s", fixture_path.name)
+            result = fallback()
             self._record(fixture_path, inp, result)
+        else:
+            # "once" mode: call real API without persisting
+            logger.debug("VCR call-through (once mode)")
+            result = fallback()
 
         return result
 
