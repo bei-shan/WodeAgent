@@ -26,7 +26,7 @@ class EnterWorktreeTool(Tool):
             raise ValueError("project_root must be provided by the framework")
         super().__init__(
             name=name,
-            description='Create or enter a git worktree, switching the agent's working directory',
+            description="Create or enter a git worktree, switching the agent's working directory",
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )
