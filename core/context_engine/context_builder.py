@@ -1,19 +1,17 @@
-"""Context builder for ReAct prompt assembly.
+"""Context builder for ReAct prompt assembly — Late Binding (Pi-inspired).
 
-重构为 Message List 自然累积模式：
-- 不再拼接 scratchpad，每步历史由 messages 自然累积
-- L1/L2 用 role=system 放在 messages 头部
-- L3 就是 messages 中的 user/assistant/tool
-- L4 当前用户输入以 role=user 追加
-- Todo recap 作为观察消息进入上下文（strict 时为 tool，compat 时为 user）
+Each ``build_messages()`` call assembles the full message list from
+live data sources (tool registry, MCP status, skills, CODE_LAW).
+No full-system-message cache — only cheap individual caches (L1 text,
+CODE_LAW mtime, L1 file mtime) that never need manual invalidation.
 
 Messages 格式：
 [
-  {"role": "system", "content": "L1 系统提示 + 工具说明"},
+  {"role": "system", "content": "L1 系统提示 + 工具 usage_notes"},
   {"role": "system", "content": "L2: CODE_LAW.md（如有）"},
   {"role": "user", "content": "...问题..."},
   {"role": "assistant", "content": "...", "tool_calls": [...]},
-  {"role": "tool", "tool_call_id": "...", "content": "{压缩后的JSON}"},
+  {"role": "tool", "tool_call_id": "...", "content": "{截断后JSON}"},
   ...
 ]
 """
@@ -28,15 +26,11 @@ from typing import List, Optional, Dict, Any
 
 @dataclass
 class ContextBuilder:
-    """
-    构建 ReAct 循环的 messages 列表
-    
-    Message List 模式：
-    - L1(system+tools) 作为第一个 system message
-    - L2(CODE_LAW) 作为第二个 system message（如有）
-    - L3(history) 由 HistoryManager 提供的 messages 列表
-    - L4(user input) 已包含在 history 中
-    - Todo recap 作为 tool message 自然存在于 history 中
+    """构建 ReAct 循环的 messages 列表 — Late Binding 模式。
+
+    每次 ``build_messages()`` 实时组装，无全局缓存。
+    仅保留轻量缓存：L1 文件 mtime、CODE_LAW 文本 + mtime。
+    工具提示词从 Tool.usage_notes 实时获取（纯内存操作）。
     """
 
     tool_registry: "ToolRegistry"  # noqa: F821
@@ -44,176 +38,102 @@ class ContextBuilder:
     system_prompt_override: Optional[str] = None
     mcp_tools_prompt: Optional[str] = None
     skills_prompt: Optional[str] = None
+
+    # ── Lightweight caches (self-invalidating) ──
+    _cached_l1_mtime: Optional[float] = field(default=None, init=False)
+    _cached_l1_text: str = field(default="", init=False)
     _cached_code_law: str = field(default="", init=False)
     _cached_code_law_mtime: Optional[float] = field(default=None, init=False)
-    _cached_system_messages: Optional[List[Dict[str, Any]]] = field(default=None, init=False)
-    _mcp_tools_prompt: str = field(default="", init=False)
-    _skills_prompt: str = field(default="", init=False)
+
+    # ── Live state (no cache invalidation needed) ──
     _runtime_system_blocks: List[str] = field(default_factory=list, init=False)
     _output_style_prompt: str = field(default="", init=False)
+    _mcp_tools_prompt: str = field(default="", init=False)
+    _skills_prompt: str = field(default="", init=False)
+
+    # ══════════════════════════════════════════════════════════════
+    # Public API
+    # ══════════════════════════════════════════════════════════════
 
     def build_messages(
         self,
         history_messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """
-        构建完整的 messages 列表
-        
+        """构建完整的 messages 列表（实时组装）。
+
         Args:
-            history_messages: 来自 HistoryManager.to_messages() 的历史消息列表
-        
+            history_messages: HistoryManager.to_messages() 的历史消息
+
         Returns:
             完整的 messages 列表，可直接传给 LLM
         """
         messages: List[Dict[str, Any]] = []
-        
-        # L1: System prompt + Tools（缓存）
-        system_messages = self._get_system_messages()
-        messages.extend(system_messages)
-        
-        # L3/L4: History messages（包含 user/assistant/tool/summary）
+        messages.extend(self._build_system_messages())
         messages.extend(history_messages)
-        
         return messages
 
     def get_system_messages(self) -> List[Dict[str, Any]]:
-        """获取 system messages（供日志记录等使用）"""
-        system_messages = self._get_system_messages()
-        return [dict(m) for m in system_messages]
-    
-    def _get_system_messages(self) -> List[Dict[str, Any]]:
-        """获取系统消息（带缓存）"""
-        # 检查 CODE_LAW 是否更新
-        code_law = self._load_code_law()
-
-        if self._mcp_tools_prompt == "" and self.mcp_tools_prompt:
-            self._mcp_tools_prompt = self.mcp_tools_prompt
-        if self._skills_prompt == "" and self.skills_prompt:
-            self._skills_prompt = self.skills_prompt
-
-        # 如果缓存有效且 CODE_LAW 未变，直接返回
-        if self._cached_system_messages is not None:
-            # 检查 CODE_LAW 是否需要更新
-            has_code_law_msg = len(self._cached_system_messages) > 1
-            if (code_law and has_code_law_msg) or (not code_law and not has_code_law_msg):
-                return self._with_runtime_system_blocks(self._cached_system_messages)
-        
-        # 重新构建
-        messages: List[Dict[str, Any]] = []
-        
-        # L1: System prompt + Tools
-        system_prompt = self._load_system_prompt()
-        tools_prompt = self._load_tool_prompts()
-        if tools_prompt:
-            if "{tools}" in system_prompt:
-                system_prompt = system_prompt.replace("{tools}", tools_prompt)
-            else:
-                system_prompt = f"{system_prompt}\n\n# Available Tools\n{tools_prompt}"
-
-        if self._mcp_tools_prompt:
-            system_prompt = f"{system_prompt}\n\n# MCP Tools\n{self._mcp_tools_prompt}"
-        
-        if system_prompt.strip():
-            messages.append({
-                "role": "system",
-                "content": system_prompt.strip(),
-            })
-        
-        # L2: CODE_LAW
-        if code_law:
-            messages.append({
-                "role": "system",
-                "content": f"# Project Rules (CODE_LAW)\n{code_law}",
-            })
-        
-        self._cached_system_messages = messages
-        return self._with_runtime_system_blocks(messages)
+        """获取 system messages（供日志/快照使用）。"""
+        return self._build_system_messages()
 
     def set_mcp_tools_prompt(self, prompt: str) -> None:
-        """更新 MCP 工具提示，并清空 system cache。"""
+        """更新 MCP 工具提示（无需清缓存 — Late Binding 自动感知）。"""
         self._mcp_tools_prompt = prompt or ""
-        self._cached_system_messages = None
 
     def set_skills_prompt(self, prompt: str) -> None:
-        """更新 Skills 提示，并清空 system cache。"""
+        """更新 Skills 提示（无需清缓存）。"""
         self._skills_prompt = prompt or ""
-        self._cached_system_messages = None
 
     def set_output_style_prompt(self, prompt: str) -> None:
-        """更新输出风格提示，并清空 system cache。
-
-        风格 prompt 通过 ``{{output_style}}`` 占位符注入到 L1 系统提示末尾。
-        传入空字符串表示 default 风格（不注入任何内容）。
-        """
+        """更新输出风格提示。传入空字符串 = default（不注入）。"""
         self._output_style_prompt = prompt or ""
-        self._cached_system_messages = None
 
     def set_runtime_system_blocks(self, blocks: List[str]) -> None:
         """设置 runtime 通知块（注入 system，不污染 user 轮次）。"""
-        self._runtime_system_blocks = [str(block).strip() for block in (blocks or []) if str(block).strip()]
+        self._runtime_system_blocks = [
+            str(block).strip() for block in (blocks or []) if str(block).strip()
+        ]
 
-    def _with_runtime_system_blocks(self, base_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if not self._runtime_system_blocks:
-            return list(base_messages)
-        messages = list(base_messages)
+    # ══════════════════════════════════════════════════════════════
+    # Internal: system message assembly
+    # ══════════════════════════════════════════════════════════════
+
+    def _build_system_messages(self) -> List[Dict[str, Any]]:
+        """实时组装所有 system messages。"""
+        messages: List[Dict[str, Any]] = []
+
+        # L1: System prompt + usage_notes (tool prompts from live registry)
+        l1 = self._build_l1()
+        if l1:
+            messages.append({"role": "system", "content": l1})
+
+        # MCP tools prompt (live — MCPFeature updates this)
+        if self._mcp_tools_prompt:
+            messages.append({"role": "system", "content": self._mcp_tools_prompt})
+
+        # L2: CODE_LAW (mtime-cached)
+        code_law = self._load_code_law()
+        if code_law:
+            messages.append({"role": "system",
+                             "content": f"# Project Rules (CODE_LAW)\n{code_law}"})
+
+        # Runtime blocks (plan mode, team status, hook messages, etc.)
         for block in self._runtime_system_blocks:
             messages.append({"role": "system", "content": block})
+
         return messages
 
-    def _load_system_prompt(self) -> str:
-        """加载 L1 系统 prompt"""
-        if self.system_prompt_override:
-            prompt = self.system_prompt_override
-        else:
-            prompt_path = Path(self.project_root) / "prompts" / "agents_prompts" / "L1_system_prompt.py"
-            if not prompt_path.exists():
-                return ""
-            data = runpy.run_path(str(prompt_path))
-            prompt = data.get("system_prompt", "")
-            if not isinstance(prompt, str):
-                return ""
+    def _build_l1(self) -> str:
+        """Build L1 system prompt: base text + usage_notes + disabled tools.
 
-        # Replace {output_style} placeholder with current style prompt.
-        # Default style (empty) → placeholder removed with no content.
-        prompt = prompt.replace("{output_style}", self._output_style_prompt)
-
-        # Append plan mode guidance if EnterPlanMode tool is available.
-        prompt = self._append_plan_mode_guidance(prompt)
-        return prompt
-
-    def _append_plan_mode_guidance(self, prompt: str) -> str:
-        """Append plan mode usage guidance to the system prompt.
-
-        Only adds the block if EnterPlanMode is registered as a tool.
+        The base L1 text is mtime-cached (file change → reload).
+        usage_notes come from the live tool registry (always fresh).
         """
-        try:
-            tools = getattr(self.tool_registry, "get_all_tools", lambda: [])()
-            has_enter = any(getattr(t, "name", "") == "EnterPlanMode" for t in tools)
-        except Exception:
-            has_enter = False
+        # L1 base text (mtime-cached)
+        l1_text = self._load_l1_text()
 
-        if not has_enter:
-            return prompt
-
-        guidance = (
-            "\n\n# Plan Mode\n"
-            "For complex or multi-file changes, use EnterPlanMode to analyse "
-            "the codebase first and produce a structured plan.  This avoids "
-            "premature edits and lets you gather all context before writing code.  "
-            "Call ExitPlanMode with your plan when ready to execute.\n"
-        )
-        return prompt + guidance
-
-    def _load_tool_prompts(self) -> str:
-        """生成精简工具提示词（仅 usage_notes，不重复 schema 已有信息）。
-
-        之前：加载 prompts/tools_prompts/*.py 的所有文本 (~15K tokens)
-        现在：从 Tool.usage_notes 提取使用建议 (~2K tokens)
-
-        OpenAI function calling schema 已包含 name/description/parameters，
-        系统提示词只需要补充 schema 无法表达的使用约束和规则。
-        """
-        lines: List[str] = []
+        # Tool usage notes from live registry (pure memory, always fresh)
+        usage_lines: List[str] = []
         try:
             tools = self.tool_registry.get_all_tools()
         except Exception:
@@ -222,30 +142,65 @@ class ContextBuilder:
         for tool in tools:
             notes = getattr(tool, "usage_notes", "")
             if notes and notes.strip():
-                lines.append(notes.strip())
+                usage_lines.append(notes.strip())
 
-        # Skill tool 仍然需要动态注入可用 skills 列表
+        # Skills prompt (live)
         if self._skills_prompt:
-            skill_line = self._skills_prompt.strip()
-            if skill_line:
-                lines.append(skill_line)
+            usage_lines.append(self._skills_prompt.strip())
 
-        # 追加被熔断禁用的工具提示
-        disabled_tools = []
-        if hasattr(self.tool_registry, "get_disabled_tools"):
-            try:
-                disabled_tools = self.tool_registry.get_disabled_tools()
-            except Exception:
-                disabled_tools = []
-        if disabled_tools:
-            lines.append("## Disabled Tools (temporary)")
-            for name in disabled_tools:
-                lines.append(f"- {name}")
+        # Disabled tools (live — circuit breaker state)
+        disabled = self._get_disabled_tools()
+        if disabled:
+            usage_lines.append("## Disabled Tools (temporary)")
+            for name in disabled:
+                usage_lines.append(f"- {name}")
 
-        return "\n".join(lines)
+        # Replace {tools} placeholder or append
+        tools_text = "\n".join(usage_lines)
+        if "{tools}" in l1_text:
+            l1_text = l1_text.replace("{tools}", tools_text)
+
+        # Replace {output_style} placeholder
+        l1_text = l1_text.replace("{output_style}", self._output_style_prompt)
+
+        # Plan mode guidance (conditional)
+        l1_text = self._append_plan_mode_guidance(l1_text)
+
+        return l1_text.strip()
+
+    # ══════════════════════════════════════════════════════════════
+    # Lightweight caches
+    # ══════════════════════════════════════════════════════════════
+
+    def _load_l1_text(self) -> str:
+        """Load L1 system prompt text (mtime-cached)."""
+        if self.system_prompt_override:
+            return self.system_prompt_override
+
+        l1_path = Path(self.project_root) / "prompts" / "agents_prompts" / "L1_system_prompt.py"
+        if not l1_path.exists():
+            return ""
+
+        try:
+            mtime = l1_path.stat().st_mtime
+        except OSError:
+            return ""
+
+        # mtime cache hit
+        if self._cached_l1_mtime == mtime and self._cached_l1_text:
+            return self._cached_l1_text
+
+        data = runpy.run_path(str(l1_path))
+        prompt = data.get("system_prompt", "")
+        if not isinstance(prompt, str):
+            return ""
+
+        self._cached_l1_mtime = mtime
+        self._cached_l1_text = prompt
+        return prompt
 
     def _load_code_law(self) -> str:
-        """加载 CODE_LAW.md（带 mtime 缓存）"""
+        """Load CODE_LAW.md (mtime-cached)."""
         for filename in ("code_law.md", "CODE_LAW.md"):
             code_law_path = Path(self.project_root) / filename
             if not code_law_path.exists():
@@ -263,5 +218,35 @@ class ContextBuilder:
             self._cached_code_law_mtime = mtime
             return self._cached_code_law
         return ""
-    
-    # 兼容旧接口已移除，请使用 build_messages()
+
+    # ══════════════════════════════════════════════════════════════
+    # Helpers
+    # ══════════════════════════════════════════════════════════════
+
+    def _get_disabled_tools(self) -> List[str]:
+        if hasattr(self.tool_registry, "get_disabled_tools"):
+            try:
+                return self.tool_registry.get_disabled_tools()
+            except Exception:
+                pass
+        return []
+
+    def _append_plan_mode_guidance(self, prompt: str) -> str:
+        """Append plan mode usage guidance if EnterPlanMode is registered."""
+        try:
+            tools = self.tool_registry.get_all_tools()
+            has_enter = any(getattr(t, "name", "") == "EnterPlanMode" for t in tools)
+        except Exception:
+            has_enter = False
+
+        if not has_enter:
+            return prompt
+
+        guidance = (
+            "\n\n# Plan Mode\n"
+            "For complex or multi-file changes, use EnterPlanMode to analyse "
+            "the codebase first and produce a structured plan.  This avoids "
+            "premature edits and lets you gather all context before writing code.  "
+            "Call ExitPlanMode with your plan when ready to execute.\n"
+        )
+        return prompt + guidance

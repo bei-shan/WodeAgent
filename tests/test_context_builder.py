@@ -58,6 +58,7 @@ class TestContextBuilder(unittest.TestCase):
             self.assertIn("lowercase rule", messages[1]["content"])
 
     def test_code_law_cache_refresh(self):
+        """CODE_LAW uses mtime cache — changes detected on file modification."""
         structure = {
             "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
             "CODE_LAW.md": "Rule A",
@@ -68,12 +69,9 @@ class TestContextBuilder(unittest.TestCase):
             self.assertIn("Rule A", messages1[1]["content"])
             time.sleep(0.01)
             project.path("CODE_LAW.md").write_text("Rule B", encoding="utf-8")
-            # Cache is reused until invalidated explicitly
+            # Late Binding: mtime changed → auto-detected, no manual invalidation needed
             messages2 = builder.get_system_messages()
-            self.assertIn("Rule A", messages2[1]["content"])
-            builder.set_mcp_tools_prompt("invalidate")
-            messages3 = builder.get_system_messages()
-            self.assertIn("Rule B", messages3[1]["content"])
+            self.assertIn("Rule B", messages2[1]["content"])
 
     def test_tool_prompts_from_usage_notes(self):
         """Tool prompts come from Tool.usage_notes, not from prompt files."""
@@ -105,6 +103,7 @@ class TestContextBuilder(unittest.TestCase):
             self.assertNotIn("Available Tools", messages[0]["content"])
 
     def test_mcp_tools_prompt_injection(self):
+        """MCP tools get their own system message in Late Binding mode."""
         structure = {
             "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
         }
@@ -112,8 +111,10 @@ class TestContextBuilder(unittest.TestCase):
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
             builder.set_mcp_tools_prompt("MCP tool list")
             messages = builder.get_system_messages()
-            self.assertIn("# MCP Tools", messages[0]["content"])
-            self.assertIn("MCP tool list", messages[0]["content"])
+            # MCP tools as separate system message
+            mcp_msgs = [m for m in messages if "MCP tool list" in m.get("content", "")]
+            self.assertEqual(len(mcp_msgs), 1)
+            self.assertIn("MCP tool list", mcp_msgs[0]["content"])
 
     def test_skills_prompt_injection(self):
         structure = {

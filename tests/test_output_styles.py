@@ -276,7 +276,7 @@ class TestContextBuilderIntegration:
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
         # Load system messages — the style prompt should be inside L1.
-        msgs = builder._get_system_messages()
+        msgs = builder.get_system_messages()
         l1_content = msgs[0]["content"] if msgs else ""
 
         assert "Output Style: explanatory" in l1_content
@@ -296,7 +296,7 @@ class TestContextBuilderIntegration:
         assert mgr.get_current() == "default"
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
-        msgs = builder._get_system_messages()
+        msgs = builder.get_system_messages()
         l1_content = msgs[0]["content"] if msgs else ""
 
         # Default style — should NOT have Output Style marker.
@@ -315,13 +315,13 @@ class TestContextBuilderIntegration:
         mgr = OutputStyleManager(project_root=str(real_project_root))
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
-        first = builder._get_system_messages()
+        first = builder.get_system_messages()
 
         # Change style — cache should be invalidated.
         mgr.set_current("explanatory")
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
-        second = builder._get_system_messages()
+        second = builder.get_system_messages()
         second_l1 = second[0]["content"] if second else ""
 
         assert "Output Style: explanatory" in second_l1
