@@ -34,7 +34,6 @@ from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
 from core.features import collect_all_features
 from core.features.base import AgentFeature
-from tools.mcp.loader import register_mcp_servers, format_mcp_tools_prompt
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
@@ -208,8 +207,7 @@ class CodeAgent(Agent):
             team_registered = register_team_tools(bootstrap)
             self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
 
-        # MCP tools
-        self._register_mcp_tools()
+        # MCP prompt sync (tools registered by MCPFeature.init)
         self.context_builder.set_mcp_tools_prompt(self._mcp_tools_prompt)
 
     def _inject_config_to_modules(self) -> None:
@@ -473,54 +471,6 @@ class CodeAgent(Agent):
         budget = int(os.getenv("SKILLS_PROMPT_CHAR_BUDGET", "12000"))
         self._skills_prompt = self._skill_loader.format_skills_for_prompt(budget)
 
-    def _register_mcp_tools(self) -> None:
-        """可选：注册 MCP 工具（基于 MCP_SERVERS 配置）"""
-        try:
-            clients, tools_meta = register_mcp_servers(self.tool_registry, self.project_root)
-            self._mcp_clients = clients
-            self._mcp_tools_prompt = format_mcp_tools_prompt(tools_meta)
-            if tools_meta:
-                self.logger.info("MCP tools loaded: %d", len(tools_meta))
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    for tool in tools_meta:
-                        name = tool.get("name") or ""
-                        description = (tool.get("description") or "").strip()
-                        if description:
-                            self.logger.debug("MCP tool: %s - %s", name, description)
-                        else:
-                            self.logger.debug("MCP tool: %s", name)
-        except Exception as exc:
-            if self.logger:
-                self.logger.warning("MCP registration skipped: %s", exc)
-
-    def _retry_pending_mcp_servers(self) -> None:
-        """Retry connecting any MCP servers that failed during background init.
-
-        Called at the start of each ReAct step so that tools appear as
-        soon as the server becomes reachable — no manual trigger needed.
-        """
-        try:
-            from tools.mcp.loader import get_pending_server_names, retry_pending_server
-            pending = get_pending_server_names()
-            if not pending:
-                return
-            for name in pending:
-                ok = retry_pending_server(
-                    self.tool_registry, name, timeout=10.0,
-                )
-                if ok:
-                    self.logger.info("MCP server '%s' recovered, tools now available", name)
-                    # Rebuild MCP tools prompt so LLM sees the new tools.
-                    all_tools = self.tool_registry.get_all_tools()
-                    mcp_tools_meta = [
-                        {"name": t.name, "description": getattr(t, "description", "")}
-                        for t in all_tools
-                        if getattr(t, "name", "").startswith("mcp__")
-                    ]
-                    self._mcp_tools_prompt = format_mcp_tools_prompt(mcp_tools_meta)
-        except Exception:
-            pass
-
     def _inject_permission_gate(self) -> None:
         """将 PermissionGate 注入到所有已注册的工具实例中。
 
@@ -671,8 +621,7 @@ class CodeAgent(Agent):
 
         for step in range(1, self.max_steps + 1):
             # Auto-retry pending MCP servers each step so tools appear
-            # as soon as the server becomes reachable.
-            self._retry_pending_mcp_servers()
+            # MCP retry handled by MCPFeature.runtime_blocks()
 
             tools_schema = self._get_openai_tools_for_current_mode()
             self._collect_runtime_blocks(step)
