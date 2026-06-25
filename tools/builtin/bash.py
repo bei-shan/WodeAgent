@@ -24,9 +24,13 @@ class BashTool(Tool):
 
     # 默认超时时间（毫秒）
     DEFAULT_TIMEOUT_MS = 120000
-    
+
     # 最大超时时间（毫秒）
     MAX_TIMEOUT_MS = 600000
+
+    # 输出截断阈值（与 ObservationTruncator 对齐）
+    OUTPUT_MAX_LINES = 2000
+    OUTPUT_MAX_BYTES = 51200  # 50KB
 
     # 交互式命令黑名单（直接拒绝）
     INTERACTIVE_COMMANDS: Set[str] = {
@@ -279,13 +283,25 @@ class BashTool(Tool):
         
         time_ms = int((time.monotonic() - start_time) * 1000)
         
+        # 检测输出大小是否超阈值
+        stdout_lines = stdout.count("\n") + 1 if stdout else 0
+        stdout_bytes = len(stdout.encode("utf-8"))
+        stderr_lines = stderr.count("\n") + 1 if stderr else 0
+        stderr_bytes = len(stderr.encode("utf-8"))
+        output_too_large = (
+            stdout_lines > self.OUTPUT_MAX_LINES
+            or stdout_bytes > self.OUTPUT_MAX_BYTES
+            or stderr_lines > self.OUTPUT_MAX_LINES
+            or stderr_bytes > self.OUTPUT_MAX_BYTES
+        )
+
         # 构建 data 字段
         data: Dict[str, Any] = {
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": exit_code,
             "signal": signal_name,
-            "truncated": False,  # MVP 阶段不截断
+            "truncated": output_too_large,
             "command": command,
             "directory": directory_resolved,
         }
@@ -468,6 +484,23 @@ class BashTool(Tool):
                     "rg": "Grep",
                 }.get(word, "the appropriate tool")
                 return f"Command blocked by safety rules. Use {tool_suggestion} instead of '{word}'."
+
+        # 检查 Python/Shell 写文件操作
+        python_write_patterns = [
+            r"\bopen\s*\(.*['\"]w['\"]",   # open(..., 'w')
+            r"\bopen\s*\(.*['\"]a['\"]",   # open(..., 'a')
+            r"\.write\s*\(",                 # .write()
+            r"\.writelines\s*\(",            # .writelines()
+            r"pathlib.*\.write_text\s*\(",   # Path.write_text()
+            r"shutil\.(copy|move)\s*\(",     # shutil file ops
+        ]
+        if any(word in {"python", "python3", "py"} for word in words):
+            for pat in python_write_patterns:
+                if re.search(pat, command):
+                    return (
+                        "Command blocked by safety rules. "
+                        "Python file-write operation detected — use Write/Edit tools instead."
+                    )
 
         return None
 

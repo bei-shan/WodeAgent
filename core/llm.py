@@ -318,22 +318,36 @@ class HelloAgentsLLM:
         """Drop None-valued fields for provider compatibility."""
         return {k: v for k, v in kwargs.items() if v is not None}
 
-    def _is_minimax_backend(self) -> bool:
-        base = (self.base_url or "").lower()
-        return "minimaxi.com" in base or "minimax.io" in base
+    # Provider-specific quirks requiring API request normalization.
+    # Add entries here instead of hardcoding provider detection logic.
+    _PROVIDER_QUIRKS: dict[str, dict] = {
+        "minimax": {"force_n_1": True, "no_tool_choice_auto": True},
+    }
+
+    def _get_provider_quirks(self) -> dict:
+        provider = (self.provider or "").lower().strip()
+        quirks = self._PROVIDER_QUIRKS.get(provider, {})
+        # Fallback: check base_url for known backend domains
+        if not quirks:
+            base = (self.base_url or "").lower()
+            if "minimaxi.com" in base or "minimax.io" in base:
+                quirks = self._PROVIDER_QUIRKS.get("minimax", {})
+        return quirks
 
     def _apply_provider_compat(self, request_kwargs: dict) -> dict:
-        """Apply backend-specific request normalization."""
+        """Apply backend-specific request normalization via quirks map."""
         normalized = dict(request_kwargs)
-        if self._is_minimax_backend():
+        quirks = self._get_provider_quirks()
+        if quirks.get("force_n_1"):
             normalized["n"] = 1
+        if quirks.get("no_tool_choice_auto"):
             if normalized.get("tool_choice") == "auto":
                 normalized.pop("tool_choice", None)
         return normalized
 
     def _normalize_messages_for_provider(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         """Normalize message list for backend-specific constraints."""
-        if not self._is_minimax_backend():
+        if not self._get_provider_quirks():
             return messages
         if not isinstance(messages, list) or len(messages) <= 1:
             return messages

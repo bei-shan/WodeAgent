@@ -49,34 +49,11 @@ class CodeAgent(Agent):
     - ReAct 每一步同步写入 assistant/tool 消息到 history
     - 支持压缩触发和 Summary 生成
     """
-    DELEGATION_ALLOWED_TOOLS = {
-        "TeamCreate",
-        "SendMessage",
-        "TeamStatus",
-        "TeamDelete",
-        "TeamCleanup",
-        "TeamApprovals",
-        "TeamApprovePlan",
-        "TeamFanout",
-        "TeamCollect",
-        "TeamTaskCreate",
-        "TeamTaskGet",
-        "TeamTaskUpdate",
-        "TeamTaskList",
-        "TodoWrite",
-        "AskUser",
-    }
-
+    # Tool allowlists — class-level fallbacks, overridden by Features at runtime.
+    DELEGATION_ALLOWED_TOOLS: set[str] = set()
     PLAN_MODE_TOOLS = {
-        "Read",
-        "Grep",
-        "Glob",
-        "LS",
-        "TodoWrite",
-        "TaskOutput",
-        "EnterPlanMode",
-        "ExitPlanMode",
-        "AskUser",
+        "Read", "Grep", "Glob", "LS", "TodoWrite",
+        "TaskOutput", "EnterPlanMode", "ExitPlanMode", "AskUser",
     }
     
     def __init__(
