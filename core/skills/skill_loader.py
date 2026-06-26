@@ -101,20 +101,15 @@ class SkillLoader:
     def _iter_skill_files(self) -> List[Path]:
         """Scan .skill/<name>/SKILL.md for skill definitions.
 
-        Also scans legacy skills/ and .claude/skills/ for backward compat.
+        Also scans legacy skills/ for backward compatibility.
         """
         paths: List[Path] = []
-        # Primary: .skill/<name>/SKILL.md
         if self._skills_dir.exists():
             paths.extend(self._skills_dir.rglob("SKILL.md"))
         # Legacy: skills/<name>/SKILL.md
         legacy = self._project_root / "skills"
         if legacy.exists():
             paths.extend(legacy.rglob("SKILL.md"))
-        # Claude Code compatible: .claude/skills/<name>/SKILL.md
-        claude_skills = self._project_root / ".claude" / "skills"
-        if claude_skills.exists():
-            paths.extend(claude_skills.rglob("SKILL.md"))
         return sorted(paths)
 
     def _get_skills_state(self) -> Tuple[float, int]:
