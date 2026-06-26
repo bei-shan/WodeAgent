@@ -556,8 +556,11 @@ export default function App() {
         {/* Agent teams toggle — below new task, above nav */}
         <div className="px-4 pb-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600">Agent 团队</span>
-            <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} /><span className="slider" /></label>
+            <span className={`text-sm ${planMode ? 'text-gray-300' : 'text-gray-600'}`}>
+              Agent 团队
+              {planMode && <span className="text-[10px] text-gray-300 ml-1">(Plan 模式下不可用)</span>}
+            </span>
+            <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
           </div>
           {agentTeams && (
             <div className="mt-2 space-y-0.5">
@@ -603,12 +606,9 @@ export default function App() {
               </div>
             </button>
             {moreOpen && (
-              <div className="ml-2 space-y-0.5 mt-0.5 animate-slide-up">
-                <div className="px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3">
-                  <Svg d={Icons.clock} size={16} /><span>定时任务</span>
-                </div>
-                <div className="px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3">
-                  <Svg d={Icons.asset} size={16} /><span>资产</span>
+              <div className="ml-2 mt-0.5 animate-slide-up">
+                <div className="px-3 py-2 rounded-xl text-xs text-gray-400">
+                  更多功能开发中…
                 </div>
               </div>
             )}
