@@ -21,9 +21,9 @@ class SkillMeta:
 
 
 class SkillLoader:
-    """Scan and cache skills stored under project_root/.skill/<name>/SKILL.md."""
+    """Scan and cache skills stored under project_root/.mycodeagent/skills/<name>/SKILL.md."""
 
-    def __init__(self, project_root: str, skills_dir: str = ".skill"):
+    def __init__(self, project_root: str, skills_dir: str = ".mycodeagent/skills"):
         self._project_root = Path(project_root).resolve()
         self._skills_dir = (self._project_root / skills_dir).resolve()
         self._skills: Dict[str, SkillMeta] = {}
@@ -31,7 +31,15 @@ class SkillLoader:
         self._last_scan_count: int = 0
 
     def scan(self) -> List[SkillMeta]:
-        """Scan skills directory and refresh cache."""
+        """Scan skills directory and refresh cache.
+
+        Auto-creates the primary skills directory if it doesn't exist,
+        so the agent can write skills later.
+        """
+        # Auto-create primary skills directory on first scan.
+        if not self._skills_dir.exists():
+            self._skills_dir.mkdir(parents=True, exist_ok=True)
+
         skills: Dict[str, SkillMeta] = {}
         max_mtime = 0.0
         count = 0
@@ -99,17 +107,20 @@ class SkillLoader:
         return "\n".join(lines) if lines else "(none)"
 
     def _iter_skill_files(self) -> List[Path]:
-        """Scan .skill/<name>/SKILL.md for skill definitions.
+        """Scan for SKILL.md files.
 
-        Also scans legacy skills/ for backward compatibility.
+        Primary:  .mycodeagent/skills/<name>/SKILL.md
+        Legacy:   .skill/<name>/SKILL.md, skills/<name>/SKILL.md
         """
         paths: List[Path] = []
+        # Primary
         if self._skills_dir.exists():
             paths.extend(self._skills_dir.rglob("SKILL.md"))
-        # Legacy: skills/<name>/SKILL.md
-        legacy = self._project_root / "skills"
-        if legacy.exists():
-            paths.extend(legacy.rglob("SKILL.md"))
+        # Legacy
+        for legacy_dir in (".skill", "skills"):
+            d = self._project_root / legacy_dir
+            if d.exists():
+                paths.extend(d.rglob("SKILL.md"))
         return sorted(paths)
 
     def _get_skills_state(self) -> Tuple[float, int]:

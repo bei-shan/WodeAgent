@@ -7,7 +7,7 @@ from tests.utils.test_helpers import parse_response
 
 def test_skill_loader_scans_skills(temp_project):
     temp_project.create_file(
-        ".skill/code-review/SKILL.md",
+        ".mycodeagent/skills/code-review/SKILL.md",
         """---
 name: code-review
 description: Review code quality
@@ -26,7 +26,7 @@ description: Review code quality
 
 def test_skill_loader_skips_invalid_frontmatter(temp_project):
     temp_project.create_file(
-        ".skill/bad/SKILL.md",
+        ".mycodeagent/skills/bad/SKILL.md",
         """# Missing frontmatter
 content
 """,
@@ -40,7 +40,7 @@ content
 
 def test_skill_tool_loads_and_expands_arguments(temp_project):
     temp_project.create_file(
-        ".skill/code-review/SKILL.md",
+        ".mycodeagent/skills/code-review/SKILL.md",
         """---
 name: code-review
 description: Review code quality
@@ -75,7 +75,7 @@ $ARGUMENTS
 def test_format_skills_for_prompt_basic(temp_project):
     """format_skills_for_prompt returns a formatted list."""
     temp_project.create_file(
-        ".skill/code-review/SKILL.md",
+        ".mycodeagent/skills/code-review/SKILL.md",
         """---
 name: code-review
 description: Review code quality
@@ -104,7 +104,7 @@ def test_format_skills_for_prompt_empty(temp_project):
 def test_format_skills_for_prompt_truncation(temp_project):
     """format_skills_for_prompt truncates when char_budget is small."""
     temp_project.create_file(
-        ".skill/code-review/SKILL.md",
+        ".mycodeagent/skills/code-review/SKILL.md",
         """---
 name: code-review
 description: Review code quality
@@ -113,7 +113,7 @@ description: Review code quality
 """,
     )
     temp_project.create_file(
-        ".skill/ui-design/SKILL.md",
+        ".mycodeagent/skills/ui-design/SKILL.md",
         """---
 name: ui-design
 description: Design UI components
@@ -139,7 +139,7 @@ def test_refresh_if_stale_detects_new_file(temp_project):
     assert len(loader.list_skills()) == 0
 
     temp_project.create_file(
-        ".skill/lint/SKILL.md",
+        ".mycodeagent/skills/lint/SKILL.md",
         """---
 name: lint
 description: Lint code
@@ -159,7 +159,7 @@ def test_refresh_if_stale_detects_modified_file(temp_project):
     import time
 
     skill_path = temp_project.create_file(
-        ".skill/lint/SKILL.md",
+        ".mycodeagent/skills/lint/SKILL.md",
         """---
 name: lint
 description: Lint code
@@ -195,7 +195,7 @@ description: Lint and format code
 def test_skill_name_validation_rejects_invalid(temp_project):
     """Skills with names that don't match kebab-case pattern are rejected."""
     temp_project.create_file(
-        ".skill/My Skill/SKILL.md",
+        ".mycodeagent/skills/My Skill/SKILL.md",
         """---
 name: My Skill
 description: Has spaces
@@ -212,7 +212,7 @@ description: Has spaces
 def test_skill_missing_arguments_expands_to_end(temp_project):
     """When $ARGUMENTS is not in the skill body, args are appended."""
     temp_project.create_file(
-        ".skill/simple/SKILL.md",
+        ".mycodeagent/skills/simple/SKILL.md",
         """---
 name: simple
 description: A simple skill
@@ -238,7 +238,7 @@ No arguments placeholder here.
 def test_skill_empty_frontmatter_rejected(temp_project):
     """A SKILL.md with empty frontmatter is rejected."""
     temp_project.create_file(
-        ".skill/empty/SKILL.md",
+        ".mycodeagent/skills/empty/SKILL.md",
         """---
 ---
 # No frontmatter fields
@@ -253,7 +253,7 @@ def test_skill_empty_frontmatter_rejected(temp_project):
 def test_skill_frontmatter_missing_description_rejected(temp_project):
     """A SKILL.md with name but no description is rejected."""
     temp_project.create_file(
-        ".skill/nodesc/SKILL.md",
+        ".mycodeagent/skills/nodesc/SKILL.md",
         """---
 name: nodesc
 ---

@@ -627,8 +627,8 @@ def create_app(
 
     @app.post("/api/skills", status_code=201)
     async def create_skill(body: SkillCreate):
-        """Create a new skill — writes .skill/<name>/SKILL.md."""
-        skills_dir = Path(app.state.project_root) / ".skill" / body.name
+        """Create a new skill — writes .mycodeagent/skills/<name>/SKILL.md."""
+        skills_dir = Path(app.state.project_root) / ".mycodeagent" / "skills" / body.name
         if skills_dir.exists():
             raise HTTPException(409, f"Skill '{body.name}' already exists")
         try:
