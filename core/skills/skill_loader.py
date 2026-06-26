@@ -1,12 +1,20 @@
-"""Skill loader for project-local skills."""
+"""Skill loader — two-layer design (like hermes-agent).
+
+skills/                    Source directory (built-in defaults, tracked by git)
+.mycodeagent/skills/       Runtime directory (auto-created, user/agent writes here)
+
+On first use, built-in skills are copied from skills/ → .mycodeagent/skills/.
+The agent reads/writes from the runtime directory.  The source directory is
+read-only reference — user deletions in runtime don't affect the defaults.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
 
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -21,24 +29,34 @@ class SkillMeta:
 
 
 class SkillLoader:
-    """Scan and cache skills stored under project_root/.mycodeagent/skills/<name>/SKILL.md."""
+    """Scan and cache skills.
 
-    def __init__(self, project_root: str, skills_dir: str = ".mycodeagent/skills"):
+    Source dir:   skills/<name>/SKILL.md              (built-in, git-tracked)
+    Runtime dir:  .mycodeagent/skills/<name>/SKILL.md  (auto-created, writable)
+    """
+
+    # ── Paths ───────────────────────────────────────────────────────
+    SOURCE_DIR = "skills"
+    RUNTIME_DIR = ".mycodeagent/skills"
+
+    def __init__(self, project_root: str):
         self._project_root = Path(project_root).resolve()
-        self._skills_dir = (self._project_root / skills_dir).resolve()
+        self._source_dir = self._project_root / self.SOURCE_DIR
+        self._runtime_dir = self._project_root / self.RUNTIME_DIR
         self._skills: Dict[str, SkillMeta] = {}
         self._last_scan_mtime: float = 0.0
         self._last_scan_count: int = 0
 
-    def scan(self) -> List[SkillMeta]:
-        """Scan skills directory and refresh cache.
+    # ── Public API ──────────────────────────────────────────────────
 
-        Auto-creates the primary skills directory if it doesn't exist,
-        so the agent can write skills later.
+    def scan(self) -> List[SkillMeta]:
+        """Scan skill directories and refresh cache.
+
+        Auto-creates the runtime directory and copies built-in defaults
+        from source on first use.
         """
-        # Auto-create primary skills directory on first scan.
-        if not self._skills_dir.exists():
-            self._skills_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_runtime_dir()
+        self._seed_defaults_if_empty()
 
         skills: Dict[str, SkillMeta] = {}
         max_mtime = 0.0
@@ -52,14 +70,16 @@ class SkillLoader:
             except OSError:
                 continue
 
-            parsed = self._parse_skill_file(path)
-            if not parsed:
+            meta = self._parse_skill_file(path)
+            if not meta:
                 continue
 
-            meta = parsed
-            if meta.name in skills:
-                # Keep last discovered on duplicates.
-                pass
+            # Runtime entries override source entries with same name.
+            existing = skills.get(meta.name)
+            if existing is not None:
+                if str(self._runtime_dir) in str(meta.path):
+                    skills[meta.name] = meta  # runtime wins
+                continue
             skills[meta.name] = meta
 
         self._skills = skills
@@ -71,7 +91,6 @@ class SkillLoader:
         """Refresh cache if skill files changed."""
         if not self._skills:
             return self.scan()
-
         current_max_mtime, current_count = self._get_skills_state()
         if current_max_mtime != self._last_scan_mtime or current_count != self._last_scan_count:
             return self.scan()
@@ -91,7 +110,6 @@ class SkillLoader:
         skills = self.list_skills(refresh=False)
         if not skills:
             return "(none)"
-
         lines: List[str] = []
         used = 0
         for skill in skills:
@@ -103,24 +121,39 @@ class SkillLoader:
                 break
             lines.append(line)
             used += line_len
-
         return "\n".join(lines) if lines else "(none)"
 
-    def _iter_skill_files(self) -> List[Path]:
-        """Scan for SKILL.md files.
+    # ── Internal ────────────────────────────────────────────────────
 
-        Primary:  .mycodeagent/skills/<name>/SKILL.md
-        Legacy:   .skill/<name>/SKILL.md, skills/<name>/SKILL.md
-        """
+    def _ensure_runtime_dir(self) -> None:
+        if not self._runtime_dir.exists():
+            self._runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    def _seed_defaults_if_empty(self) -> None:
+        """Copy built-in skills from source dir to runtime dir on first use."""
+        if not self._source_dir.exists():
+            return
+        # Only seed if runtime dir has no skills at all.
+        if any(self._runtime_dir.rglob("SKILL.md")):
+            return
+        for src_path in sorted(self._source_dir.rglob("SKILL.md")):
+            try:
+                rel = src_path.relative_to(self._source_dir)
+                dst = self._runtime_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, dst)
+            except OSError:
+                pass
+
+    def _iter_skill_files(self) -> List[Path]:
+        """Scan runtime dir (primary) and source dir (fallback)."""
         paths: List[Path] = []
-        # Primary
-        if self._skills_dir.exists():
-            paths.extend(self._skills_dir.rglob("SKILL.md"))
-        # Legacy
-        for legacy_dir in (".skill", "skills"):
-            d = self._project_root / legacy_dir
-            if d.exists():
-                paths.extend(d.rglob("SKILL.md"))
+        # Runtime dir — primary (user/agent writes go here)
+        if self._runtime_dir.exists():
+            paths.extend(self._runtime_dir.rglob("SKILL.md"))
+        # Source dir — built-in defaults (reference)
+        if self._source_dir.exists():
+            paths.extend(self._source_dir.rglob("SKILL.md"))
         return sorted(paths)
 
     def _get_skills_state(self) -> Tuple[float, int]:
@@ -187,7 +220,7 @@ def _parse_frontmatter(content: str) -> Optional[Tuple[Dict[str, str], str]]:
         return None
 
     frontmatter_lines = lines[1:end_idx]
-    body = "\n".join(lines[end_idx + 1 :])
+    body = "\n".join(lines[end_idx + 1:])
     frontmatter: Dict[str, str] = {}
 
     for line in frontmatter_lines:
@@ -197,9 +230,10 @@ def _parse_frontmatter(content: str) -> Optional[Tuple[Dict[str, str], str]]:
         if ":" not in stripped:
             return None
         key, value = stripped.split(":", 1)
-        frontmatter[key.strip()] = value.strip().strip("\"'")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if not key:
+            return None
+        frontmatter[key] = value
 
     return frontmatter, body
-
-
-__all__ = ["SkillLoader", "SkillMeta"]
