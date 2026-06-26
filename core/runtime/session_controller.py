@@ -65,6 +65,7 @@ class AgentSession:
     ):
         self.session_id = session_id
         self.title: str = ""  # auto-set from first user message
+        self.workspace_dir: str = ""  # set in _ensure_agent, used by file download
         self._agent_factory = agent_factory
         self._agent: Any = None  # created lazily on first send_message
         self._thread: Optional[threading.Thread] = None
@@ -163,6 +164,7 @@ class AgentSession:
         # Session-specific workspace
         workspace = Path(os.getcwd()) / ".mycodeagent" / "sessions" / self.session_id
         workspace.mkdir(parents=True, exist_ok=True)
+        self.workspace_dir = str(workspace.resolve())
 
         agent = self._agent_factory()
 

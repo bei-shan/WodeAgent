@@ -547,13 +547,15 @@ def create_app(
     # ═══════════════════════════════════════════════════════════════
 
     def _session_root(sid: str) -> Path:
-        """Get the project root for a session (may differ due to worktree)."""
-        # If session has an active agent, use its project_root.
-        # Otherwise fall back to the shared base root.
+        """Get the workspace root for a session."""
         ctrl: SessionController = app.state.controller
         session = ctrl.get_session(sid)
-        if session is not None and session._agent is not None:
-            return Path(session._agent.project_root).resolve()
+        if session is not None and session.workspace_dir:
+            return Path(session.workspace_dir).resolve()
+        # Fallback: workspace based on session ID
+        ws = Path(".mycodeagent/sessions") / sid
+        if ws.exists():
+            return ws.resolve()
         return Path(app.state.project_root).resolve()
 
     @app.get("/api/sessions/{sid}/files", response_model=FileTreeResponse)
