@@ -250,22 +250,28 @@ function SkillsPanel({ skills, onRefresh }: { skills: SkillInfo[]; onRefresh: ()
         <div className="space-y-2">
           {skills.map((s, i) => {
             const enabled = enabledMap[s.name] !== false
+            const isSource = s.base_dir.startsWith('skills/')  // read-only source skill
             return (
               <div key={i} className={`bg-white border rounded-xl p-4 flex items-start justify-between group transition-opacity ${!enabled ? 'opacity-50 border-gray-100' : 'border-gray-200'}`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-800">{s.name}</span>
+                    {isSource && <span className="text-[10px] bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded-full font-medium">出厂</span>}
+                    {!isSource && <span className="text-[10px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full font-medium">用户</span>}
                     {!enabled && <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">已禁用</span>}
                   </div>
                   <div className="text-sm text-gray-500 mt-0.5">{s.description}</div>
+                  <div className="text-[10px] text-gray-400 mt-0.5 font-mono">{s.base_dir}/SKILL.md</div>
                 </div>
                 <div className="flex items-center gap-2 ml-3 shrink-0">
                   <label className="toggle" title={enabled ? '禁用' : '启用'}>
                     <input type="checkbox" checked={enabled} onChange={() => toggleEnabled(s.name)} />
                     <span className="slider" />
                   </label>
-                  <button onClick={() => deleteSkill(s.name)}
-                    className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 text-sm">删除</button>
+                  {!isSource && (
+                    <button onClick={() => deleteSkill(s.name)}
+                      className="text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 text-sm">删除</button>
+                  )}
                 </div>
               </div>
             )
@@ -337,7 +343,7 @@ function McpPanel({ servers, onRefresh }: { servers: McpServerCfg[]; onRefresh: 
           <button onClick={() => { setShowForm(true); setValidateMsg(''); setInputMode('form') }}
             className="px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors">+ 添加服务器</button>
         </div>
-        <div className="text-xs text-gray-400 mb-3">配置文件: <code className="text-gray-500">mcp_servers.json</code></div>
+        <div className="text-xs text-gray-400 mb-3">配置文件: <code className="text-gray-500">mcp_servers.json</code>（标准 MCP JSON 格式，支持 command/args 或 url 传输）</div>
 
         {showForm && (
           <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4 shadow-sm">
