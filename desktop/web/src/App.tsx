@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import type { SessionInfo, AgentEvent, FileEntry, SkillInfo, McpServerCfg, TeamInfo } from './api'
 
@@ -12,8 +12,8 @@ interface PermRequest { requestId: string; tool: string; path: string; action: s
 interface AskRequest { requestId: string; prompt: string }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
+const GITHUB_URL = 'https://github.com/bei-shan/MyCodeAgent'
 
-// ── Quick scenario tags ────────────────────────────────────────────
 const SCENARIOS = [
   { label: '代码审查', prompt: '请帮我审查以下代码，关注安全性、性能和最佳实践：' },
   { label: '调研报告', prompt: '请针对以下主题进行深度调研，生成一份结构化的报告：' },
@@ -24,15 +24,37 @@ const SCENARIOS = [
 ]
 
 // ═══════════════════════════════════════════════════════════════════════
-// Icons (inline SVGs to avoid icon library dependency)
+// Inline SVG icons (zero dependency)
 // ═══════════════════════════════════════════════════════════════════════
 
+const Svg = ({ d, size = 16, className = '' }: { d: string; size?: number; className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d={d} />
+  </svg>
+)
+
 const Icons = {
-  search:   '🔍', skill: '🎯', clock: '⏱️', folder: '📁',
-  teams:    '👥', download: '📥', settings: '⚙️', plus: '+',
-  send:     '↑', brain: '🧠', check: '✓', cross: '✗',
-  dot:      '●', file: '📄', chat: '💬', agent: '🤖',
-  user:     '👤', lock: '🔒', ask: '❓',
+  search:   'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z',
+  skill:    'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+  clock:    'M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z',
+  folder:   'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z',
+  teams:    'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z',
+  download: 'M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
+  settings: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z',
+  plus:     'M12 5v14m-7-7h14',
+  send:     'M12 19V5m0 0l-7 7m7-7l7 7',
+  brain:    'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z',
+  check:    'M5 13l4 4L19 7',
+  xmark:    'M18 6L6 18M6 6l12 12',
+  dot:      'M12 12h.01',
+  file:     'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
+  chat:     'M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z',
+  user:     'M16 7a4 4 0 11-8 0 4 4 0 018 0z M12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z',
+  lock:     'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z',
+  ask:      'M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01 M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+  doc:      'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M12 18v-6 M9 15h6',
+  asset:    'M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7 M9 3h6 M8 3h8a2 2 0 012 2v1H6V5a2 2 0 012-2z M4 7h16',
+  chevron:  'M6 9l6 6 6-6',
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -42,17 +64,20 @@ const Icons = {
 function PermissionModal({ req, sid, onDone }: { req: PermRequest; sid: string; onDone: () => void }) {
   const decide = async (d: string) => { await api.sessions.resolvePerm(sid, req.requestId, d); onDone() }
   return (
-    <div className="fixed inset-0 bg-black/25 flex items-center justify-center z-50 animate-fade-in" onClick={() => decide('denied')}>
-      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-surface-border" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 text-amber-600 mb-3"><span className="text-xl">{Icons.lock}</span><h2 className="text-lg font-semibold text-surface-text">权限请求</h2></div>
-        <div className="space-y-2 text-sm text-surface-text mb-5">
-          <p><span className="text-surface-muted">工具:</span> <code className="text-brand-600 font-medium">{req.tool}</code></p>
-          <p><span className="text-surface-muted">路径:</span> <code className="text-amber-700 break-all text-xs">{req.path}</code></p>
-          <p><span className="text-surface-muted">操作:</span> {req.action}</p>
+    <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50 animate-fade-in" onClick={() => decide('denied')}>
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-gray-100" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 rounded-full bg-amber-50 flex items-center justify-center text-amber-600"><Svg d={Icons.lock} /></div>
+          <h2 className="text-lg font-semibold text-gray-800">权限请求</h2>
+        </div>
+        <div className="space-y-2 text-sm text-gray-700 mb-5 bg-gray-50 rounded-xl p-3">
+          <p className="flex justify-between"><span className="text-gray-500">工具</span> <code className="text-blue-600 font-medium">{req.tool}</code></p>
+          <p className="flex justify-between"><span className="text-gray-500">路径</span> <code className="text-amber-700 text-xs max-w-[200px] truncate">{req.path}</code></p>
+          <p className="flex justify-between"><span className="text-gray-500">操作</span> {req.action}</p>
         </div>
         <div className="flex gap-3 justify-end">
-          <button onClick={() => decide('denied')} className="px-5 py-2 rounded-xl border border-surface-border text-surface-muted hover:bg-surface-hover transition-colors text-sm font-medium">拒绝</button>
-          <button onClick={() => decide('granted')} className="px-5 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors text-sm font-medium">允许一次</button>
+          <button onClick={() => decide('denied')} className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors text-sm font-medium">拒绝</button>
+          <button onClick={() => decide('granted')} className="px-5 py-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600 transition-colors text-sm font-medium">允许一次</button>
         </div>
       </div>
     </div>
@@ -65,18 +90,20 @@ function PermissionModal({ req, sid, onDone }: { req: PermRequest; sid: string; 
 
 function AskUserModal({ req, sid, onDone }: { req: AskRequest; sid: string; onDone: () => void }) {
   const [answer, setAnswer] = useState('')
-  const submit = async () => { await api.sessions.answerAsk(sid, req.requestId, answer || '(无回答)'); onDone() }
+  const submit = async () => { await api.sessions.answerAsk(sid, req.requestId, answer || '无回答'); onDone() }
   return (
-    <div className="fixed inset-0 bg-black/25 flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-surface-border">
-        <div className="flex items-center gap-2 text-brand-600 mb-3"><span className="text-xl">{Icons.ask}</span><h2 className="text-lg font-semibold text-surface-text">Agent 提问</h2></div>
-        <pre className="text-sm text-surface-text mb-4 whitespace-pre-wrap bg-surface-hover p-3 rounded-xl">{req.prompt}</pre>
+    <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50 animate-fade-in">
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-gray-100">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center text-blue-600"><Svg d={Icons.ask} /></div>
+          <h2 className="text-lg font-semibold text-gray-800">Agent 提问</h2>
+        </div>
+        <pre className="text-sm text-gray-700 mb-4 whitespace-pre-wrap bg-gray-50 p-3 rounded-xl">{req.prompt}</pre>
         <textarea value={answer} onChange={e => setAnswer(e.target.value)} rows={3}
-          className="w-full bg-surface-hover border border-surface-border rounded-xl p-3 text-surface-text text-sm mb-4 resize-none input-focus-ring"
-          placeholder="输入你的回答..."
-          onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) submit() }} />
+          className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm text-gray-800 resize-none input-focus-ring mb-4"
+          placeholder="输入你的回答..." onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) submit() }} />
         <div className="flex gap-3 justify-end">
-          <button onClick={submit} className="px-5 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors text-sm font-medium">回答 (Ctrl+Enter)</button>
+          <button onClick={submit} className="px-5 py-2.5 rounded-xl bg-blue-500 text-white hover:bg-blue-600 transition-colors text-sm font-medium">回答</button>
         </div>
       </div>
     </div>
@@ -84,31 +111,47 @@ function AskUserModal({ req, sid, onDone }: { req: AskRequest; sid: string; onDo
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Tool card — inline in chat
+// Tool card
 // ═══════════════════════════════════════════════════════════════════════
 
 function ToolCard({ tool }: { tool: ToolEntry }) {
   const [expanded, setExpanded] = useState(false)
-  const colors = tool.status === 'running' ? 'border-amber-300 bg-amber-50' : tool.status === 'error' ? 'border-red-300 bg-red-50' : 'border-emerald-300 bg-emerald-50'
-  const dotColor = tool.status === 'running' ? 'text-amber-500 animate-pulse-dot' : tool.status === 'error' ? 'text-red-500' : 'text-emerald-500'
+  const colors = tool.status === 'running' ? 'border-amber-200 bg-amber-50/50' : tool.status === 'error' ? 'border-red-200 bg-red-50/50' : 'border-emerald-200 bg-emerald-50/50'
+  const dot = tool.status === 'running' ? 'bg-amber-400 animate-pulse' : tool.status === 'error' ? 'bg-red-400' : 'bg-emerald-400'
   return (
-    <div className={`ml-10 border rounded-xl px-3 py-2 text-xs animate-slide-up ${colors}`}>
+    <div className={`ml-10 border rounded-xl px-3 py-2 text-xs ${colors} animate-slide-up`}>
       <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
-        <span className={dotColor}>{Icons.dot}</span>
-        <span className="font-medium text-surface-text">{tool.name}</span>
-        <span className="text-surface-muted ml-auto text-[10px]">{expanded ? '收起' : '展开'}</span>
+        <span className={`w-2 h-2 rounded-full ${dot}`} />
+        <span className="font-medium text-gray-700">{tool.name}</span>
+        <span className="text-gray-400 ml-auto text-[10px]">{expanded ? '收起' : '展开'}</span>
       </div>
       {expanded && (
         <div className="mt-2 space-y-1">
-          <div className="text-surface-muted text-[10px] uppercase tracking-wide">Input</div>
-          <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-surface-text overflow-x-auto max-h-24">{JSON.stringify(tool.input, null, 2)}</pre>
+          <div className="text-gray-400 text-[10px] uppercase tracking-wide">Input</div>
+          <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-gray-700 overflow-x-auto max-h-24">{JSON.stringify(tool.input, null, 2)}</pre>
           {tool.output && <>
-            <div className="text-surface-muted text-[10px] uppercase tracking-wide mt-1">Output</div>
-            <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-surface-text overflow-x-auto max-h-40 whitespace-pre-wrap">{tool.output.length > 2000 ? tool.output.slice(0, 2000) + '...(截断)' : tool.output}</pre>
+            <div className="text-gray-400 text-[10px] uppercase tracking-wide mt-1">Output</div>
+            <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-gray-700 overflow-x-auto max-h-40 whitespace-pre-wrap">{tool.output.length > 2000 ? tool.output.slice(0, 2000) + '...' : tool.output}</pre>
           </>}
         </div>
       )}
     </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Sidebar navigation item
+// ═══════════════════════════════════════════════════════════════════════
+
+function NavItem({ icon, label, active, onClick }: { icon: string; label: string; active?: boolean; onClick?: () => void }) {
+  return (
+    <button onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors ${
+        active ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-800'
+      }`}>
+      <Svg d={icon} size={18} />
+      <span>{label}</span>
+    </button>
   )
 }
 
@@ -126,26 +169,34 @@ export default function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
 
-  // Config state
+  // Config
   const [agentTeams, setAgentTeams] = useState(false)
   const [thinkingLevel, setThinkingLevel] = useState('medium')
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([])
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'>('sessions')
   const [showNewTeam, setShowNewTeam] = useState(false)
   const [newTeamName, setNewTeamName] = useState('')
 
-  // Panels
+  // Sidebar state
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'>('sessions')
+  const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([])
   const [fileCwd, setFileCwd] = useState('.')
 
+  // Models
+  const [models, setModels] = useState<api.ModelInfo[]>([])
+  const [showModelPicker, setShowModelPicker] = useState(false)
+
   const chatEndRef = useRef<HTMLDivElement>(null)
   const disconnectRef = useRef<(() => void) | null>(null)
 
-  // ── Sessions ────────────────────────────────────────────────────
+  // ── Init ────────────────────────────────────────────────────────
   const loadSessions = async () => { try { setSessions(await api.sessions.list()) } catch {} }
   useEffect(() => { loadSessions() }, [])
+  useEffect(() => { api.info.models().then(setModels).catch(() => {}) }, [])
+  useEffect(() => { api.skills.list().then(setSkillsList).catch(() => {}) }, [])
+  useEffect(() => { api.mcp.list().then(setMcpServers).catch(() => {}) }, [])
 
   const selectSession = async (sid: string) => {
     disconnectRef.current?.()
@@ -163,11 +214,9 @@ export default function App() {
     try { await api.sessions.delete(sid); setSessions(prev => prev.filter(s => s.id !== sid)); if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() } } catch {}
   }
 
-  // ── Agent teams toggle ──────────────────────────────────────────
   const toggleTeams = async () => {
     if (!activeSid) return
-    const next = !agentTeams
-    setAgentTeams(next)
+    const next = !agentTeams; setAgentTeams(next)
     try { await api.config.update(activeSid, { enable_agent_teams: next }); setTeamsList(await api.teams.list(activeSid)) } catch { setAgentTeams(!next) }
   }
 
@@ -176,20 +225,13 @@ export default function App() {
     try { await api.teams.create(activeSid, newTeamName.trim()); setTeamsList(await api.teams.list(activeSid)); setNewTeamName(''); setShowNewTeam(false) } catch (e: any) { alert(e.message) }
   }
 
-  // ── Sidebar panels data ─────────────────────────────────────────
-  const loadSidebarData = async () => {
-    try { setSkillsList(await api.skills.list()) } catch {}
-    try { setMcpServers(await api.mcp.list()) } catch {}
-  }
-  useEffect(() => { loadSidebarData() }, [])
-
   const loadFiles = async (path: string) => {
     if (!activeSid) return
     try { const tree = await api.files.tree(activeSid, path); setFileEntries(tree.entries); setFileCwd(tree.path) } catch {}
   }
   useEffect(() => { if (activeSid) loadFiles('.') }, [activeSid])
 
-  // ── Event handler ───────────────────────────────────────────────
+  // ── Events ──────────────────────────────────────────────────────
   const handleEvent = (event: AgentEvent) => {
     const { type, payload } = event
     switch (type) {
@@ -206,8 +248,8 @@ export default function App() {
       case 'run.finished': setSending(false); loadSessions(); break
       case 'permission.requested': setPermReq({ requestId: payload.request_id, tool: payload.tool, path: payload.path, action: payload.action }); break
       case 'ask_user.requested': setAskReq({ requestId: payload.request_id, prompt: payload.prompt }); break
-      case 'turn.completed': setSending(false); loadSessions(); if (activeSid) { try { api.teams.list(activeSid).then(setTeamsList) } catch {} }; break
-      case 'error': setMessages(prev => [...prev, { id: uid(), role: 'assistant', content: `❌ ${payload.message}` }]); setSending(false); break
+      case 'turn.completed': setSending(false); loadSessions(); if (activeSid) { api.teams.list(activeSid).then(setTeamsList).catch(() => {}) }; break
+      case 'error': setMessages(prev => [...prev, { id: uid(), role: 'assistant', content: `${payload.message}` }]); setSending(false); break
     }
   }
 
@@ -220,283 +262,348 @@ export default function App() {
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
     try { await api.sessions.send(activeSid, content) } catch (e: any) {
-      setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `❌ ${e.message}`, streaming: false } : m)); setSending(false)
+      setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `${e.message}`, streaming: false } : m)); setSending(false)
     }
   }
 
   const fillScenario = (prompt: string) => { setInput(prompt) }
-
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
-
-  // ── Model selector ──────────────────────────────────────────────
-  const [models, setModels] = useState<api.ModelInfo[]>([])
-  const [showModelPicker, setShowModelPicker] = useState(false)
-  useEffect(() => { api.info.models().then(setModels).catch(() => {}) }, [])
 
   // ═══════════════════════════════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════════════════════════════
 
-  const sidebarTabs = [
-    { key: 'sessions' as const, label: '会话', icon: Icons.chat },
-    { key: 'files' as const, label: '文件', icon: Icons.folder },
-    { key: 'skills' as const, label: '技能', icon: Icons.skill },
-    { key: 'mcp' as const, label: 'MCP', icon: Icons.settings },
+  const navItems = [
+    { key: 'sessions' as const, icon: Icons.chat, label: '会话' },
+    { key: 'files' as const, icon: Icons.folder, label: '文件' },
+    { key: 'skills' as const, icon: Icons.skill, label: '技能' },
+    { key: 'mcp' as const, icon: Icons.settings, label: 'MCP' },
   ]
 
   return (
-    <div className="flex h-screen bg-surface-bg overflow-hidden">
-      {/* ═════════════════════ LEFT SIDEBAR ═══════════════════════ */}
-      <aside className="w-64 bg-surface-bg border-r border-surface-border flex flex-col shrink-0">
-        {/* Brand + New Task */}
-        <div className="px-4 py-4 border-b border-surface-border">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-xl">🐱</span>
-            <span className="font-bold text-surface-text text-lg">MyCodeAgent</span>
+    <div className="fixed inset-0 flex bg-[#F9FAFB] text-gray-800 overflow-hidden">
+      {/* ═══════════════ LEFT SIDEBAR ═══════════════ */}
+      <aside className="w-64 flex flex-col border-r border-gray-100 bg-white shrink-0">
+        {/* Logo */}
+        <div className="px-4 pt-4 pb-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            </div>
+            <span className="font-bold text-gray-800 text-lg">MyCodeAgent</span>
           </div>
+        </div>
+
+        {/* New task button */}
+        <div className="px-4 pb-3">
           <button onClick={createSession}
-            className="w-full py-2.5 rounded-xl bg-brand-500 text-white text-sm font-semibold hover:bg-brand-600 transition-colors shadow-sm">
+            className="w-full py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 transition-colors">
             + 新建任务
           </button>
         </div>
 
-        {/* Nav tabs */}
-        <div className="flex border-b border-surface-border px-2">
-          {sidebarTabs.map(t => (
-            <button key={t.key} onClick={() => setSidebarTab(t.key)}
-              className={`flex-1 py-2.5 text-xs font-medium transition-colors rounded-t-lg ${
-                sidebarTab === t.key ? 'text-brand-600 border-b-2 border-brand-500' : 'text-surface-muted hover:text-surface-text'
-              }`}>{t.icon} {t.label}</button>
-          ))}
-        </div>
-
-        {/* Sidebar content */}
-        <div className="flex-1 overflow-y-auto">
-          {sidebarTab === 'sessions' && (
-            <div className="p-3 space-y-1">
-              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">最近任务</div>
-              {sessions.map(s => (
-                <div key={s.id} onClick={() => selectSession(s.id)}
-                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
-                    s.id === activeSid ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-surface-hover text-surface-text'
-                  }`}>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${s.busy ? 'bg-amber-400 animate-pulse-dot' : 'bg-emerald-400'}`} />
-                    <span className="truncate">{s.title || s.id.slice(0, 8)}</span>
-                  </div>
-                  <button onClick={e => { e.stopPropagation(); deleteSession(s.id) }}
-                    className="text-surface-dim hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none">×</button>
-                </div>
-              ))}
-              {sessions.length === 0 && <div className="text-surface-muted text-xs text-center py-6">暂无任务记录</div>}
-            </div>
-          )}
-
-          {sidebarTab === 'files' && (
-            <div className="p-3">
-              <div className="flex items-center gap-1 text-xs text-surface-muted mb-2">
-                <button onClick={() => loadFiles('.')} className="hover:text-brand-500">~</button><span>/</span><span className="text-surface-text">{fileCwd}</span>
-              </div>
-              <div className="space-y-0.5 max-h-96 overflow-y-auto">
-                {fileEntries.map(e => (
-                  <div key={e.path} onClick={() => e.type === 'directory' && loadFiles(e.path)}
-                    className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors ${
-                      e.type === 'directory' ? 'text-brand-600 hover:bg-brand-50' : 'text-surface-text hover:bg-surface-hover'
-                    }`}>
-                    <span>{e.type === 'directory' ? Icons.folder : Icons.file}</span>
-                    <span className="truncate">{e.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {sidebarTab === 'skills' && (
-            <div className="p-3 space-y-1">
-              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">已安装技能</div>
-              {skillsList.map(s => (
-                <div key={s.name} className="px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition-colors cursor-pointer text-surface-text">
-                  <div className="font-medium text-brand-700 truncate">{s.name}</div>
-                  <div className="text-[11px] text-surface-muted truncate">{s.description}</div>
-                </div>
-              ))}
-              {skillsList.length === 0 && <div className="text-surface-muted text-xs text-center py-4">暂无技能</div>}
-            </div>
-          )}
-
-          {sidebarTab === 'mcp' && (
-            <div className="p-3 space-y-1">
-              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">MCP 服务器</div>
-              {mcpServers.map(s => (
-                <div key={s.name} className="px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition-colors cursor-pointer text-surface-text">
-                  <div className="font-medium truncate">{s.name}</div>
-                  <div className="text-[11px] text-surface-muted truncate font-mono">{s.command} {s.args.join(' ')}</div>
-                </div>
-              ))}
-              {mcpServers.length === 0 && <div className="text-surface-muted text-xs text-center py-4">未配置 MCP</div>}
-            </div>
-          )}
-        </div>
-
-        {/* Agent Teams section */}
-        <div className="border-t border-surface-border p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-surface-muted uppercase tracking-wide">{Icons.teams} Agent 团队</span>
-            <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={!activeSid} /><span className="slider" /></label>
+        {/* Agent teams toggle — below new task, above nav */}
+        <div className="px-4 pb-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Agent 团队</span>
+            <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} /><span className="slider" /></label>
           </div>
           {agentTeams && (
-            <div className="space-y-1 max-h-32 overflow-y-auto">
+            <div className="mt-2 space-y-0.5">
               {teamsList.map(t => (
-                <div key={t.name} className="flex items-center justify-between px-2 py-1 text-xs text-surface-text hover:bg-surface-hover rounded-lg transition-colors">
-                  <span className="font-medium">{t.name}</span>
-                  <span className="text-surface-muted">{t.running}跑 {t.succeeded}成 {t.failed}败</span>
+                <div key={t.name} className="flex items-center justify-between px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
+                  <div className="flex items-center gap-2">
+                    <Svg d={Icons.teams} size={13} />
+                    <span className="font-medium">{t.name}</span>
+                  </div>
+                  <span className="text-gray-400 text-[10px]">{t.running}跑 {t.succeeded}成</span>
                 </div>
               ))}
               <button onClick={() => setShowNewTeam(true)}
-                className="w-full text-xs text-brand-500 hover:text-brand-600 py-1 text-left font-medium">+ 创建团队</button>
+                className="w-full text-xs text-blue-500 hover:text-blue-600 py-1 text-left font-medium flex items-center gap-1">
+                <Svg d={Icons.plus} size={11} /> 创建团队
+              </button>
               {showNewTeam && (
                 <div className="flex gap-1 mt-1">
                   <input value={newTeamName} onChange={e => setNewTeamName(e.target.value)}
-                    placeholder="团队名称" className="flex-1 bg-surface-hover border border-surface-border rounded-lg px-2 py-1 text-xs input-focus-ring" />
-                  <button onClick={createTeam} className="px-2 py-1 bg-brand-500 text-white rounded-lg text-xs font-medium hover:bg-brand-600">创建</button>
+                    placeholder="团队名称" className="flex-1 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 text-xs input-focus-ring" />
+                  <button onClick={createTeam} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 whitespace-nowrap">创建</button>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* User footer */}
-        <div className="border-t border-surface-border px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 text-xs font-bold">U</div>
-            <div className="text-xs text-surface-text font-medium">用户</div>
+        {/* Navigation menu */}
+        <nav className="flex-1 overflow-y-auto px-3 space-y-0.5">
+          {navItems.map(item => (
+            <NavItem key={item.key} icon={item.icon} label={item.label}
+              active={sidebarTab === item.key}
+              onClick={() => setSidebarTab(item.key)} />
+          ))}
+
+          {/* Collapsible "More" group */}
+          <div className="pt-2">
+            <button onClick={() => setMoreOpen(!moreOpen)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <Svg d={Icons.chevron} size={14} className={`transition-transform duration-200 ${moreOpen ? 'rotate-180' : ''}`} />
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">更多</span>
+              </div>
+            </button>
+            {moreOpen && (
+              <div className="ml-2 space-y-0.5 mt-0.5 animate-slide-up">
+                <div className="px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3">
+                  <Svg d={Icons.clock} size={16} /><span>定时任务</span>
+                </div>
+                <div className="px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3">
+                  <Svg d={Icons.asset} size={16} /><span>资产</span>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="flex gap-1">
-            <button className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-hover text-surface-muted text-sm" title="下载">{Icons.download}</button>
-            <button className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-hover text-surface-muted text-sm" title="设置">{Icons.settings}</button>
+
+          {/* Recent tasks group */}
+          <div className="pt-4">
+            <div className="px-3 pb-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">最近</div>
+            <div className="space-y-0.5">
+              {sessions.slice(0, 8).map(s => (
+                <div key={s.id} onClick={() => selectSession(s.id)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
+                    s.id === activeSid ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
+                  }`}>
+                  <span className="truncate text-[13px]">{s.title || s.id.slice(0, 8)}</span>
+                </div>
+              ))}
+              {sessions.length === 0 && (
+                <div className="px-3 py-4 text-center">
+                  <div className="text-xs text-gray-400">暂无任务记录</div>
+                  <div className="text-[11px] text-gray-300 mt-1">经典版对话记录请在用户菜单中切换查看</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </nav>
+
+        {/* Bottom: download + user */}
+        <div className="border-t border-gray-100 px-4 py-3 space-y-2">
+          <a href={GITHUB_URL} target="_blank" rel="noopener"
+            className="w-full flex items-center gap-2.5 px-2 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors no-underline">
+            <Svg d={Icons.download} size={16} />
+            <span>下载 CLI</span>
+          </a>
+          <div className="flex items-center gap-2.5 px-2">
+            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
+              <Svg d={Icons.user} size={12} />
+            </div>
+            <span className="text-sm text-gray-600">sam</span>
           </div>
         </div>
       </aside>
 
-      {/* ═════════════════════ RIGHT MAIN AREA ════════════════════ */}
-      <main className="flex-1 flex flex-col min-w-0 bg-surface-bg">
+      {/* ═══════════════ RIGHT MAIN ═══════════════ */}
+      <main className="flex-1 flex flex-col min-w-0 bg-[#F9FAFB]">
         {/* Top bar */}
-        <header className="px-6 py-3 border-b border-surface-border flex items-center justify-end shrink-0 gap-3">
-          {sending && <span className="text-xs text-brand-500 animate-pulse-dot font-medium">Agent 处理中…</span>}
-          <button className="px-3 py-1.5 text-xs text-surface-muted hover:text-surface-text hover:bg-surface-hover rounded-lg transition-colors">{Icons.download} 导出</button>
-          <button className="px-3 py-1.5 text-xs text-surface-muted hover:text-surface-text hover:bg-surface-hover rounded-lg transition-colors">{Icons.settings} 设置</button>
+        <header className="px-6 py-4 flex items-center justify-end shrink-0 gap-3">
+          {sending && <span className="text-xs text-blue-500 font-medium mr-2">Agent 处理中…</span>}
+          <a href={GITHUB_URL} target="_blank" rel="noopener"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
+            <Svg d={Icons.doc} size={16} />
+            <span>文档</span>
+          </a>
+          <a href={GITHUB_URL} target="_blank" rel="noopener"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
+            <Svg d={Icons.download} size={16} />
+            <span>下载 CLI</span>
+          </a>
         </header>
 
-        {/* Scrollable chat area */}
-        <div className="flex-1 overflow-y-auto px-6">
-          {messages.length === 0 && !sending ? (
-            /* ── Empty state: hero + input center ── */
-            <div className="flex flex-col items-center justify-center min-h-full max-w-2xl mx-auto py-12">
-              <h1 className="text-2xl font-bold text-surface-text mb-2 tracking-tight">今天想做什么？</h1>
-              <p className="text-surface-muted text-sm mb-8">描述你的需求，Agent 将自动调用工具完成任务</p>
+        {/* ── Skills management panel ── */}
+        {sidebarTab === 'skills' && (
+          <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+            <div className="max-w-3xl mx-auto py-8 px-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-gray-800">技能管理</h2>
+                <button onClick={() => { setSkillsList(prev => [...prev, { name: '', description: '', base_dir: '' }]) }}
+                  className="px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors">+ 新建技能</button>
+              </div>
+              <div className="text-xs text-gray-400 mb-3">扫描目录: <code className="text-gray-500">skills/&lt;name&gt;/SKILL.md</code> 和 <code className="text-gray-500">.skill/*.md</code></div>
+              <div className="space-y-2">
+                {skillsList.map((s, i) => (
+                  <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-gray-800">{s.name || '(新技能)'}</span>
+                      <span className="text-[11px] text-gray-400">{s.base_dir}</span>
+                    </div>
+                    <div className="text-sm text-gray-500">{s.description || '暂无描述'}</div>
+                  </div>
+                ))}
+                {skillsList.length === 0 && (
+                  <div className="text-center py-12 text-gray-400 text-sm">
+                    暂无技能。在 <code className="text-gray-500">skills/</code> 或 <code className="text-gray-500">.skill/</code> 目录下创建 <code className="text-gray-500">SKILL.md</code> 文件即可自动识别。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
-              {/* Large input */}
-              <div className="w-full relative mb-6">
-                <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                  disabled={!activeSid || sending} rows={3}
-                  placeholder={activeSid ? '描述你的需求…' : '请先创建会话'}
-                  className="w-full bg-surface-bg border border-surface-border rounded-3xl px-6 py-4 text-surface-text resize-none input-focus-ring shadow-input text-[15px] leading-relaxed disabled:opacity-40"
-                />
-                {/* Input accessories */}
-                <div className="absolute bottom-3 left-4 flex items-center gap-2">
-                  <button className="w-8 h-8 rounded-full bg-surface-hover flex items-center justify-center text-surface-muted hover:bg-surface-active hover:text-surface-text transition-colors text-sm" title="添加附件">{Icons.plus}</button>
-                  {agentTeams && <span className="text-[11px] bg-brand-50 text-brand-600 px-2 py-0.5 rounded-full font-medium">{Icons.teams} Agent 团队</span>}
-                </div>
-                <div className="absolute bottom-3 right-4 flex items-center gap-2">
-                  {/* Thinking toggle */}
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <span className="text-[11px] text-surface-muted">{Icons.brain} 深度思考</span>
-                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-                  </label>
+        {/* ── MCP management panel ── */}
+        {sidebarTab === 'mcp' && (
+          <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+            <div className="max-w-3xl mx-auto py-8 px-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-gray-800">MCP 服务器</h2>
+                <button onClick={() => {/* handled inline */}}
+                  className="px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors">+ 添加服务器</button>
+              </div>
+              <div className="text-xs text-gray-400 mb-3">配置文件: <code className="text-gray-500">mcp_servers.json</code></div>
+              <div className="space-y-2">
+                {mcpServers.map((s, i) => (
+                  <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-medium text-gray-800">{s.name}</span>
+                        <div className="text-xs text-gray-500 font-mono mt-0.5">{s.command} {s.args.join(' ')}</div>
+                      </div>
+                      <button onClick={async () => { try { await api.mcp.delete(s.name); setMcpServers(await api.mcp.list()) } catch {} }}
+                        className="text-gray-400 hover:text-red-500 transition-colors text-sm">删除</button>
+                    </div>
+                  </div>
+                ))}
+                {mcpServers.length === 0 && (
+                  <div className="text-center py-12 text-gray-400 text-sm">
+                    暂无 MCP 服务器。编辑项目根目录的 <code className="text-gray-500">mcp_servers.json</code> 添加配置。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Chat / empty state ── */}
+        {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (
+          <div className="flex-1 flex flex-col items-center justify-center px-8">
+            <h1 className="text-[28px] font-bold text-gray-800 mb-12 tracking-tight">Hi, 我是 MyCodeAgent</h1>
+
+            {/* Input card — white, shadow, accessories bar above textarea */}
+            <div className="w-full max-w-4xl bg-white rounded-2xl border border-gray-200 shadow-sm">
+              {/* Accessories bar — left/right groups, above textarea */}
+              <div className="flex items-center justify-between px-5 pt-4 pb-2">
+                <div className="flex items-center gap-3">
                   {/* Model selector */}
                   <div className="relative">
                     <button onClick={() => setShowModelPicker(!showModelPicker)}
-                      className="px-2.5 py-1 text-[11px] text-surface-muted hover:text-surface-text bg-surface-hover rounded-lg transition-colors font-mono">
-                      {models[0]?.name || 'Model'}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                      <Svg d={Icons.brain} size={16} />
+                      <span>{models[0]?.model || 'Model'}</span>
+                      <Svg d={Icons.chevron} size={12} className="text-gray-400" />
                     </button>
                     {showModelPicker && models.length > 0 && (
-                      <div className="absolute bottom-full right-0 mb-1 bg-white border border-surface-border rounded-xl shadow-lg py-1 z-10 min-w-[140px]">
+                      <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-10 min-w-[180px]">
                         {models.map(m => (
                           <button key={m.name} onClick={() => setShowModelPicker(false)}
-                            className="block w-full text-left px-3 py-1.5 text-xs text-surface-text hover:bg-surface-hover transition-colors">{m.name}</button>
+                            className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">{m.model}</button>
                         ))}
                       </div>
                     )}
                   </div>
-                  {/* Send button */}
+                  {/* Deep thinking toggle */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-sm text-gray-500">深度思考</span>
+                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                  </label>
+                  {/* Agent teams tag */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-sm text-gray-500">Agent 团队</span>
+                    <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} /><span className="slider" /></label>
+                  </label>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Microphone placeholder */}
+                  <button className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 transition-colors">
+                    <Svg d={Icons.brain} size={17} />
+                  </button>
+                  {/* Send */}
                   <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
-                    className="w-9 h-9 rounded-full bg-brand-500 text-white flex items-center justify-center hover:bg-brand-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shadow-sm text-sm font-bold">{Icons.send}</button>
+                    className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+                    <Svg d={Icons.send} size={17} />
+                  </button>
                 </div>
               </div>
-
-              {/* Quick scenario tags */}
-              <div className="flex flex-wrap gap-2 justify-center">
-                {SCENARIOS.map(s => (
-                  <button key={s.label} onClick={() => fillScenario(s.prompt)}
-                    className="px-3 py-1.5 rounded-full border border-surface-border text-xs text-surface-muted hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition-colors">
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Mode switch */}
-              <button className="mt-10 text-xs text-surface-dim hover:text-surface-muted transition-colors">切换到经典模式</button>
+              {/* Textarea */}
+              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                disabled={sending} rows={2}
+                placeholder={activeSid ? "问任何问题" : "点击左侧「+ 新建任务」开始…"}
+                className="w-full bg-transparent px-5 pb-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
+              />
             </div>
-          ) : (
-            /* ── Chat messages ── */
-            <div className="max-w-3xl mx-auto py-6 space-y-5">
+
+            {/* Quick tags */}
+            <div className="flex flex-wrap gap-2 justify-center mt-5">
+              {SCENARIOS.map(s => (
+                <button key={s.label} onClick={() => fillScenario(s.prompt)}
+                  className="px-3.5 py-1.5 rounded-full border border-gray-200 text-xs text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 transition-colors bg-white">
+                  {s.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Mode switch */}
+            <button className="mt-12 text-xs text-gray-300 hover:text-gray-500 transition-colors">切换到经典</button>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+            <div className="max-w-4xl mx-auto py-6 px-6 space-y-5">
               {messages.map(msg => (
                 <div key={msg.id} className={`flex gap-3 animate-slide-up ${msg.role === 'user' ? 'justify-end' : ''}`}>
                   {msg.role === 'assistant' && (
-                    <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 text-sm shrink-0 mt-0.5">{Icons.agent}</div>
+                    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 shrink-0 mt-0.5">
+                      <Svg d={Icons.chat} size={16} />
+                    </div>
                   )}
                   <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${
-                    msg.role === 'user' ? 'bg-brand-500 text-white' : 'bg-surface-hover text-surface-text border border-surface-border'
+                    msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-50 text-gray-800 border border-gray-100'
                   }`}>
                     <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${msg.streaming ? 'cursor-blink' : ''}`}>
                       {msg.content || (msg.streaming ? '' : '(空)')}
                     </div>
-                    {msg.step && <div className="text-[10px] opacity-50 mt-1">Step {msg.step}</div>}
+                    {msg.step && <div className="text-[10px] opacity-40 mt-1">Step {msg.step}</div>}
                   </div>
                 </div>
               ))}
-              {/* Inline tool cards */}
-              {tools.filter(t => !messages.find(m => m.step === t.step)).map(t => (
-                <ToolCard key={t.id} tool={t} />
-              ))}
               <div ref={chatEndRef} />
             </div>
-          )}
-        </div>
+          </div>
+        ))}
 
-        {/* Bottom input bar (when chat has started) */}
-        {messages.length > 0 && (
-          <div className="px-6 py-4 border-t border-surface-border bg-surface-bg shrink-0">
-            <div className="max-w-3xl mx-auto relative">
-              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                disabled={!activeSid || sending} rows={2}
-                placeholder="继续对话… (Enter 发送)"
-                className="w-full bg-surface-hover border border-surface-border rounded-2xl px-4 py-3 text-sm text-surface-text resize-none input-focus-ring disabled:opacity-40 pr-28"
-              />
-              <div className="absolute bottom-2 right-3 flex items-center gap-2">
-                <label className="flex items-center gap-1 cursor-pointer select-none">
-                  <span className="text-[10px] text-surface-muted">{Icons.brain}</span>
-                  <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-                </label>
+        {/* Bottom input (when chat started) */}
+        {sidebarTab === 'sessions' && messages.length > 0 && (
+          <div className="px-6 py-4 shrink-0">
+            <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-gray-200 shadow-sm">
+              <div className="flex items-center justify-between px-5 pt-4 pb-2">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-sm text-gray-500">深度思考</span>
+                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                  </label>
+                </div>
                 <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
-                  className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center hover:bg-brand-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm font-bold">{Icons.send}</button>
+                  className="w-8 h-8 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+                  <Svg d={Icons.send} size={15} />
+                </button>
               </div>
+              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                disabled={sending} rows={2}
+                placeholder="继续对话… (Enter 发送)"
+                className="w-full bg-transparent px-5 pb-5 text-sm text-gray-800 resize-none disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
+              />
             </div>
           </div>
         )}
       </main>
 
-      {/* ── Modals ──────────────────────────────────────────────── */}
+      {/* Modals */}
       {permReq && activeSid && <PermissionModal req={permReq} sid={activeSid} onDone={() => setPermReq(null)} />}
       {askReq && activeSid && <AskUserModal req={askReq} sid={activeSid} onDone={() => setAskReq(null)} />}
     </div>

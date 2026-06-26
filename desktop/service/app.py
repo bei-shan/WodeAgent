@@ -496,10 +496,10 @@ def create_app(
 
     @app.get("/api/models", response_model=list[ModelInfo])
     async def list_models():
-        """List available LLM model profiles."""
+        """List available LLM model profiles — always returns at least one."""
         from core.model_profiles import load_model_profiles
         profiles = load_model_profiles()
-        return [
+        result = [
             ModelInfo(
                 name=p.name,
                 model=p.model,
@@ -508,6 +508,16 @@ def create_app(
             )
             for p in profiles.values()
         ]
+        if not result:
+            # Fallback: return the current default model from env.
+            import os
+            result.append(ModelInfo(
+                name="default",
+                model=os.getenv("LLM_MODEL_ID", "deepseek-v4-flash"),
+                provider=os.getenv("LLM_PROVIDER", "deepseek"),
+                base_url=os.getenv("LLM_BASE_URL", ""),
+            ))
+        return result
 
     @app.get("/api/tools", response_model=list[ToolInfo])
     async def list_tools():

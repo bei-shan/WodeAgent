@@ -1,7 +1,7 @@
 # AgentTeams 功能设计文档（MVP v2 实现对齐版）
 
-> 最后更新：2026-06-18
-> v2 变更：新增 TeamList/TeamRetry 工具、Worker 健康统计、inbox 增量读取、存储上限、审批持久化、角色化系统提示词
+> 最后更新：2026-06-26
+> v3 变更：补充生产化状态，TeamManager 生命周期单一所有权、worktree root rebinding、message status JSONL 持久化、approval JSON 文件级持久化、worker LLM retry 加固、TeamRetry 状态校验。详见 `docs/design/2026-06-26-team-engine-production-hardening.md`。
 
 ## 1. 目标与范围
 
@@ -13,15 +13,14 @@ MVP 目标：
 3. 保持 `Task(mode=oneshot)` 兼容，不破坏原有一次性子代理路径。
 4. 通过 feature flag 可快速关闭与回滚。
 
-MVP v2 新增（2026-06-18）：
-1. Worker 退出感知（`on_stop` 回调）。
-2. 消息去重持久化（`processed_messages` 入快照）。
-3. 审批请求会话恢复。
-4. Inbox 增量读取（cursor 机制）。
-5. 存储文件上限自动截断。
-6. Worker 健康统计（`messages_processed`、`work_items_executed`）。
-7. 角色化 TurnExecutor 系统提示词。
-8. 新增 `TeamList`、`TeamRetry` 工具。
+MVP v3 生产化加固（2026-06-26）：
+1. `TeamManager` 改为由 `AgentTeamsFeature` 单一初始化，避免重复 sweep thread。
+2. `CodeAgent.close()` 显式关闭 `TeamManager`。
+3. worktree enter/exit 会重绑定路径型工具、permission gate、SkillLoader、ContextBuilder 与 worker 执行根。
+4. MessageRouter 的 delivered/processed 状态写入 `.teams/<team>/message_status.jsonl`，启动时恢复。
+5. ApprovalService 的 pending/approved/rejected/dispatched 状态写入 `.teams/<team>/approvals.json`，启动时恢复。
+6. Worker LLM retry 改为异常类/status_code/字符串综合判断，并支持 `TEAM_LLM_MAX_RETRIES`、`TEAM_LLM_RETRY_BACKOFF`。
+7. `TeamRetry` 只允许重试 failed/canceled work item。
 
 MVP 非目标：
 1. 不做完整的多窗格交互 UI（如 Shift+Up/Down 焦点切换）。
@@ -115,9 +114,13 @@ work item 状态：
 1. `.teams/<team>/config.json`
 2. `members` 中保留 `name/role/tool_policy`
 
-消息存储：
-1. `.teams/<team>/<member>_inbox.jsonl`
-2. inbox 追加写入，配合锁保护。
+消息状态索引：
+1. `.teams/<team>/message_status.jsonl`
+2. 保存 delivered/processed 最新状态，用于重启后恢复 message counts 与 recent messages。
+
+审批状态存储：
+1. `.teams/<team>/approvals.json`
+2. 保存 pending/approved/rejected/dispatched 全状态，用于崩溃或重启后恢复 plan approval gate。
 
 并行工作项存储：
 1. `.teams/<team>/work_items/work_items_<teammate>.jsonl`
@@ -178,12 +181,17 @@ MVP 验收重点：
 2. in-process teammate 不是完整独立会话恢复（当前为状态恢复）。
 3. shutdown 协议是可用基线，未扩展复杂拒绝/协商状态机。
 4. TaskTool 语义分层未拆分（`Task` + `TeamSpawn`），Task 持续承载 oneshot/persistent/parallel 三种模式。
+5. Worktree 下 team store 仍固定在 TeamManager 创建时目录；当前只保证 worker 执行根随 active worktree 变化。
+
+### v3 已解决的限制
+
+- ApprovalService 文件级持久化不足 → 已通过 `.teams/<team>/approvals.json` 保存 pending/approved/rejected/dispatched 全状态
 
 ### v2 已解决的限制
 
 - Worker 空闲退出无感知 → 已通过 `on_stop` 回调解决
-- 消息去重不持久化 → 已通过 `export_state`/`import_state` 解决
-- 审批请求重启丢失 → 已通过快照恢复解决
+- 消息去重不持久化 → delivered/processed 状态已写入 `message_status.jsonl`，processed/cursor 仍进入 session snapshot
+- 审批请求重启丢失 → 已通过 `.teams/<team>/approvals.json` 文件级持久化解决
 - Inbox 全量读取 → 已通过 `_inbox_cursor` 增量读取解决
 - 存储文件无限增长 → 已通过 `_trim_jsonl` 和配置上限解决
 - Worker 健康状态不透明 → 已通过 `team_state` 详细统计解决
@@ -221,6 +229,8 @@ MVP 验收重点：
 8. `TEAM_WORKER_MAX_STEPS`（默认 `8`）
 9. `TEAM_MAX_INBOX_SIZE`（默认 `10000`，v2 新增）
 10. `TEAM_MAX_WORK_ITEMS`（默认 `5000`，v2 新增）
+11. `TEAM_LLM_MAX_RETRIES`（默认 `2`，v3 新增）
+12. `TEAM_LLM_RETRY_BACKOFF`（默认 `0.2`，v3 新增）
 
 ---
 

@@ -32,6 +32,26 @@ class ApprovalService:
                 if self._requests[req_id].get("team_name") == normalized_team:
                     self._requests.pop(req_id, None)
 
+    def restore_requests(self, requests: List[Dict[str, Any]]) -> None:
+        """Merge persisted or snapshot approval requests into memory."""
+        with self._lock:
+            for row in requests or []:
+                if not isinstance(row, dict):
+                    continue
+                request_id = str(row.get("request_id") or "").strip()
+                if request_id:
+                    self._requests[request_id] = dict(row)
+
+    def upsert_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Store a single approval request in memory and return a copy."""
+        row = dict(request or {})
+        request_id = str(row.get("request_id") or "").strip()
+        if not request_id:
+            return {}
+        with self._lock:
+            self._requests[request_id] = row
+        return dict(row)
+
     def create_request(self, team_name: str, teammate: str, task_id: str, subject: str) -> Dict[str, Any]:
         now = time.time()
         request_id = f"req_{uuid.uuid4().hex[:10]}"

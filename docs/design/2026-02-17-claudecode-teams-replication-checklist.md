@@ -267,13 +267,25 @@
 
 ## 8. 对当前仓库的明确结论
 
+> 更新：2026-06-26。该 checklist 原本用于规划 Claude Teams 复刻路线；其中 A1/A2/A3/A4 等核心能力现在已在 AgentTeams MVP 中落地。当前重点已从“补齐核心复刻”转为“生产化加固”。最新状态见：
+>
+> - `docs/agent_teams/AgentTeams功能设计文档.md`
+> - `docs/design/2026-06-26-team-engine-production-hardening.md`
+
 当前版本是：
 - **并行执行 MVP：已达标**
-- **Claude Teams 完整复刻：未达标**
+- **Claude Teams 核心复刻：功能面基本达标**
+- **生产化可用：仍未完全达标**
 
-距离“完整复刻”最关键的缺口：
-1. **共享任务看板 + 自动认领（A2/A3）**
-2. **消息协议全量（A1）**
-3. **审批闸门（A4）**
+已补齐的核心能力：
+1. 共享任务看板 + claim + 依赖阻塞/解锁。
+2. `message` / `broadcast` / shutdown request-response / plan approval response。
+3. Plan approval 闸门。
+4. teammate 自动执行 message/fanout/approved work item。
+5. save/load 后可恢复团队状态并 requeue running work。
 
-优先把这三块补齐，再做 tmux/display mode 这类体验层。
+当前生产化缺口：
+1. Worktree + Team 的隔离策略仍可增强；当前 worker 执行根随 active worktree，team store 仍固定在 TeamManager 创建目录。
+2. Manager 职责仍偏大，可继续拆出 WorkerLoop/StateSnapshot/Display adapter。
+3. Retry/approval/message 已有聚焦测试覆盖，但后续仍可补更完整的端到端长会话测试。
+4. VCR/streaming/team-worker 之间的组合场景仍是后续增强项。

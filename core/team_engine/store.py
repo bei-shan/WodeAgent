@@ -50,6 +50,18 @@ class TeamStore:
     def _config_path(self, team_name: str) -> Path:
         return self._team_dir(team_name) / "config.json"
 
+    def _messages_status_path(self, team_name: str) -> Path:
+        return self._team_dir(team_name) / "message_status.jsonl"
+
+    def _messages_status_lock_path(self, team_name: str) -> Path:
+        return self._team_dir(team_name) / "message_status.lock"
+
+    def _approvals_path(self, team_name: str) -> Path:
+        return self._team_dir(team_name) / "approvals.json"
+
+    def _approvals_lock_path(self, team_name: str) -> Path:
+        return self._team_dir(team_name) / "approvals.lock"
+
     def _inbox_path(self, team_name: str, member_name: str) -> Path:
         team_dir = self._team_dir(team_name)
         member = sanitize_name(member_name)
@@ -172,6 +184,73 @@ class TeamStore:
                 continue
             rows.append(json.loads(line))
         return rows
+
+    def upsert_message_status(self, team_name: str, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist the latest status row for a team message."""
+        team_dir = self._team_dir(team_name)
+        team_dir.mkdir(parents=True, exist_ok=True)
+        path = self._messages_status_path(team_name)
+        row = dict(message or {})
+        message_id = str(row.get("message_id") or "").strip()
+        if not message_id:
+            raise ValueError("message_id is required")
+        row.setdefault("updated_at", time.time())
+        with self.lock(self._messages_status_lock_path(team_name)):
+            rows = self._read_jsonl(path)
+            replaced = False
+            for idx, existing in enumerate(rows):
+                if str(existing.get("message_id")) == message_id:
+                    rows[idx] = row
+                    replaced = True
+                    break
+            if not replaced:
+                rows.append(row)
+            self._write_jsonl(path, rows)
+        return row
+
+    def read_message_statuses(self, team_name: str) -> Dict[str, Dict[str, Any]]:
+        """Return persisted message statuses keyed by message_id."""
+        path = self._messages_status_path(team_name)
+        statuses: Dict[str, Dict[str, Any]] = {}
+        for row in self._read_jsonl(path):
+            message_id = str(row.get("message_id") or "").strip()
+            if message_id:
+                statuses[message_id] = row
+        return statuses
+
+    def list_approval_requests(self, team_name: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return persisted plan approval requests for a team."""
+        rows = list(self._read_json_file(self._approvals_path(team_name)).values())
+        if status is not None:
+            rows = [row for row in rows if str(row.get("status") or "") == str(status)]
+        rows.sort(key=lambda x: float(x.get("created_at") or 0))
+        return rows
+
+    def upsert_approval_request(self, team_name: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Create or replace a persisted plan approval request."""
+        team_dir = self._team_dir(team_name)
+        team_dir.mkdir(parents=True, exist_ok=True)
+        row = dict(request or {})
+        request_id = str(row.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required")
+        row["team_name"] = sanitize_name(str(row.get("team_name") or team_name))
+        row.setdefault("updated_at", time.time())
+        path = self._approvals_path(team_name)
+        with self.lock(self._approvals_lock_path(team_name)):
+            data = self._read_json_file(path)
+            data[request_id] = row
+            self._write_json_file(path, data)
+        return row
+
+    def clear_approval_requests(self, team_name: str) -> None:
+        """Remove persisted plan approval requests for a team."""
+        path = self._approvals_path(team_name)
+        if not path.exists():
+            return
+        with self.lock(self._approvals_lock_path(team_name)):
+            if path.exists():
+                path.unlink()
 
     def create_work_item(
         self,
@@ -364,6 +443,35 @@ class TeamStore:
         if len(rows) <= max_lines:
             return
         TeamStore._write_jsonl(path, rows[-max_lines:])
+
+    @staticmethod
+    def _read_json_file(path: Path) -> Dict[str, Dict[str, Any]]:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(data, dict):
+            return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+        if isinstance(data, list):
+            rows: Dict[str, Dict[str, Any]] = {}
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                key = str(row.get("request_id") or "").strip()
+                if key:
+                    rows[key] = row
+            return rows
+        return {}
+
+    @staticmethod
+    def _write_json_file(path: Path, data: Dict[str, Dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _read_jsonl(path: Path) -> List[Dict[str, Any]]:

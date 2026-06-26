@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -61,7 +62,9 @@ class ExecutionService:
             return {"result": f"[{team_name}/{teammate_name}] completed: {work_item.get('title', '')}"}
 
         last_error: Optional[Exception] = None
-        for attempt in range(3):
+        max_retries = max(0, int(os.getenv("TEAM_LLM_MAX_RETRIES", "2")))
+        backoff = max(0.0, float(os.getenv("TEAM_LLM_RETRY_BACKOFF", "0.2")))
+        for attempt in range(max_retries + 1):
             try:
                 if self._llm_semaphore is None:
                     return self._run_turn_executor_work(team_name, teammate_name, work_item)
@@ -69,12 +72,28 @@ class ExecutionService:
                     return self._run_turn_executor_work(team_name, teammate_name, work_item)
             except Exception as exc:  # pragma: no cover - defensive
                 last_error = exc
-                message = str(exc).lower()
-                retryable = "rate limit" in message or "429" in message or "timeout" in message
-                if not retryable or attempt >= 2:
+                if not self._is_retryable_llm_error(exc) or attempt >= max_retries:
                     break
-                time.sleep(0.2 * (2 ** attempt))
+                sleep_s = backoff * (2 ** attempt)
+                if sleep_s:
+                    sleep_s += random.uniform(0, sleep_s * 0.1)
+                    time.sleep(sleep_s)
         raise RuntimeError(str(last_error) if last_error else "work item execution failed")
+
+    @staticmethod
+    def _is_retryable_llm_error(exc: Exception) -> bool:
+        class_names = {cls.__name__.lower() for cls in type(exc).mro()}
+        if any(
+            marker in name
+            for name in class_names
+            for marker in ("ratelimit", "timeout", "connection", "apierror")
+        ):
+            return True
+        status_code = getattr(exc, "status_code", None)
+        if status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+            return True
+        message = str(exc).lower()
+        return any(marker in message for marker in ("rate limit", "429", "timeout", "connection", "temporarily", "503"))
 
     def _run_turn_executor_work(self, team_name: str, teammate_name: str, work_item: Dict[str, Any]) -> Dict[str, Any]:
         registry, denied_tools = self._build_teammate_registry(team_name, teammate_name)
@@ -107,7 +126,7 @@ class ExecutionService:
                 break
         if last_tool_msg:
             return {"result": last_tool_msg, "tool_usage": tool_usage}
-        return {"result": "", "tool_usage": tool_usage}
+        raise RuntimeError("worker produced empty response")
 
     def _get_teammate_role(self, team_name: str, teammate_name: str) -> str:
         """Return the teammate's role from team config, defaulting to 'developer'."""

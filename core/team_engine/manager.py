@@ -34,6 +34,7 @@ from .protocol import (
     MESSAGE_STATUS_DELIVERED,
     MESSAGE_STATUS_PENDING,
     MESSAGE_STATUS_PROCESSED,
+    WORK_ITEM_STATUS_CANCELED,
     WORK_ITEM_STATUS_FAILED,
     WORK_ITEM_STATUS_QUEUED,
     WORK_ITEM_STATUS_RUNNING,
@@ -102,6 +103,7 @@ class TeamManager:
         self.message_router = MessageRouter(store=self.store, emit_fn=self._emit)
         self.task_board_service = TaskBoardService(self.task_board)
         self.approval_service = ApprovalService()
+        self._load_persisted_approvals()
         self.worker_supervisor = WorkerSupervisor()
         self.execution_service = ExecutionService(
             project_root=self.project_root,
@@ -126,6 +128,34 @@ class TeamManager:
             name="TeamSweep",
         )
         self._sweep_thread.start()
+
+    def _load_persisted_approvals(self) -> None:
+        """Load approval requests persisted under .teams into ApprovalService."""
+        rows: List[Dict[str, Any]] = []
+        if not hasattr(self.store, "list_approval_requests"):
+            return
+        for team_name in self.store.list_teams():
+            try:
+                rows.extend(self.store.list_approval_requests(team_name))
+            except Exception:
+                continue
+        self.approval_service.restore_requests(rows)
+
+    def _persist_approval(self, request: Dict[str, Any]) -> None:
+        """Persist a plan approval request if it has enough identity fields."""
+        if not isinstance(request, dict):
+            return
+        team_name = str(request.get("team_name") or "").strip()
+        request_id = str(request.get("request_id") or "").strip()
+        if not team_name or not request_id:
+            return
+        if hasattr(self.store, "upsert_approval_request"):
+            self.store.upsert_approval_request(team_name, request)
+
+    def set_project_root(self, project_root: str) -> None:
+        """Rebind execution root when the owning CodeAgent enters/exits a worktree."""
+        self.project_root = project_root
+        self.execution_service._project_root = project_root
 
     def create_team(self, team_name: str, members: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         normalized_team = sanitize_name(team_name)
@@ -154,6 +184,8 @@ class TeamManager:
         self.store.delete_team(normalized_team)
         self.message_router.clear_team(normalized_team)
         self.approval_service.clear_team(normalized_team)
+        if hasattr(self.store, "clear_approval_requests"):
+            self.store.clear_approval_requests(normalized_team)
         self._recent_errors.pop(normalized_team, None)
         for key in list(self._processed_by_member.keys()):
             if key[0] == normalized_team:
@@ -374,6 +406,18 @@ class TeamManager:
         if not teammate:
             raise TeamManagerError("INTERNAL_ERROR", f"approval request missing teammate: {req}")
 
+        # Persist the decision immediately as well as sending the protocol message;
+        # otherwise a crash before the worker consumes the response would lose it.
+        applied = self.approval_service.apply_response(
+            normalized_team,
+            teammate,
+            req,
+            approved,
+            feedback or "",
+        )
+        if applied:
+            self._persist_approval(self.approval_service.get_request(req))
+
         sent = self.send_message(
             normalized_team,
             from_member=from_member,
@@ -483,6 +527,19 @@ class TeamManager:
     def retry_failed_work(self, team_name: str, work_id: str) -> Dict[str, Any]:
         normalized_team = sanitize_name(team_name)
         self._read_team_or_raise(normalized_team)
+        current = None
+        for item in self.store.list_work_items(normalized_team):
+            if str(item.get("work_id")) == str(work_id):
+                current = item
+                break
+        if current is None:
+            raise TeamManagerError("NOT_FOUND", f"work item not found: {work_id}")
+        current_status = str(current.get("status") or "")
+        if current_status not in {WORK_ITEM_STATUS_FAILED, WORK_ITEM_STATUS_CANCELED}:
+            raise TeamManagerError(
+                "CONFLICT",
+                f"only failed or canceled work items can be retried (current: {current_status})",
+            )
         try:
             item = self.store.update_work_item_status(
                 normalized_team,
@@ -516,12 +573,13 @@ class TeamManager:
             team_state.update(worker_state)
             team_states[name] = team_state
             work_counts[name] = self.collect_work(name).get("counts", {})
-            pending_reqs = self.list_plan_approvals(name, status="pending")
+            all_reqs = self.list_plan_approvals(name)
+            pending_reqs = [req for req in all_reqs if req.get("status") == "pending"]
             approval_counts[name] = {
                 "pending": len(pending_reqs),
-                "approved": len(self.list_plan_approvals(name, status="approved")),
-                "rejected": len(self.list_plan_approvals(name, status="rejected")),
-                "requests": pending_reqs,
+                "approved": len([req for req in all_reqs if req.get("status") == "approved"]),
+                "rejected": len([req for req in all_reqs if req.get("status") == "rejected"]),
+                "requests": all_reqs,
             }
             board_rows = self.list_board_tasks(name)
             blocked = 0
@@ -609,7 +667,8 @@ class TeamManager:
                     req_id = str(req.get("request_id") or "").strip()
                     if not req_id or req_id in self.approval_service._requests:
                         continue
-                    self.approval_service._requests[req_id] = dict(req)
+                    restored = self.approval_service.upsert_request(dict(req))
+                    self._persist_approval(restored)
 
     def _read_team_or_raise(self, team_name: str) -> Dict[str, Any]:
         try:
@@ -785,6 +844,7 @@ class TeamManager:
         instruction = description or subject
         if self._teammate_requires_plan_approval(team_name, teammate_name):
             entry = self.approval_service.create_request(team_name, teammate_name, task_id, subject)
+            self._persist_approval(entry)
             self._emit(
                 team_name,
                 EVENT_PLAN_APPROVAL_REQUESTED,
@@ -814,6 +874,8 @@ class TeamManager:
         normalized_team = sanitize_name(team_name)
         normalized_teammate = sanitize_name(teammate_name)
         candidate = self.approval_service.claim_next_approved_request(normalized_team, normalized_teammate)
+        if candidate is not None:
+            self._persist_approval(candidate)
         if candidate is None:
             return False
         task_id = str(candidate.get("task_id"))
@@ -923,7 +985,9 @@ class TeamManager:
             text = str(message_row.get("text") or "").lower()
             approved = "approve" in text and "reject" not in text
         feedback = str(message_row.get("feedback") or "").strip()
-        self.approval_service.apply_response(team_name, teammate_name, request_id, approved, feedback)
+        updated = self.approval_service.apply_response(team_name, teammate_name, request_id, approved, feedback)
+        if updated:
+            self._persist_approval(self.approval_service.get_request(request_id))
 
     def _execute_work_item(self, team_name: str, teammate_name: str, work_item: Dict[str, Any]) -> Dict[str, Any]:
         return self.execution_service.execute_work_item(team_name, teammate_name, work_item)

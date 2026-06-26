@@ -1,135 +1,133 @@
 # LLM Streaming 支持设计
 
-> 日期: 2026-06-26 | 目标: 让用户实时看到 Agent 的思考和回复
+> 日期: 2026-06-26 | 状态: **P1 已接入主 ReAct 链路** | 目标: 让用户实时看到 Agent 的回复 token
 
 ---
 
-## 一、问题分析
+## 一、当前状态
 
-### 1.1 当前状态
+### 已完成
 
-```
-用户输入 → Agent 开始处理 → 用户看到 "⏳ Agent 正在处理..." 
-  → 10-30s 空白等待
-  → 一次性显示完整回复
-```
+1. `core/llm.py` 已新增 `HelloAgentsLLM.stream_raw()`：
+   - 使用 OpenAI-compatible `stream=True`。
+   - 默认请求 `stream_options={"include_usage": true}`，若 provider 不支持会自动去掉后重试当前请求。
+   - 实时回调 `content` / `reasoning` delta。
+   - 累积 content、reasoning、tool_calls、usage、finish_reason，并重建为 `invoke_raw()` 兼容 dict。
+2. `agents/codeAgent.py` 的 `_invoke_llm_with_retry()` 已优先走 `stream_raw()`：
+   - 后续仍复用 `extract_content()`、`extract_tool_calls()`、`extract_usage()` 等解析器。
+   - 若 streaming 失败，会 fallback 到 `invoke_raw()`。
+   - 保留空响应 retry、usage 统计、trace 写入。
+3. `tui/streaming.py` 的 `StreamingResponse.append()` 已触发 Rich Live update。
+4. `scripts/chat_test_agent.py` 已把 `llm_stream_callback` 接入 `StreamingResponse`。
+5. 新增配置：`LLM_STREAMING=true|false`，默认开启。
 
-`HelloAgentsLLM.invoke_raw()` 使用 `stream=False`，同步阻塞等完整响应。
+### 仍未完成 / 后续项
 
-### 1.2 为什么看似"已经支持"却不工作
-
-`core/llm.py` 有 `think()` 方法（流式 yield token），`tui/streaming.py` 有 `StreamingResponse`（Rich Live 渲染）。但 ReAct 循环走的是 `invoke_raw()` → 必须等完整响应才能解析 `tool_calls`。
-
-### 1.3 关键洞察：DeepSeek 的 reasoning_content 可以先流
-
-DeepSeek V4 的 API 在流式模式下会先推送 `reasoning_content`（思考过程），再推送最终 `content`。这就是 Pi Agent 的 "thinking" 区块的来源。
-
----
-
-## 二、设计方案
-
-### 2.1 核心思路：流式调用 + 累积解析
-
-```python
-# 核心改动：HelloAgentsLLM 新增 stream_raw()
-def stream_raw(self, messages, tools=None, tool_choice=None):
-    """流式调用 LLM，实时推送 reasoning + content 到回调，返回完整响应对象。"""
-    chunks = []
-    reasoning_chunks = []
-    
-    response = self._client.chat.completions.create(
-        model=self.model,
-        messages=messages,
-        tools=tools,
-        tool_choice=tool_choice,
-        stream=True,
-        stream_options={"include_usage": True},
-    )
-    
-    for chunk in response:
-        chunks.append(chunk)
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta:
-            if delta.reasoning_content:
-                reasoning_chunks.append(delta.reasoning_content)
-                yield ("reasoning", delta.reasoning_content)
-            elif delta.content:
-                yield ("content", delta.content)
-    
-    # 累积后重建完整响应（与 invoke_raw 返回格式一致）
-    return self._merge_streaming_chunks(chunks, reasoning_chunks)
-```
-
-### 2.2 ReAct 循环改动
-
-```python
-# 之前：
-raw_response = self.llm.invoke_raw(messages, tools=..., tool_choice=...)
-
-# 之后：
-stream_gen = self.llm.stream_raw(messages, tools=..., tool_choice=...)
-for event_type, text in stream_gen:
-    if event_type == "reasoning":
-        self._console(f"🧠 {text}")  # 实时推送到 TUI
-    elif event_type == "content":
-        self._console(text)           # 实时推送
-raw_response = stream_gen.return_value  # 完整响应对象
-```
-
-### 2.3 `_merge_streaming_chunks` 实现
-
-OpenAI SDK 的流式 chunk 可以通过累积来重建完整响应：
-
-```python
-def _merge_streaming_chunks(self, chunks, reasoning_chunks):
-    """将流式 chunk 列表合并为与 invoke_raw 返回格式一致的对象。"""
-    # 使用 SDK 内置的累积逻辑
-    from openai import Stream
-    # 简单方案：手动构建兼容对象
-    class MergedResponse:
-        choices = [type('Choice', (), {
-            'index': 0,
-            'message': type('Message', (), {
-                'role': 'assistant',
-                'content': self._extract_text_from_chunks(chunks),
-                'tool_calls': self._extract_tool_calls_from_chunks(chunks),
-                'reasoning_content': ''.join(reasoning_chunks) if reasoning_chunks else None,
-            })(),
-            'finish_reason': self._extract_finish_reason(chunks),
-        })()]
-        usage = self._extract_usage_from_chunks(chunks)
-    return MergedResponse()
-```
+1. 当前 CLI 只实时展示 `content`，`reasoning` delta 暂不单独渲染为 thinking 区块。
+2. Tool-calling step 已可用流式累积，但工具调用本身仍需等模型完成该 assistant message 后才能执行，这是 function calling 的正常限制。
+3. VCR 仍是完整 raw response 级拦截，未记录/replay token events。
+4. Team Engine 的 `TurnExecutor` 仍走非流式 `invoke_raw()`。
+5. Anthropic/Claude 原生 Messages streaming 还没有 provider-specific adapter。
 
 ---
 
-## 三、文件清单
+## 二、核心设计
 
-| 文件 | 操作 | 行数 |
-|------|------|------|
-| `core/llm.py` | 修改：新增 `stream_raw()` + `_merge_streaming_chunks()` | +80 |
-| `agents/codeAgent.py` | 修改：`_invoke_llm_with_retry` 改用 `stream_raw` | +30 |
-| `tui/streaming.py` | 修改：已有 `StreamingResponse`，微调 | +10 |
+### 2.1 为什么不是直接使用 `think()`
 
-## 四、预期效果
+`think()` 只能 yield 文本 token，无法返回完整 raw response，也无法处理 tool_call delta。ReAct 主循环必须在模型消息结束后拿到：
 
+1. `content`
+2. `reasoning_content`
+3. `tool_calls`
+4. `usage`
+5. `finish_reason`
+
+因此当前实现采用 `stream_raw(..., on_delta=callback) -> raw_response`。
+
+### 2.2 `stream_raw()` API
+
+```python
+raw_response = llm.stream_raw(
+    messages,
+    tools=tools_schema,
+    tool_choice="auto",
+    on_delta=lambda event_type, text: ...,
+)
 ```
-之前：
-  ⏳ Agent 正在处理... (15s)
-  ────────────────────
-  ✅ Agent 已完成
-  (一次性显示完整回复)
 
-之后：
-  ⏳ Agent 正在处理...
-  🧠 用户想要的是...应该先检查... ← reasoning 实时推送
-  📝 我来帮你写这个 API...      ← content 实时推送
-  ✅ Agent 已完成 (3s)
+`on_delta` 事件：
+
+| event_type | 含义 |
+|---|---|
+| `content` | assistant 正文 token |
+| `reasoning` | reasoning / reasoning_content token |
+
+返回值是 dict，结构兼容现有 `core.response_parser`：
+
+```python
+{
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "...",
+        "reasoning_content": "...",
+        "tool_calls": [...]
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {...}
+}
 ```
 
-## 五、风险评估
+### 2.3 ReAct 接入点
 
-- **低风险**：不改变 API 协议，`stream_raw` 返回格式与 `invoke_raw` 兼容
-- **重试兼容**：流式调用不重试（重试只对非流式有意义）
-- **工具调用兼容**：累积 chunk 后解析 tool_calls 与现有逻辑一致
-- **DeepSeek 兼容**：已验证 DeepSeek API 支持 `stream=True` + `stream_options`
+`CodeAgent._invoke_llm_with_retry()` 中的真实调用现在是：
+
+```python
+if config.llm_streaming and hasattr(llm, "stream_raw"):
+    raw_response = llm.stream_raw(..., on_delta=_on_delta)
+else:
+    raw_response = llm.invoke_raw(...)
+```
+
+随后继续走原解析流程，降低对工具调用、trace、history 的影响。
+
+---
+
+## 三、风险与约束
+
+1. **Provider 兼容性**：部分 OpenAI-compatible provider 不支持 `stream_options`，实现已 fallback 去掉该参数。
+2. **工具调用实时性**：tool_calls 的 arguments 是 delta 拼接，必须等完整消息结束后才能解析和执行。
+3. **重复展示**：CLI 若收到了 streamed content，就不再额外打印最终 response；无 streamed content 时保留原最终打印。
+4. **VCR 兼容**：VCR replay 不产生 token events；需要后续扩展 fixture 格式才能精确回放 streaming。
+
+---
+
+## 四、测试状态
+
+已新增 `tests/test_llm_streaming.py`，覆盖：
+
+1. `stream_raw()` 请求参数：`stream=True`、`stream_options`、`tools`、`tool_choice`。
+2. content delta 实时回调与最终 content 合并。
+3. reasoning delta 实时回调与最终 `reasoning_content` 合并。
+4. tool call delta 按 index 合并，并支持 function arguments 分片。
+5. usage chunk 合并并可被 `extract_usage()` 解析。
+6. provider 不支持 `stream_options` 时去掉参数重试。
+7. `think()` / `stream_invoke()` 保持文本 iterator 兼容行为。
+
+验证命令：
+
+```bash
+python -m pytest tests/test_llm_streaming.py tests/test_llm_temperature_policy.py tests/test_llm_provider_resolution.py -q
+```
+
+## 五、后续路线
+
+1. 把 `reasoning` delta 在 TUI 中渲染为独立 thinking 区块。
+2. 为 Team Engine `TurnExecutor` 接入可选 streaming。
+3. 扩展 VCR fixture：记录 raw response + stream events。
+4. 做 Anthropic Messages API 原生 adapter，支持 Claude content block streaming。

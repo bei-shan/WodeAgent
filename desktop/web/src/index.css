@@ -4,8 +4,9 @@
 
 /* ── Global ───────────────────────────────────────────────────────── */
 :root { color-scheme: light; }
-body { margin: 0; overflow: hidden; }
-#root { height: 100vh; display: flex; }
+html, body { height: 100%; margin: 0; }
+body { overflow: hidden; }
+#root { min-height: 100vh; display: flex; }
 
 /* ── Scrollbar ────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; }

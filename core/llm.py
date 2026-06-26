@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from typing import Literal, Optional, Iterator, Dict
+from typing import Any, Callable, Literal, Optional, Iterator, Dict
 from openai import OpenAI
 
 from .exceptions import HelloAgentsException
@@ -461,6 +461,7 @@ class HelloAgentsLLM:
         temperature: Optional[float] = None,
         tools: Optional[list[dict]] = None,
         tool_choice: Optional[object] = None,
+        **kwargs,
     ) -> Iterator[str]:
         """
         调用大语言模型进行思考，并返回流式响应。
@@ -473,33 +474,22 @@ class HelloAgentsLLM:
         Yields:
             str: 流式响应的文本片段
         """
-        logger.info("正在调用 %s 模型...", self.model)
-        try:
-            request_kwargs = {
-                "model": self.model,
-                "messages": self._normalize_messages_for_provider(messages),
-                "temperature": self._resolve_temperature(temperature),
-                "max_tokens": self.max_tokens,
-                "stream": True,
-            }
-            if tools:
-                request_kwargs["tools"] = tools
-                if tool_choice is not None:
-                    request_kwargs["tool_choice"] = tool_choice
-            request_kwargs = self._apply_provider_compat(request_kwargs)
-            request_kwargs = self._compact_request_kwargs(request_kwargs)
-            response = self._client.chat.completions.create(**request_kwargs)
+        pieces: list[str] = []
 
-            # 处理流式响应
-            logger.debug("大语言模型响应成功（streaming）")
-            for chunk in response:
-                content = chunk.choices[0].delta.content or ""
-                if content:
-                    yield content
+        def _collect(event_type: str, text: str) -> None:
+            if event_type == "content" and text:
+                pieces.append(text)
 
-        except Exception as e:
-            logger.error("调用LLM API时发生错误: %s", e)
-            raise HelloAgentsException(f"LLM调用失败: {str(e)}")
+        stream_kwargs = dict(kwargs)
+        if temperature is not None:
+            stream_kwargs["temperature"] = temperature
+        if tools:
+            stream_kwargs["tools"] = tools
+        if tool_choice is not None:
+            stream_kwargs["tool_choice"] = tool_choice
+        self.stream_raw(messages, on_delta=_collect, **stream_kwargs)
+        for piece in pieces:
+            yield piece
 
     def invoke(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
@@ -567,10 +557,212 @@ class HelloAgentsLLM:
                 )
                 time.sleep(wait_s)
 
+    def stream_raw(
+        self,
+        messages: list[dict[str, str]],
+        on_delta: Optional[Callable[[str, str], None]] = None,
+        **kwargs,
+    ):
+        """流式调用 LLM，回调 token delta，并返回兼容 ``invoke_raw`` 的响应对象。
+
+        ``on_delta`` receives ``(event_type, text)`` where event_type is
+        ``reasoning`` or ``content``. Tool-call deltas are accumulated silently
+        so existing ReAct parsing continues to work after the stream ends.
+        """
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                request_kwargs = {
+                    "model": self.model,
+                    "messages": self._normalize_messages_for_provider(messages),
+                    "temperature": self._resolve_temperature(kwargs.get("temperature")),
+                    "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+                    "stream": True,
+                }
+                extra_kwargs = {
+                    k: v
+                    for k, v in kwargs.items()
+                    if k not in ["temperature", "max_tokens", "stream", "stream_options"]
+                }
+                if extra_kwargs:
+                    request_kwargs.update(extra_kwargs)
+                # Most OpenAI-compatible providers accept include_usage, but not all.
+                # If a backend rejects it, retry the same attempt without stream_options.
+                stream_options = kwargs.get("stream_options", {"include_usage": True})
+                if stream_options is not None:
+                    request_kwargs["stream_options"] = stream_options
+                request_kwargs = self._apply_provider_compat(request_kwargs)
+                request_kwargs = self._compact_request_kwargs(request_kwargs)
+
+                try:
+                    response = self._client.chat.completions.create(**request_kwargs)
+                except Exception as exc:
+                    if request_kwargs.get("stream_options") is None:
+                        raise
+                    message = str(exc).lower()
+                    if "stream_options" not in message and "include_usage" not in message:
+                        raise
+                    request_kwargs.pop("stream_options", None)
+                    response = self._client.chat.completions.create(**request_kwargs)
+
+                chunks = []
+                for chunk in response:
+                    chunks.append(chunk)
+                    delta = self._get_stream_delta(chunk)
+                    if not delta:
+                        continue
+                    reasoning = self._read_delta_attr(delta, "reasoning_content") or self._read_delta_attr(delta, "reasoning")
+                    if reasoning:
+                        if on_delta:
+                            on_delta("reasoning", str(reasoning))
+                        continue
+                    content = self._read_delta_attr(delta, "content")
+                    if content:
+                        if on_delta:
+                            on_delta("content", str(content))
+                return self._merge_streaming_chunks(chunks)
+            except Exception as exc:
+                last_error = exc
+                if attempt >= self.max_retries:
+                    raise HelloAgentsException(f"LLM调用失败: {str(exc)}")
+                wait_s = self.retry_backoff * (2 ** attempt)
+                logger.warning(
+                    "LLM流式调用失败，%.1fs后重试（%d/%d）: %s",
+                    wait_s,
+                    attempt + 1,
+                    self.max_retries,
+                    exc,
+                )
+                time.sleep(wait_s)
+        raise HelloAgentsException(f"LLM调用失败: {str(last_error)}")
+
+    @staticmethod
+    def _read_delta_attr(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    @classmethod
+    def _get_stream_delta(cls, chunk: Any) -> Any:
+        choices = getattr(chunk, "choices", None)
+        if choices is None and isinstance(chunk, dict):
+            choices = chunk.get("choices")
+        if not choices:
+            return None
+        choice = choices[0]
+        if isinstance(choice, dict):
+            return choice.get("delta")
+        return getattr(choice, "delta", None)
+
+    @staticmethod
+    def _get_stream_usage(chunk: Any) -> Any:
+        if chunk is None:
+            return None
+        if isinstance(chunk, dict):
+            return chunk.get("usage")
+        return getattr(chunk, "usage", None)
+
+    @staticmethod
+    def _get_stream_finish_reason(chunk: Any) -> Any:
+        choices = getattr(chunk, "choices", None)
+        if choices is None and isinstance(chunk, dict):
+            choices = chunk.get("choices")
+        if not choices:
+            return None
+        choice = choices[0]
+        if isinstance(choice, dict):
+            return choice.get("finish_reason")
+        return getattr(choice, "finish_reason", None)
+
+    @classmethod
+    def _merge_streaming_chunks(cls, chunks: list[Any]) -> dict[str, Any]:
+        """Merge OpenAI-compatible streaming chunks into a ChatCompletion-like dict."""
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, Any]] = {}
+        finish_reason = None
+        usage = None
+
+        for chunk in chunks:
+            chunk_usage = cls._get_stream_usage(chunk)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            chunk_finish = cls._get_stream_finish_reason(chunk)
+            if chunk_finish is not None:
+                finish_reason = chunk_finish
+            delta = cls._get_stream_delta(chunk)
+            if not delta:
+                continue
+
+            content = cls._read_delta_attr(delta, "content")
+            if content:
+                content_parts.append(str(content))
+            reasoning = cls._read_delta_attr(delta, "reasoning_content") or cls._read_delta_attr(delta, "reasoning")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+
+            tool_call_deltas = cls._read_delta_attr(delta, "tool_calls") or []
+            for call_delta in tool_call_deltas:
+                index = cls._read_delta_attr(call_delta, "index")
+                try:
+                    index_int = int(index) if index is not None else len(tool_calls_by_index)
+                except Exception:
+                    index_int = len(tool_calls_by_index)
+                merged = tool_calls_by_index.setdefault(
+                    index_int,
+                    {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                call_id = cls._read_delta_attr(call_delta, "id")
+                if call_id:
+                    merged["id"] = call_id
+                call_type = cls._read_delta_attr(call_delta, "type")
+                if call_type:
+                    merged["type"] = call_type
+                function_delta = cls._read_delta_attr(call_delta, "function") or {}
+                name_part = cls._read_delta_attr(function_delta, "name")
+                if name_part:
+                    merged["function"]["name"] = str(merged["function"].get("name") or "") + str(name_part)
+                args_part = cls._read_delta_attr(function_delta, "arguments")
+                if args_part:
+                    merged["function"]["arguments"] = str(merged["function"].get("arguments") or "") + str(args_part)
+
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(content_parts),
+        }
+        reasoning_text = "".join(reasoning_parts)
+        if reasoning_text:
+            message["reasoning_content"] = reasoning_text
+        if tool_calls_by_index:
+            message["tool_calls"] = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)]
+
+        response: dict[str, Any] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
+        if usage is not None:
+            if hasattr(usage, "model_dump"):
+                response["usage"] = usage.model_dump()
+            elif isinstance(usage, dict):
+                response["usage"] = usage
+            else:
+                response["usage"] = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                }
+        return response
+
     def stream_invoke(self, messages: list[dict[str, str]], **kwargs) -> Iterator[str]:
         """
         流式调用LLM的别名方法，与think方法功能相同。
         保持向后兼容性。
         """
-        temperature = kwargs.get('temperature')
-        yield from self.think(messages, temperature)
+        yield from self.think(messages, **kwargs)

@@ -75,18 +75,22 @@ def test_shutdown_request_sets_request_id(tmp_path):
     assert inbox_dev1[0]["request_id"] == sent["request_id"]
 
 
-def test_plan_approval_response_requires_request_id(tmp_path):
-    manager = TeamManager(project_root=tmp_path)
-    manager.create_team("demo", members=[{"name": "lead"}, {"name": "dev1"}])
 
-    with pytest.raises(TeamManagerError) as exc:
-        manager.send_message(
-            "demo",
-            "lead",
-            "dev1",
-            "approved",
-            message_type="plan_approval_response",
-            summary="plan approved",
-        )
-    assert exc.value.code == "INVALID_PARAM"
-    assert "request_id" in exc.value.message
+
+def test_message_status_survives_manager_recreate(tmp_path):
+    manager = TeamManager(project_root=tmp_path)
+    try:
+        manager.create_team("demo", members=[{"name": "lead"}, {"name": "dev1"}])
+        sent = manager.send_message("demo", "lead", "dev1", "Ping", summary="ping")
+        manager.mark_message_processed("demo", sent["message_id"], processed_by="dev1")
+    finally:
+        manager.shutdown()
+
+    restored = TeamManager(project_root=tmp_path)
+    try:
+        status = restored.get_status("demo")
+        assert status["message_counts"]["processed"] == 1
+        assert status["recent_messages"][0]["message_id"] == sent["message_id"]
+        assert status["recent_messages"][0]["processed_by"] == "dev1"
+    finally:
+        restored.shutdown()

@@ -33,6 +33,18 @@ class MessageRouter:
         self._store = store
         self._emit = emit_fn
         self._message_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+        self._load_persisted_statuses()
+
+    def _load_persisted_statuses(self) -> None:
+        if not hasattr(self._store, "list_teams") or not hasattr(self._store, "read_message_statuses"):
+            return
+        for team_name in self._store.list_teams():
+            try:
+                statuses = self._store.read_message_statuses(team_name)
+            except Exception:
+                continue
+            if statuses:
+                self._message_status[team_name].update(statuses)
 
     @property
     def message_status(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -106,6 +118,8 @@ class MessageRouter:
             delivered["status"] = MESSAGE_STATUS_DELIVERED
             self._store.append_inbox_message(team_name, recipient, delivered)
             self._message_status[team_name][message_id] = delivered
+            if hasattr(self._store, "upsert_message_status"):
+                self._store.upsert_message_status(team_name, delivered)
 
             event_type = EVENT_MESSAGE_SENT
             if message_kind == MESSAGE_TYPE_SHUTDOWN_REQUEST:
@@ -151,6 +165,8 @@ class MessageRouter:
         state["status"] = MESSAGE_STATUS_PROCESSED
         state["processed_by"] = sanitize_name(processed_by)
         statuses[message_id] = state
+        if hasattr(self._store, "upsert_message_status"):
+            self._store.upsert_message_status(team_name, state)
         self._emit(
             team_name,
             EVENT_MESSAGE_ACK,

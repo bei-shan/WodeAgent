@@ -28,6 +28,7 @@ class Config(BaseModel):
     default_provider: str = "openai"
     temperature: float = 0.7
     max_tokens: int | None = None
+    llm_streaming: bool = True
 
     # ===== System =====
     debug: bool = False
@@ -128,6 +129,7 @@ class Config(BaseModel):
             default_provider=env_str("LLM_PROVIDER", "openai"),
             temperature=env_float("TEMPERATURE", 0.7),
             max_tokens=env_int_optional("MAX_TOKENS"),
+            llm_streaming=env_bool("LLM_STREAMING", True),
             # System
             debug=env_bool("DEBUG", False),
             log_level=env_str("LOG_LEVEL", "INFO"),

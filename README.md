@@ -31,11 +31,11 @@
 - **计划**：EnterPlanMode / ExitPlanMode
 - **模型**：SwitchModel
 - **后台**：TaskOutput
-- **团队 (16)**：TeamCreate / SendMessage / Status / Delete / Cleanup / Fanout / Collect / List / Retry / Approvals / ApprovePlan / TaskCreate / TaskGet / TaskUpdate / TaskList
+- **团队 (15)**：TeamCreate / SendMessage / Status / Delete / Cleanup / Fanout / Collect / List / Retry / Approvals / ApprovePlan / TaskCreate / TaskGet / TaskUpdate / TaskList
 - **MCP**：动态外部工具注册
 
 ### 高级特性
-- **Claude Code 风格 TUI**：Rich Live 流式渲染、@-mention 补全、交互式权限弹窗、状态栏
+- **Claude Code 风格 TUI**：Rich Live 流式渲染（LLM_STREAMING 默认开启）、@-mention 补全、交互式权限弹窗、状态栏
 - **Git Worktree 会话隔离**：EnterWorktree → 隔离工作 → ExitWorktree
 - **Plan Mode 只读分析**：先分析后执行，避免盲目修改
 - **Background Task 并行执行**：子代理后台运行，主循环不阻塞
