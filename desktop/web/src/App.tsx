@@ -852,33 +852,43 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* File upload */}
                   <button onClick={() => fileInputRef.current?.click()}
-                    className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
-                    <Svg d={Icons.plus} size={17} />
+                    className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
+                    <Svg d={Icons.plus} size={16} />
                   </button>
                   <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
-                  <div className="flex items-center gap-1.5 ml-2">
-                    <label className="toggle" title="深度思考"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-                    <label className="toggle" title="Agent 团队"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
-                    <label className="toggle" title="Plan"><input type="checkbox" checked={planMode} onChange={async () => {
-                      const next = !planMode; setPlanMode(next);
-                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
-                    }} /><span className="slider" /></label>
-                  </div>
-                  {/* Send */}
-                  <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
-                    className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-                    <Svg d={Icons.send} size={17} />
-                  </button>
                 </div>
               </div>
               {/* Textarea */}
               <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
                 disabled={sending} rows={2}
                 placeholder="问任何问题"
-                className="w-full bg-transparent px-5 pb-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
+                className="w-full bg-transparent px-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
               />
+              {/* Bottom bar: toggles left, send right */}
+              <div className="flex items-center justify-between px-5 pb-4">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <span className="text-[11px] text-gray-400">深度思考</span>
+                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <span className="text-[11px] text-gray-400">Agent 团队</span>
+                    <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <span className="text-[11px] text-gray-400">Plan</span>
+                    <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
+                      const next = !planMode; setPlanMode(next);
+                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
+                    }} /><span className="slider" /></label>
+                  </label>
+                </div>
+                <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                  className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+                  <Svg d={Icons.send} size={17} />
+                </button>
+              </div>
             </div>
 
             {/* Uploaded files preview */}
