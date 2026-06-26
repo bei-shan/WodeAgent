@@ -216,7 +216,7 @@ function SkillsPanel({ skills, onRefresh }: { skills: SkillInfo[]; onRefresh: ()
             className="px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors">+ 新建技能</button>
         </div>
         <div className="text-xs text-gray-400 mb-3">
-          扫描目录: <code className="text-gray-500">skills/&lt;name&gt;/SKILL.md</code> · <code className="text-gray-500">.claude/skills/&lt;name&gt;/SKILL.md</code> · <code className="text-gray-500">.skill/*.md</code>
+          存储位置: <code className="text-gray-500">.skill/&lt;name&gt;/SKILL.md</code>
         </div>
 
         {showForm && (

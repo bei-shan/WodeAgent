@@ -21,9 +21,9 @@ class SkillMeta:
 
 
 class SkillLoader:
-    """Scan and cache skills stored under project_root/skills."""
+    """Scan and cache skills stored under project_root/.skill/<name>/SKILL.md."""
 
-    def __init__(self, project_root: str, skills_dir: str = "skills"):
+    def __init__(self, project_root: str, skills_dir: str = ".skill"):
         self._project_root = Path(project_root).resolve()
         self._skills_dir = (self._project_root / skills_dir).resolve()
         self._skills: Dict[str, SkillMeta] = {}
@@ -99,28 +99,22 @@ class SkillLoader:
         return "\n".join(lines) if lines else "(none)"
 
     def _iter_skill_files(self) -> List[Path]:
-        """Scan all skill directories for SKILL.md files.
+        """Scan .skill/<name>/SKILL.md for skill definitions.
 
-        Search order (Claude Code compatible):
-        1. skills/<name>/SKILL.md         — project skills
-        2. .claude/skills/<name>/SKILL.md  — Claude Code convention
-        3. .skill/*.md                     — flat skill files
+        Also scans legacy skills/ and .claude/skills/ for backward compat.
         """
         paths: List[Path] = []
-        # Main skills directory
+        # Primary: .skill/<name>/SKILL.md
         if self._skills_dir.exists():
             paths.extend(self._skills_dir.rglob("SKILL.md"))
-        # Claude Code-compatible: .claude/skills/
+        # Legacy: skills/<name>/SKILL.md
+        legacy = self._project_root / "skills"
+        if legacy.exists():
+            paths.extend(legacy.rglob("SKILL.md"))
+        # Claude Code compatible: .claude/skills/<name>/SKILL.md
         claude_skills = self._project_root / ".claude" / "skills"
         if claude_skills.exists():
             paths.extend(claude_skills.rglob("SKILL.md"))
-        # Legacy .skill directory (flat .md files)
-        dot_skill = self._project_root / ".skill"
-        if dot_skill.exists():
-            paths.extend(dot_skill.rglob("SKILL.md"))
-            for md in sorted(dot_skill.glob("*.md")):
-                if md not in paths:
-                    paths.append(md)
         return sorted(paths)
 
     def _get_skills_state(self) -> Tuple[float, int]:

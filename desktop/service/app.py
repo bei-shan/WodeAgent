@@ -627,14 +627,12 @@ def create_app(
 
     @app.post("/api/skills", status_code=201)
     async def create_skill(body: SkillCreate):
-        """Create a new skill — writes SKILL.md to skills/<name>/."""
-        from desktop.service.schemas import SkillCreate
-        skills_dir = Path(app.state.project_root) / "skills" / body.name
+        """Create a new skill — writes .skill/<name>/SKILL.md."""
+        skills_dir = Path(app.state.project_root) / ".skill" / body.name
         if skills_dir.exists():
             raise HTTPException(409, f"Skill '{body.name}' already exists")
         try:
             skills_dir.mkdir(parents=True, exist_ok=False)
-            # Write SKILL.md with YAML frontmatter
             frontmatter = f"---\nname: {body.name}\ndescription: \"{body.description}\"\n---\n"
             (skills_dir / "SKILL.md").write_text(
                 frontmatter + "\n" + body.content + "\n",
