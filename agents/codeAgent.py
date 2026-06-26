@@ -1004,6 +1004,7 @@ class CodeAgent(Agent):
                     "tool_call_id": tool_call_id,
                     "status": status,
                     "output": observation,
+                    "input": tool_input,
                 }, step=step))
 
             self.history_manager.append_tool(

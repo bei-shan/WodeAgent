@@ -532,14 +532,13 @@ export default function App() {
   }
 
   const deleteSession = async (sid: string) => {
-    // Optimistic: remove from UI immediately
     const prevSessions = sessions
     setSessions(prev => prev.filter(s => s.id !== sid))
     if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() }
-    try { await api.sessions.delete(sid) } catch {
-      // Rollback on failure
+    try { await api.sessions.delete(sid) } catch (e: any) {
       setSessions(prevSessions)
       if (activeSid === sid) setActiveSid(sid)
+      alert('删除失败: ' + (e.message || '未知错误'))
     }
   }
 
@@ -570,7 +569,10 @@ export default function App() {
       case 'tool.completed': {
         let filePath = ''
         if (payload.status === 'success' && (payload.tool === 'Write' || payload.tool === 'Edit' || payload.tool === 'MultiEdit')) {
-          try { const out = JSON.parse(payload.output || '{}'); filePath = out?.data?.path || out?.data?.file_path || payload.input?.file_path || '' } catch {}
+          try {
+            const out = JSON.parse(payload.output || '{}')
+            filePath = out?.data?.path || out?.context?.path_resolved || payload.input?.path || ''
+          } catch {}
           if (filePath) {
             const name = filePath.split('/').pop()?.split('\\').pop() || filePath
             setGeneratedFiles(prev => { if (prev.find(f => f.path === filePath)) return prev; return [...prev, { name, path: filePath }] })
