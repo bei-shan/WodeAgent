@@ -64,6 +64,7 @@ class AgentSession:
         agent_factory: Callable[[], Any],  # () -> CodeAgent
     ):
         self.session_id = session_id
+        self.title: str = ""  # auto-set from first user message
         self._agent_factory = agent_factory
         self._agent: Any = None  # created lazily on first send_message
         self._thread: Optional[threading.Thread] = None
@@ -85,6 +86,7 @@ class AgentSession:
     def send_message(self, content: str) -> bool:
         """Kick off an agent turn in the worker thread.
 
+        Auto-names the session from the first user message.
         Returns ``True`` if the turn started, ``False`` if the agent is
         already busy (the caller should wait for ``turn.completed``).
         """
@@ -92,6 +94,10 @@ class AgentSession:
             if self._busy:
                 return False
             self._busy = True
+
+        # Auto-name session from first user message.
+        if not self.title:
+            self.title = content.strip()[:40]
 
         self._ensure_agent()
         self._thread = threading.Thread(

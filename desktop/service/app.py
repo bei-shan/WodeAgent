@@ -161,20 +161,24 @@ def create_app(
         ctrl: SessionController = app.state.controller
         sid = ctrl.create_session(app.state.agent_factory)
         session = ctrl.get_session(sid)
-        return SessionInfo(id=sid, title=body.title or sid[:8], busy=False)
+        title = body.title or "新会话"
+        if session:
+            session.title = title
+        return SessionInfo(id=sid, title=title, busy=False)
 
     @app.get("/api/sessions", response_model=list[SessionInfo])
     async def list_sessions():
         """List all active sessions."""
         ctrl: SessionController = app.state.controller
-        return [
-            SessionInfo(
-                id=sid,
-                title=sid[:8],
-                busy=(ctrl.get_session(sid).busy if ctrl.get_session(sid) else False),
-            )
-            for sid in ctrl.list_sessions()
-        ]
+        result = []
+        for sid in ctrl.list_sessions():
+            session = ctrl.get_session(sid)
+            title = session.title if session and session.title else sid[:8]
+            result.append(SessionInfo(
+                id=sid, title=title,
+                busy=(session.busy if session else False),
+            ))
+        return result
 
     @app.get("/api/sessions/{sid}", response_model=SessionInfo)
     async def get_session(sid: str):
@@ -183,7 +187,8 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
-        return SessionInfo(id=sid, title=sid[:8], busy=session.busy)
+        title = session.title or sid[:8]
+        return SessionInfo(id=sid, title=title, busy=session.busy)
 
     @app.delete("/api/sessions/{sid}")
     async def delete_session(sid: str):

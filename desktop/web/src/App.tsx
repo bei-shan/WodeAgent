@@ -618,12 +618,14 @@ export default function App() {
           <div className="pt-4">
             <div className="px-3 pb-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">最近</div>
             <div className="space-y-0.5">
-              {sessions.slice(0, 8).map(s => (
+              {sessions.slice(0, 15).map(s => (
                 <div key={s.id} onClick={() => selectSession(s.id)}
-                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
+                  className={`group flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
                     s.id === activeSid ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
                   }`}>
                   <span className="truncate text-[13px]">{s.title || s.id.slice(0, 8)}</span>
+                  <button onClick={e => { e.stopPropagation(); deleteSession(s.id) }}
+                    className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none ml-1 shrink-0">×</button>
                 </div>
               ))}
               {sessions.length === 0 && (
