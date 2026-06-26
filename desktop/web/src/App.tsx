@@ -205,7 +205,7 @@ function SessionItem({ session, active, onSelect, onDelete, onRename, onTogglePi
               className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors">
               {session.pinned ? '取消置顶' : '置顶'}
             </button>
-            <button onClick={() => { if (confirm('确定删除？')) { onDelete(); setMenuOpen(false) } }}
+            <button onClick={() => { onDelete(); setMenuOpen(false) }}
               className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 transition-colors">删除</button>
           </div>
         )}
@@ -477,6 +477,7 @@ export default function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)  // session id to confirm deletion
 
   // Config
   const [agentTeams, setAgentTeams] = useState(false)
@@ -707,7 +708,7 @@ export default function App() {
               {sessions.slice(0, 15).map(s => (
                 <SessionItem key={s.id} session={s} active={s.id === activeSid}
                   onSelect={() => selectSession(s.id)}
-                  onDelete={() => deleteSession(s.id)}
+                  onDelete={() => setConfirmDelete(s.id)}
                   onRename={async (title) => { try { await api.sessions.rename(s.id, title); loadSessions() } catch {} }}
                   onTogglePin={async () => { try { await api.sessions.togglePin(s.id); loadSessions() } catch {} }}
                 />
@@ -908,6 +909,27 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Confirm delete modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/25 flex items-center justify-center z-50 animate-fade-in" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-xl border border-gray-100" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-3 text-red-500">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">删除对话</h3>
+              <p className="text-sm text-gray-500 mt-1">删除后不可恢复，确定要删除此对话吗？</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDelete(null)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium">取消</button>
+              <button onClick={() => { const sid = confirmDelete; setConfirmDelete(null); deleteSession(sid) }}
+                className="flex-1 py-2.5 rounded-xl bg-red-500 text-white hover:bg-red-600 transition-colors text-sm font-medium">删除</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {permReq && activeSid && <PermissionModal req={permReq} sid={activeSid} onDone={() => setPermReq(null)} />}
