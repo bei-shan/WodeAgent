@@ -138,11 +138,13 @@ class SessionConfig(BaseModel):
     model: str = ""
     provider: str = ""
     enable_agent_teams: bool = False
+    plan_mode: bool = False
     thinking_level: str = "medium"  # low | medium | high
 
 
 class SessionConfigUpdate(BaseModel):
     enable_agent_teams: bool | None = None
+    plan_mode: bool | None = None
 
 
 # ── Teams ─────────────────────────────────────────────────────────────

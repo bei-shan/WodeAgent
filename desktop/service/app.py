@@ -257,7 +257,6 @@ def create_app(
 
     @app.get("/api/sessions/{sid}/config", response_model=SessionConfig)
     async def get_session_config(sid: str):
-        """Get session configuration."""
         ctrl: SessionController = app.state.controller
         session = ctrl.get_session(sid)
         if session is None:
@@ -268,16 +267,15 @@ def create_app(
         model = getattr(agent.llm, 'model', '')
         provider = getattr(agent.llm, 'provider', '')
         teams = bool(getattr(agent, 'enable_agent_teams', False))
+        plan = bool(getattr(agent, '_in_plan_mode', False))
         return SessionConfig(
-            model=model,
-            provider=provider,
-            enable_agent_teams=teams,
+            model=model, provider=provider,
+            enable_agent_teams=teams, plan_mode=plan,
             thinking_level="medium",
         )
 
     @app.put("/api/sessions/{sid}/config")
     async def update_session_config(sid: str, body: SessionConfigUpdate):
-        """Update session configuration (e.g. toggle agent teams)."""
         ctrl: SessionController = app.state.controller
         session = ctrl.get_session(sid)
         if session is None:
@@ -289,6 +287,28 @@ def create_app(
             agent.enable_agent_teams = bool(body.enable_agent_teams)
             if hasattr(agent.config, 'enable_agent_teams'):
                 agent.config.enable_agent_teams = agent.enable_agent_teams
+            # Lazy-init team manager when toggled on after agent start.
+            if agent.enable_agent_teams and agent.team_manager is None:
+                try:
+                    from core.team_engine.manager import TeamManager
+                    from core.team_engine.display_mode import resolve_teammate_mode
+                    mode, _ = resolve_teammate_mode(
+                        str(getattr(agent.config, 'teammate_mode', 'auto') or 'auto')
+                    )
+                    agent.team_manager = TeamManager(
+                        store_dir=str(getattr(agent.config, 'agent_teams_store_dir', '.teams') or '.teams'),
+                        task_store_dir=str(getattr(agent.config, 'agent_tasks_store_dir', '.tasks') or '.tasks'),
+                        teammate_mode=mode,
+                    )
+                    from core.tool_bootstrap import register_team_tools
+                    register_team_tools(agent._tool_bootstrap if hasattr(agent, '_tool_bootstrap') else None)
+                except Exception:
+                    pass
+        if body.plan_mode is not None:
+            if body.plan_mode:
+                agent.enter_plan_mode()
+            else:
+                agent.exit_plan_mode("")
         return {"status": "updated"}
 
     # ═══════════════════════════════════════════════════════════════
@@ -489,6 +509,20 @@ def create_app(
             content=numbered,
             truncated=(end_idx < total),
         )
+
+    @app.get("/api/sessions/{sid}/files/download")
+    async def file_download(sid: str, path: str = Query(...)):
+        """Download a file from the session workspace as attachment."""
+        from fastapi.responses import FileResponse
+        root = _session_root(sid)
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(403, "Path is outside session root")
+        if not target.exists() or not target.is_file():
+            raise HTTPException(404, f"File not found: {path}")
+        return FileResponse(str(target), filename=target.name, media_type="application/octet-stream")
 
     # ═══════════════════════════════════════════════════════════════
     # Info — models, tools, MCP

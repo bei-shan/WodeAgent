@@ -420,6 +420,7 @@ export default function App() {
 
   // Config
   const [agentTeams, setAgentTeams] = useState(false)
+  const [planMode, setPlanMode] = useState(false)
   const [thinkingLevel, setThinkingLevel] = useState('medium')
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([])
   const [showNewTeam, setShowNewTeam] = useState(false)
@@ -451,7 +452,7 @@ export default function App() {
     disconnectRef.current?.()
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
     disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
-    try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setThinkingLevel(cfg.thinking_level) } catch {}
+    try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode); setThinkingLevel(cfg.thinking_level) } catch {}
     try { setTeamsList(await api.teams.list(sid)) } catch {}
   }
 
@@ -710,10 +711,18 @@ export default function App() {
                     <span className="text-sm text-gray-500">深度思考</span>
                     <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
                   </label>
-                  {/* Agent teams tag */}
+                  {/* Agent teams toggle */}
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <span className="text-sm text-gray-500">Agent 团队</span>
                     <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} /><span className="slider" /></label>
+                  </label>
+                  {/* Plan mode toggle */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-sm text-gray-500">Plan</span>
+                    <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
+                      const next = !planMode; setPlanMode(next);
+                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
+                    }} /><span className="slider" /></label>
                   </label>
                 </div>
                 <div className="flex items-center gap-2">

@@ -160,12 +160,12 @@ export const mcp = {
 
 // ── Session config ───────────────────────────────────────────────────
 
-export interface SessionConfig { model: string; provider: string; enable_agent_teams: boolean; thinking_level: string }
+export interface SessionConfig { model: string; provider: string; enable_agent_teams: boolean; plan_mode: boolean; thinking_level: string }
 export interface TeamInfo { name: string; queued: number; running: number; succeeded: number; failed: number; active: number; idle: number; approvals_pending: number; blocked: number }
 
 export const config = {
   get:    (sid: string) => req<SessionConfig>('GET', `/sessions/${sid}/config`),
-  update: (sid: string, data: { enable_agent_teams?: boolean }) =>
+  update: (sid: string, data: { enable_agent_teams?: boolean; plan_mode?: boolean }) =>
     req<{ status: string }>('PUT', `/sessions/${sid}/config`, data),
 };
 
