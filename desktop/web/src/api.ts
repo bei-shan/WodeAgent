@@ -8,6 +8,7 @@ export interface SessionInfo {
   id: string;
   title: string;
   busy: boolean;
+  pinned: boolean;
 }
 
 export interface AgentEvent {
@@ -95,6 +96,10 @@ export const sessions = {
   create: (title?: string) => req<SessionInfo>('POST', '/sessions', { title: title || '' }),
   get:    (id: string)    => req<SessionInfo>('GET', `/sessions/${id}`),
   delete: (id: string)    => req<void>('DELETE', `/sessions/${id}`),
+  rename: (id: string, title: string) =>
+    req<{ status: string }>('PUT', `/sessions/${id}/rename`, { title }),
+  togglePin: (id: string) =>
+    req<{ pinned: boolean }>('POST', `/sessions/${id}/pin`),
   send:   (id: string, content: string) =>
     req<{ status: string }>('POST', `/sessions/${id}/messages`, { content }),
   interrupt: (id: string) =>

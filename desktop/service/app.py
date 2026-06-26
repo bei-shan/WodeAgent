@@ -168,8 +168,9 @@ def create_app(
 
     @app.get("/api/sessions", response_model=list[SessionInfo])
     async def list_sessions():
-        """List all active sessions."""
+        """List all active sessions (pinned first)."""
         ctrl: SessionController = app.state.controller
+        pinned = getattr(app.state, '_pinned', set())
         result = []
         for sid in ctrl.list_sessions():
             session = ctrl.get_session(sid)
@@ -177,7 +178,10 @@ def create_app(
             result.append(SessionInfo(
                 id=sid, title=title,
                 busy=(session.busy if session else False),
+                pinned=(sid in pinned),
             ))
+        # Sort: pinned first, then by id
+        result.sort(key=lambda s: (not s.pinned, s.id))
         return result
 
     @app.get("/api/sessions/{sid}", response_model=SessionInfo)
@@ -197,6 +201,36 @@ def create_app(
         if not ctrl.delete_session(sid):
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
+
+    @app.put("/api/sessions/{sid}/rename")
+    async def rename_session(sid: str, body: dict):
+        """Rename a session."""
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        new_title = (body.get("title") or "").strip()
+        if not new_title:
+            raise HTTPException(400, "Title is required")
+        session.title = new_title
+        return {"status": "renamed", "title": new_title}
+
+    # In-memory pinned sessions set
+    if not hasattr(app.state, "_pinned"):
+        app.state._pinned: set[str] = set()
+
+    @app.post("/api/sessions/{sid}/pin")
+    async def toggle_pin_session(sid: str):
+        """Toggle pin status for a session."""
+        ctrl: SessionController = app.state.controller
+        if ctrl.get_session(sid) is None:
+            raise HTTPException(404, "Session not found")
+        if sid in app.state._pinned:
+            app.state._pinned.discard(sid)
+            return {"pinned": False}
+        else:
+            app.state._pinned.add(sid)
+            return {"pinned": True}
 
     # ═══════════════════════════════════════════════════════════════
     # Messages

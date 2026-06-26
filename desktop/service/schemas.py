@@ -16,6 +16,7 @@ class SessionInfo(BaseModel):
     title: str = ""
     busy: bool = False
     message_count: int = 0
+    pinned: bool = False
 
 
 # ── Messages ─────────────────────────────────────────────────────────

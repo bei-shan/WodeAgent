@@ -156,6 +156,59 @@ function NavItem({ icon, label, active, onClick }: { icon: string; label: string
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Session list item with dropdown menu
+// ═══════════════════════════════════════════════════════════════════════
+
+function SessionItem({ session, active, onSelect, onDelete, onRename, onTogglePin }: {
+  session: SessionInfo; active: boolean; onSelect: () => void;
+  onDelete: () => void; onRename: (t: string) => void; onTogglePin: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState(session.title)
+
+  return (
+    <div onClick={onSelect}
+      className={`group flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
+        active ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
+      }`}>
+      {renaming ? (
+        <input value={name} onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { onRename(name); setRenaming(false) } }}
+          onBlur={() => { onRename(name); setRenaming(false) }}
+          autoFocus
+          className="flex-1 bg-white border border-blue-300 rounded-lg px-2 py-0.5 text-[13px] outline-none"
+          onClick={e => e.stopPropagation()} />
+      ) : (
+        <div className="flex items-center gap-1.5 min-w-0">
+          {session.pinned && <span className="text-[10px] shrink-0">📌</span>}
+          <span className="truncate text-[13px]">{session.title || session.id.slice(0, 8)}</span>
+          {session.busy && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />}
+        </div>
+      )}
+      <div className="relative ml-1 shrink-0" onClick={e => e.stopPropagation()}>
+        <button onClick={() => setMenuOpen(!menuOpen)}
+          className="w-6 h-6 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 opacity-0 group-hover:opacity-100 transition-opacity">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-20 w-32 animate-fade-in">
+            <button onClick={() => { setRenaming(true); setMenuOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors">重命名</button>
+            <button onClick={() => { onTogglePin(); setMenuOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+              {session.pinned ? '取消置顶' : '置顶'}
+            </button>
+            <button onClick={() => { if (confirm('确定删除？')) { onDelete(); setMenuOpen(false) } }}
+              className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 transition-colors">删除</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Skills management panel
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -619,14 +672,12 @@ export default function App() {
             <div className="px-3 pb-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">最近</div>
             <div className="space-y-0.5">
               {sessions.slice(0, 15).map(s => (
-                <div key={s.id} onClick={() => selectSession(s.id)}
-                  className={`group flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
-                    s.id === activeSid ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
-                  }`}>
-                  <span className="truncate text-[13px]">{s.title || s.id.slice(0, 8)}</span>
-                  <button onClick={e => { e.stopPropagation(); deleteSession(s.id) }}
-                    className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none ml-1 shrink-0">×</button>
-                </div>
+                <SessionItem key={s.id} session={s} active={s.id === activeSid}
+                  onSelect={() => selectSession(s.id)}
+                  onDelete={() => deleteSession(s.id)}
+                  onRename={async (title) => { try { await api.sessions.rename(s.id, title); loadSessions() } catch {} }}
+                  onTogglePin={async () => { try { await api.sessions.togglePin(s.id); loadSessions() } catch {} }}
+                />
               ))}
               {sessions.length === 0 && (
                 <div className="px-3 py-4 text-center">
