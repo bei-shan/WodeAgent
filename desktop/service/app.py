@@ -245,6 +245,27 @@ def create_app(
             app.state._pinned.add(sid)
             return {"pinned": True}
 
+    @app.get("/api/sessions/{sid}/history")
+    async def get_session_history(sid: str):
+        """Load persisted session history (messages from disk snapshot)."""
+        from core.session_store import load_session_snapshot
+        from pathlib import Path
+        snap_path = Path("memory/sessions") / f"{sid}.json"
+        if not snap_path.exists():
+            return {"messages": []}
+        try:
+            snap = load_session_snapshot(str(snap_path))
+        except Exception:
+            return {"messages": []}
+        entries = snap.get("history_entries") or []
+        messages = []
+        for entry in entries:
+            role = entry.get("role", "")
+            content = entry.get("content", "")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": str(content)[:5000]})
+        return {"messages": messages}
+
     # ═══════════════════════════════════════════════════════════════
     # Messages
     # ═══════════════════════════════════════════════════════════════

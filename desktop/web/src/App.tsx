@@ -513,6 +513,14 @@ export default function App() {
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null); setGeneratedFiles([])
     disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
     try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode); setThinkingLevel(cfg.thinking_level) } catch {}
+    // Load persisted history
+    try {
+      const res = await fetch(`/api/sessions/${sid}/history`)
+      const data = await res.json()
+      if (data.messages?.length) {
+        setMessages(data.messages.map((m: any) => ({ id: uid(), role: m.role, content: m.content })))
+      }
+    } catch {}
     try { setTeamsList(await api.teams.list(sid)) } catch {}
   }
 
