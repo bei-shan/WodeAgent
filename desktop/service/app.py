@@ -207,6 +207,28 @@ def create_app(
         title = session.title or sid[:8]
         return SessionInfo(id=sid, title=title, busy=session.busy)
 
+    @app.post("/api/sessions/{sid}/activate")
+    async def activate_session(sid: str):
+        """Activate a persisted session — load into memory for WebSocket use."""
+        ctrl: SessionController = app.state.controller
+        # Already active
+        if ctrl.get_session(sid) is not None:
+            return {"status": "active"}
+        # Check disk
+        snap_path = Path("memory/sessions") / f"{sid}.json"
+        if not snap_path.exists():
+            raise HTTPException(404, "Session not found on disk")
+        # Create new AgentSession
+        new_sid = ctrl.create_session(app.state.agent_factory)
+        session = ctrl.get_session(new_sid)
+        if session is None:
+            raise HTTPException(500, "Failed to create session")
+        # Override its ID to match the persisted one
+        session.session_id = sid
+        ctrl._sessions.pop(new_sid, None)
+        ctrl._sessions[sid] = session
+        return {"status": "activated", "id": sid}
+
     @app.delete("/api/sessions/{sid}")
     async def delete_session(sid: str):
         """Delete a session — from memory AND from disk."""

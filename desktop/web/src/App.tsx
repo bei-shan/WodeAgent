@@ -512,6 +512,8 @@ export default function App() {
   const selectSession = async (sid: string) => {
     disconnectRef.current?.()
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null); setGeneratedFiles([])
+    // Activate if this is a persisted (disk-only) session
+    try { await fetch(`/api/sessions/${sid}/activate`, { method: 'POST' }) } catch {}
     disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
     try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode); setThinkingLevel(cfg.thinking_level) } catch {}
     // Load persisted history
