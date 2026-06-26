@@ -209,9 +209,19 @@ def create_app(
 
     @app.delete("/api/sessions/{sid}")
     async def delete_session(sid: str):
-        """Delete a session and free its resources."""
+        """Delete a session — from memory AND from disk."""
+        import shutil
         ctrl: SessionController = app.state.controller
-        if not ctrl.delete_session(sid):
+        # Remove from in-memory controller if active
+        mem_deleted = ctrl.delete_session(sid)
+        # Also remove persisted snapshot + workspace
+        snap_path = Path("memory/sessions") / f"{sid}.json"
+        if snap_path.exists():
+            snap_path.unlink()
+        ws_path = Path(".mycodeagent/sessions") / sid
+        if ws_path.exists():
+            shutil.rmtree(ws_path)
+        if not mem_deleted and not snap_path.exists():
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
 
