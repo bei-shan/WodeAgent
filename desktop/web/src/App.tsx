@@ -480,6 +480,9 @@ export default function App() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(260)
+  const sidebarRef = useRef<HTMLDivElement>(null)
 
   // Config
   const [agentTeams, setAgentTeams] = useState(false)
@@ -656,7 +659,9 @@ export default function App() {
   return (
     <div className="fixed inset-0 flex bg-[#F9FAFB] text-gray-800 overflow-hidden">
       {/* ═══════════════ LEFT SIDEBAR ═══════════════ */}
-      <aside className="w-64 flex flex-col border-r border-gray-100 bg-white shrink-0">
+      <aside ref={sidebarRef} className={`relative flex flex-col border-r border-gray-100 bg-white shrink-0 transition-all duration-200 overflow-hidden ${sidebarCollapsed ? 'w-0 border-r-0' : ''}`}
+        style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}>
+        <div className="flex-1 flex flex-col min-w-[220px]">
         {/* Logo */}
         <div className="px-4 pt-4 pb-2">
           <div className="flex items-center gap-2.5">
@@ -765,30 +770,68 @@ export default function App() {
             <Svg d={Icons.download} size={16} />
             <span>下载 CLI</span>
           </a>
-          <div className="flex items-center gap-2.5 px-2">
+          {/* Toggles moved from input area */}
+          <div className="px-3 pt-2 pb-1 space-y-1.5 border-t border-gray-100">
+            <label className="flex items-center justify-between cursor-pointer select-none">
+              <span className="text-xs text-gray-500">深度思考</span>
+              <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+            </label>
+            <label className="flex items-center justify-between cursor-pointer select-none">
+              <span className="text-xs text-gray-500">Plan</span>
+              <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
+                const next = !planMode; setPlanMode(next);
+                if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
+              }} /><span className="slider" /></label>
+            </label>
+          </div>
+          <div className="flex items-center gap-2.5 px-2 pt-1">
             <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
               <Svg d={Icons.user} size={12} />
             </div>
             <span className="text-sm text-gray-600">sam</span>
           </div>
         </div>
+        </div>{/* close inner flex wrapper */}
+        {/* Resize handle */}
+        {!sidebarCollapsed && (
+          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-300 transition-colors z-10"
+            onMouseDown={e => {
+              e.preventDefault()
+              const startX = e.clientX
+              const startW = sidebarWidth
+              const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(180, Math.min(500, startW + ev.clientX - startX)))
+              const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+              document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+            }}
+          />
+        )}
       </aside>
 
       {/* ═══════════════ RIGHT MAIN ═══════════════ */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#F9FAFB]">
         {/* Top bar */}
-        <header className="px-6 py-4 flex items-center justify-end shrink-0 gap-3">
+        <header className="px-4 py-3 flex items-center justify-between shrink-0 gap-3">
+          <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              {sidebarCollapsed
+                ? <><path d="M4 6h16M4 12h16M4 18h16"/></>
+                : <><path d="M3 12h18M3 6h12m-12 12h12"/></>}
+            </svg>
+          </button>
+          <div className="flex items-center gap-3">
           {sending && <span className="text-xs text-blue-500 font-medium mr-2">Agent 处理中…</span>}
-          <a href={GITHUB_URL} target="_blank" rel="noopener"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
-            <Svg d={Icons.doc} size={16} />
-            <span>文档</span>
-          </a>
-          <a href={GITHUB_URL} target="_blank" rel="noopener"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
-            <Svg d={Icons.download} size={16} />
-            <span>下载 CLI</span>
-          </a>
+            <a href={GITHUB_URL} target="_blank" rel="noopener"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
+              <Svg d={Icons.doc} size={16} />
+              <span>文档</span>
+            </a>
+            <a href={GITHUB_URL} target="_blank" rel="noopener"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
+              <Svg d={Icons.download} size={16} />
+              <span>下载 CLI</span>
+            </a>
+          </div>
         </header>
 
         {/* ── Skills management panel ── */}
@@ -828,24 +871,6 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  {/* Deep thinking toggle */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-sm text-gray-500">深度思考</span>
-                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-                  </label>
-                  {/* Agent teams toggle */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-sm text-gray-500">Agent 团队</span>
-                    <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} /><span className="slider" /></label>
-                  </label>
-                  {/* Plan mode toggle */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-sm text-gray-500">Plan</span>
-                    <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
-                      const next = !planMode; setPlanMode(next);
-                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
-                    }} /><span className="slider" /></label>
-                  </label>
                 </div>
                 <div className="flex items-center gap-2">
                   {/* File upload */}
@@ -892,8 +917,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* Mode switch */}
-            <button className="mt-12 text-xs text-gray-300 hover:text-gray-500 transition-colors">切换到经典</button>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
