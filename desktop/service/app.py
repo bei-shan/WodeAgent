@@ -168,19 +168,32 @@ def create_app(
 
     @app.get("/api/sessions", response_model=list[SessionInfo])
     async def list_sessions():
-        """List all active sessions (pinned first)."""
+        """List sessions — active (in-memory) + persisted (on-disk)."""
         ctrl: SessionController = app.state.controller
         pinned = getattr(app.state, '_pinned', set())
+        active_ids = set(ctrl.list_sessions())
         result = []
-        for sid in ctrl.list_sessions():
+
+        # Active sessions first
+        for sid in active_ids:
             session = ctrl.get_session(sid)
             title = session.title if session and session.title else sid[:8]
-            result.append(SessionInfo(
-                id=sid, title=title,
+            result.append(SessionInfo(id=sid, title=title,
                 busy=(session.busy if session else False),
-                pinned=(sid in pinned),
-            ))
-        # Sort: pinned first, then by id
+                pinned=(sid in pinned)))
+
+        # Add persisted sessions not currently active (from disk)
+        try:
+            from core.session_manager import SessionManager
+            sm = SessionManager()
+            for s in sm.list_sessions():
+                if s.id not in active_ids:
+                    result.append(SessionInfo(id=s.id,
+                        title=s.title or s.id[:8],
+                        busy=False, pinned=(s.id in pinned)))
+        except Exception:
+            pass
+
         result.sort(key=lambda s: (not s.pinned, s.id))
         return result
 
