@@ -1009,6 +1009,26 @@ def create_app(
         _write_mcp_config(data)
         return {"status": "deleted", "name": name}
 
+    # ═══════════════════════════════════════════════════════════════
+    # Hooks — lifecycle hook management
+    # ═══════════════════════════════════════════════════════════════
+
+    _hooks_path = Path(app.state.project_root) / ".mycode" / "hooks.json"
+
+    @app.get("/api/hooks")
+    async def get_hooks():
+        if not _hooks_path.exists():
+            return {"hooks": {}}
+        import json
+        return json.loads(_hooks_path.read_text(encoding="utf-8"))
+
+    @app.put("/api/hooks")
+    async def save_hooks(body: dict):
+        _hooks_path.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        _hooks_path.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return {"status": "saved"}
+
     return app
 
 

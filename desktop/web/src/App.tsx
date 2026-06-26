@@ -464,6 +464,67 @@ function McpPanel({ servers, onRefresh }: { servers: McpServerCfg[]; onRefresh: 
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Hooks management panel
+// ═══════════════════════════════════════════════════════════════════════
+
+function HooksPanel() {
+  const [hooks, setHooks] = useState<Record<string, any>>({})
+  const [json, setJson] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/hooks').then(r => r.json()).then(d => {
+      setHooks(d.hooks || {})
+      setJson(JSON.stringify(d, null, 2))
+    }).catch(() => {})
+  }, [])
+
+  const save = async () => {
+    try {
+      const parsed = JSON.parse(json)
+      await fetch('/api/hooks', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json })
+      setHooks(parsed.hooks || {})
+      setSaved(true); setTimeout(() => setSaved(false), 2000)
+    } catch { alert('JSON 格式无效') }
+  }
+
+  const events = ['SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd']
+  return (
+    <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+      <div className="max-w-3xl mx-auto py-8 px-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold text-gray-800">Hooks 管理</h2>
+          <button onClick={save}
+            className="px-4 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors">
+            {saved ? '✓ 已保存' : '保存'}
+          </button>
+        </div>
+        <div className="text-xs text-gray-400 mb-3">配置文件: <code className="text-gray-500">.mycode/hooks.json</code></div>
+
+        {/* Summary */}
+        <div className="grid grid-cols-4 gap-3 mb-5">
+          {events.map(e => (
+            <div key={e} className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+              <div className="text-lg font-bold text-gray-700">{(hooks[e] || []).length}</div>
+              <div className="text-[10px] text-gray-400">{e}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* JSON editor */}
+        <textarea value={json} onChange={e => setJson(e.target.value)}
+          rows={20}
+          className="w-full bg-white border border-gray-200 rounded-xl p-4 text-sm text-gray-700 resize-none input-focus-ring font-mono"
+          spellCheck={false} />
+        <div className="text-[10px] text-gray-400 mt-1.5">
+          格式: {"{"}"hooks": {"{"}"SessionStart": [{"{"}"matcher": "*", "hooks": [{"{"}"command": "echo started"{ "}"}]{"}"}]{"}"}{"}"}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Main App
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -493,7 +554,7 @@ export default function App() {
   const [newTeamName, setNewTeamName] = useState('')
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'>('sessions')
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'|'hooks'>('sessions')
   const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
@@ -654,6 +715,7 @@ export default function App() {
     { key: 'files' as const, icon: Icons.folder, label: '文件' },
     { key: 'skills' as const, icon: Icons.skill, label: '技能' },
     { key: 'mcp' as const, icon: Icons.settings, label: 'MCP' },
+    { key: 'hooks' as const, icon: Icons.clock, label: 'Hooks' },
   ]
 
   return (
@@ -822,6 +884,9 @@ export default function App() {
         {sidebarTab === 'mcp' && (
           <McpPanel servers={mcpServers} onRefresh={async () => { try { setMcpServers(await api.mcp.list()) } catch {} }} />
         )}
+
+        {/* ── Hooks management panel ── */}
+        {sidebarTab === 'hooks' && <HooksPanel />}
 
         {/* ── Chat / empty state ── */}
         {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (
