@@ -120,10 +120,17 @@ def create_app(
     )
 
     # ── Shared state ──────────────────────────────────────────────
-    app.state.controller = SessionController()
+    app.state.controller = SessionController(
+        workspace_base=os.path.join(app.state.data_dir, "sessions")
+    )
     app.state.agent_factory = agent_factory
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
+    # Base directory for session workspaces — configurable for deployment.
+    import os as _os
+    app.state.data_dir = _os.path.abspath(
+        _os.getenv("MYCODEAGENT_DATA_DIR", _os.path.join(project_root, ".mycodeagent"))
+    )
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
@@ -240,7 +247,7 @@ def create_app(
         snap_path = Path("memory/sessions") / f"{sid}.json"
         if snap_path.exists():
             snap_path.unlink()
-        ws_path = Path(".mycodeagent/sessions") / sid
+        ws_path = Path(app.state.data_dir) / "sessions" / sid
         if ws_path.exists():
             shutil.rmtree(ws_path)
         if not mem_deleted and not snap_path.exists():
@@ -334,7 +341,7 @@ def create_app(
             raise HTTPException(404, "Session not found")
         # Use session workspace — ensure agent is initialized first
         from pathlib import Path as Pt
-        ws = Pt(".mycodeagent/sessions") / sid
+        ws = Pt(app.state.data_dir) / "sessions" / sid
         ws.mkdir(parents=True, exist_ok=True)
         # Sanitize filename
         safe_name = Pt(file.filename or "upload").name
@@ -552,8 +559,8 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is not None and session.workspace_dir:
             return Path(session.workspace_dir).resolve()
-        # Fallback: workspace based on session ID
-        ws = Path(".mycodeagent/sessions") / sid
+        # Fallback: workspace based on data dir
+        ws = Path(app.state.data_dir) / "sessions" / sid
         if ws.exists():
             return ws.resolve()
         return Path(app.state.project_root).resolve()

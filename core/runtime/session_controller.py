@@ -62,11 +62,13 @@ class AgentSession:
         self,
         session_id: str,
         agent_factory: Callable[[], Any],  # () -> CodeAgent
+        workspace_base: str = ".mycodeagent/sessions",
     ):
         self.session_id = session_id
         self.title: str = ""  # auto-set from first user message
         self.workspace_dir: str = ""  # set in _ensure_agent, used by file download
         self._agent_factory = agent_factory
+        self._workspace_base = workspace_base
         self._agent: Any = None  # created lazily on first send_message
         self._thread: Optional[threading.Thread] = None
         self._busy_lock = threading.Lock()
@@ -162,7 +164,7 @@ class AgentSession:
         from pathlib import Path
 
         # Session-specific workspace
-        workspace = Path(os.getcwd()) / ".mycodeagent" / "sessions" / self.session_id
+        workspace = Path(self._workspace_base) / self.session_id
         workspace.mkdir(parents=True, exist_ok=True)
         self.workspace_dir = str(workspace.resolve())
 
@@ -242,26 +244,17 @@ class AgentSession:
 # ═══════════════════════════════════════════════════════════════════════
 
 class SessionController:
-    """Manage multiple AgentSession instances.
+    """Manage multiple AgentSession instances."""
 
-    Usage::
-
-        ctrl = SessionController()
-        sid = ctrl.create_session(lambda: make_agent())
-        session = ctrl.get_session(sid)
-        session.send_message("Hello")
-        # Read session.events from WebSocket …
-        session.resolve_permission("abc123", "granted")
-    """
-
-    def __init__(self):
+    def __init__(self, workspace_base: str = ".mycodeagent/sessions"):
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
+        self._workspace_base = workspace_base
 
     def create_session(self, agent_factory: Callable[[], Any]) -> str:
         """Create a new session.  Returns the session ID."""
         session_id = uuid.uuid4().hex[:12]
-        session = AgentSession(session_id, agent_factory)
+        session = AgentSession(session_id, agent_factory, workspace_base=self._workspace_base)
         with self._lock:
             self._sessions[session_id] = session
         logger.info("Session created: %s", session_id)
