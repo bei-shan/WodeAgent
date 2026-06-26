@@ -561,11 +561,20 @@ export default function App() {
 
   // ── Send ────────────────────────────────────────────────────────
   const sendMessage = async () => {
-    if (!activeSid || !input.trim() || sending) return
+    if (!input.trim() || sending) return
+    // Auto-create session if none active
+    let sid = activeSid
+    if (!sid) {
+      try {
+        const s = await api.sessions.create(); setSessions(prev => [s, ...prev]); sid = s.id; setActiveSid(sid)
+        disconnectRef.current?.()
+        disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
+      } catch (e: any) { return }
+    }
     const content = input.trim(); setInput(''); setSending(true)
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
-    try { await api.sessions.send(activeSid, content) } catch (e: any) {
+    try { await api.sessions.send(sid, content) } catch (e: any) {
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `${e.message}`, streaming: false } : m)); setSending(false)
     }
   }
@@ -793,7 +802,7 @@ export default function App() {
               {/* Textarea */}
               <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
                 disabled={sending} rows={2}
-                placeholder={activeSid ? "问任何问题" : "点击左侧「+ 新建任务」开始…"}
+                placeholder="问任何问题"
                 className="w-full bg-transparent px-5 pb-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
               />
             </div>
