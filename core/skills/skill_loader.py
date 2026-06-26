@@ -99,16 +99,25 @@ class SkillLoader:
         return "\n".join(lines) if lines else "(none)"
 
     def _iter_skill_files(self) -> List[Path]:
-        """Scan skills/ and .skill/ directories for SKILL.md files."""
+        """Scan all skill directories for SKILL.md files.
+
+        Search order (Claude Code compatible):
+        1. skills/<name>/SKILL.md         — project skills
+        2. .claude/skills/<name>/SKILL.md  — Claude Code convention
+        3. .skill/*.md                     — flat skill files
+        """
         paths: List[Path] = []
         # Main skills directory
         if self._skills_dir.exists():
             paths.extend(self._skills_dir.rglob("SKILL.md"))
-        # Claude Code-compatible .skill directory (flat .md files)
+        # Claude Code-compatible: .claude/skills/
+        claude_skills = self._project_root / ".claude" / "skills"
+        if claude_skills.exists():
+            paths.extend(claude_skills.rglob("SKILL.md"))
+        # Legacy .skill directory (flat .md files)
         dot_skill = self._project_root / ".skill"
         if dot_skill.exists():
             paths.extend(dot_skill.rglob("SKILL.md"))
-            # Also scan for flat .md files in .skill/ (Claude Code convention)
             for md in sorted(dot_skill.glob("*.md")):
                 if md not in paths:
                     paths.append(md)

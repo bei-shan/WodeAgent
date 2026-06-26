@@ -700,6 +700,76 @@ def create_app(
             raise HTTPException(500, f"Failed to delete skill: {exc}")
         return {"status": "deleted", "name": name}
 
+    @app.post("/api/skills/validate")
+    async def validate_skill(body: SkillCreate):
+        """Validate a skill submission without creating it.
+
+        Checks that the YAML frontmatter has required fields (name, description)
+        and the content is non-empty markdown.
+        """
+        errors: list[str] = []
+        if not body.name or not body.name.strip():
+            errors.append("缺少 name 字段")
+        elif not __import__('re').match(r'^[a-z0-9]+(?:-[a-z0-9]+)*$', body.name.strip()):
+            errors.append("name 格式无效（只允许小写字母、数字、连字符）")
+        if not body.description or not body.description.strip():
+            errors.append("缺少 description 字段")
+        if not body.content or not body.content.strip():
+            errors.append("内容不能为空")
+        return {"valid": len(errors) == 0, "errors": errors}
+
+    # ── Enable/disable state ───────────────────────────────────────
+    _state_path = Path(app.state.project_root) / "skill_state.json"
+
+    def _read_state() -> dict:
+        if not _state_path.exists():
+            return {}
+        try:
+            import json
+            return json.loads(_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_state(data: dict) -> None:
+        import json
+        _state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    @app.get("/api/skills/{name}/enabled")
+    async def get_skill_enabled(name: str):
+        state = _read_state()
+        disabled = state.get("disabled_skills", {}).get(name, False)
+        return {"name": name, "enabled": not disabled}
+
+    @app.put("/api/skills/{name}/enabled")
+    async def toggle_skill_enabled(name: str):
+        state = _read_state()
+        disabled = state.setdefault("disabled_skills", {})
+        currently = disabled.get(name, False)
+        if currently:
+            del disabled[name]
+        else:
+            disabled[name] = True
+        _write_state(state)
+        return {"name": name, "enabled": currently}  # toggled
+
+    @app.put("/api/mcp/servers/{name}/enabled")
+    async def toggle_mcp_enabled(name: str):
+        state = _read_state()
+        disabled = state.setdefault("disabled_mcp", {})
+        currently = disabled.get(name, False)
+        if currently:
+            del disabled[name]
+        else:
+            disabled[name] = True
+        _write_state(state)
+        return {"name": name, "enabled": currently}
+
+    @app.get("/api/mcp/servers/{name}/enabled")
+    async def get_mcp_enabled(name: str):
+        state = _read_state()
+        disabled = state.get("disabled_mcp", {}).get(name, False)
+        return {"name": name, "enabled": not disabled}
+
     # ═══════════════════════════════════════════════════════════════
     # MCP servers — user-configurable MCP server management
     # ═══════════════════════════════════════════════════════════════

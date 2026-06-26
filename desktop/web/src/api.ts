@@ -134,6 +134,12 @@ export const skills = {
     req<{ status: string }>('PUT', `/skills/${encodeURIComponent(name)}`, data),
   delete:  (name: string) =>
     req<{ status: string }>('DELETE', `/skills/${encodeURIComponent(name)}`),
+  validate: (name: string, description: string, content: string) =>
+    req<{ valid: boolean; errors: string[] }>('POST', '/skills/validate', { name, description, content }),
+  getEnabled: (name: string) =>
+    req<{ name: string; enabled: boolean }>('GET', `/skills/${encodeURIComponent(name)}/enabled`),
+  toggleEnabled: (name: string) =>
+    req<{ name: string; enabled: boolean }>('PUT', `/skills/${encodeURIComponent(name)}/enabled`),
 };
 
 // ── MCP servers ──────────────────────────────────────────────────────
@@ -146,6 +152,10 @@ export const mcp = {
     req<{ status: string }>('PUT', `/mcp/servers/${encodeURIComponent(name)}`, { command, args }),
   delete: (name: string) =>
     req<{ status: string }>('DELETE', `/mcp/servers/${encodeURIComponent(name)}`),
+  getEnabled: (name: string) =>
+    req<{ name: string; enabled: boolean }>('GET', `/mcp/servers/${encodeURIComponent(name)}/enabled`),
+  toggleEnabled: (name: string) =>
+    req<{ name: string; enabled: boolean }>('PUT', `/mcp/servers/${encodeURIComponent(name)}/enabled`),
 };
 
 // ── Session config ───────────────────────────────────────────────────
