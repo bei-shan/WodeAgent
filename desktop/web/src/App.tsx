@@ -7,7 +7,7 @@ import type { SessionInfo, AgentEvent, FileEntry, SkillInfo, McpServerCfg, TeamI
 // ═══════════════════════════════════════════════════════════════════════
 
 interface Message { id: string; role: 'user' | 'assistant'; content: string; step?: number; streaming?: boolean }
-interface ToolEntry { id: string; name: string; input: Record<string, any>; status: 'running' | 'success' | 'error'; output?: string; step: number }
+interface ToolEntry { id: string; name: string; input: Record<string, any>; status: 'running' | 'success' | 'error'; output?: string; filePath?: string; step: number }
 interface PermRequest { requestId: string; tool: string; path: string; action: string }
 interface AskRequest { requestId: string; prompt: string }
 
@@ -114,7 +114,7 @@ function AskUserModal({ req, sid, onDone }: { req: AskRequest; sid: string; onDo
 // Tool card
 // ═══════════════════════════════════════════════════════════════════════
 
-function ToolCard({ tool }: { tool: ToolEntry }) {
+function ToolCard({ tool, sid }: { tool: ToolEntry; sid: string | null }) {
   const [expanded, setExpanded] = useState(false)
   const colors = tool.status === 'running' ? 'border-amber-200 bg-amber-50/50' : tool.status === 'error' ? 'border-red-200 bg-red-50/50' : 'border-emerald-200 bg-emerald-50/50'
   const dot = tool.status === 'running' ? 'bg-amber-400 animate-pulse' : tool.status === 'error' ? 'bg-red-400' : 'bg-emerald-400'
@@ -134,6 +134,12 @@ function ToolCard({ tool }: { tool: ToolEntry }) {
             <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-gray-700 overflow-x-auto max-h-40 whitespace-pre-wrap">{tool.output.length > 2000 ? tool.output.slice(0, 2000) + '...' : tool.output}</pre>
           </>}
         </div>
+      )}
+      {tool.filePath && tool.status === 'success' && sid && (
+        <a href={`/api/sessions/${sid}/files/download?path=${encodeURIComponent(tool.filePath)}`}
+          download className="ml-2 text-[11px] text-blue-500 hover:text-blue-600 font-medium inline-flex items-center gap-1 mt-1">
+          <Svg d={Icons.download} size={12} /> 下载 {tool.filePath.split('/').pop()?.split('\\').pop()}
+        </a>
       )}
     </div>
   )
@@ -470,6 +476,7 @@ export default function App() {
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
 
   // Config
   const [agentTeams, setAgentTeams] = useState(false)
@@ -503,7 +510,7 @@ export default function App() {
 
   const selectSession = async (sid: string) => {
     disconnectRef.current?.()
-    setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
+    setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null); setGeneratedFiles([])
     disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
     try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode); setThinkingLevel(cfg.thinking_level) } catch {}
     try { setTeamsList(await api.teams.list(sid)) } catch {}
@@ -541,8 +548,17 @@ export default function App() {
     switch (type) {
       case 'tool.started':
         setTools(prev => [...prev, { id: payload.tool_call_id || uid(), name: payload.tool, input: payload.input || {}, status: 'running', step: event.step }]); break
-      case 'tool.completed':
-        setTools(prev => prev.map(t => t.id === payload.tool_call_id ? { ...t, status: payload.status === 'success' ? 'success' : 'error', output: payload.output } : t)); break
+      case 'tool.completed': {
+        let filePath = ''
+        if (payload.status === 'success' && (payload.tool === 'Write' || payload.tool === 'Edit' || payload.tool === 'MultiEdit')) {
+          try { const out = JSON.parse(payload.output || '{}'); filePath = out?.data?.path || out?.data?.file_path || payload.input?.file_path || '' } catch {}
+          if (filePath) {
+            const name = filePath.split('/').pop()?.split('\\').pop() || filePath
+            setGeneratedFiles(prev => { if (prev.find(f => f.path === filePath)) return prev; return [...prev, { name, path: filePath }] })
+          }
+        }
+        setTools(prev => prev.map(t => t.id === payload.tool_call_id ? { ...t, status: payload.status === 'success' ? 'success' : 'error', output: payload.output, filePath } : t)); break
+      }
       case 'assistant.final':
         setMessages(prev => {
           const last = prev[prev.length - 1]
@@ -840,6 +856,20 @@ export default function App() {
                   </div>
                 </div>
               ))}
+              {/* Generated files download */}
+              {generatedFiles.length > 0 && (
+                <div className="border-t border-gray-100 pt-3 mt-2">
+                  <div className="text-[11px] text-gray-400 mb-1.5">生成的文件</div>
+                  <div className="flex flex-wrap gap-2">
+                    {generatedFiles.map((f, i) => (
+                      <a key={i} href={`/api/sessions/${activeSid}/files/download?path=${encodeURIComponent(f.path)}`}
+                        download className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-colors">
+                        <Svg d={Icons.download} size={12} /> {f.name}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div ref={chatEndRef} />
             </div>
           </div>
