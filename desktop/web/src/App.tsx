@@ -858,6 +858,14 @@ export default function App() {
                     <Svg d={Icons.plus} size={17} />
                   </button>
                   <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
+                  <div className="flex items-center gap-1.5 ml-2">
+                    <label className="toggle" title="深度思考"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                    <label className="toggle" title="Agent 团队"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
+                    <label className="toggle" title="Plan"><input type="checkbox" checked={planMode} onChange={async () => {
+                      const next = !planMode; setPlanMode(next);
+                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
+                    }} /><span className="slider" /></label>
+                  </div>
                   {/* Send */}
                   <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
                     className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
@@ -885,25 +893,6 @@ export default function App() {
                 ))}
               </div>
             )}
-
-            {/* Toggles below input */}
-            <div className="flex items-center gap-4 justify-center mt-4">
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-xs text-gray-400">深度思考</span>
-                <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-xs text-gray-400">Agent 团队</span>
-                <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-xs text-gray-400">Plan</span>
-                <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
-                  const next = !planMode; setPlanMode(next);
-                  if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
-                }} /><span className="slider" /></label>
-              </label>
-            </div>
 
             {/* Quick tags */}
             <div className="flex flex-wrap gap-2 justify-center mt-5">
