@@ -530,7 +530,15 @@ export default function App() {
   }
 
   const deleteSession = async (sid: string) => {
-    try { await api.sessions.delete(sid); setSessions(prev => prev.filter(s => s.id !== sid)); if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() } } catch {}
+    // Optimistic: remove from UI immediately
+    const prevSessions = sessions
+    setSessions(prev => prev.filter(s => s.id !== sid))
+    if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() }
+    try { await api.sessions.delete(sid) } catch {
+      // Rollback on failure
+      setSessions(prevSessions)
+      if (activeSid === sid) setActiveSid(sid)
+    }
   }
 
   const toggleTeams = async () => {
