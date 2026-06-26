@@ -1,88 +1,58 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import * as api from './api'
-import type { SessionInfo, AgentEvent, FileEntry, SkillInfo, McpServerCfg } from './api'
+import type { SessionInfo, AgentEvent, FileEntry, SkillInfo, McpServerCfg, TeamInfo } from './api'
 
 // ═══════════════════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════════════════
 
-interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  step?: number
-  streaming?: boolean
-}
-
-interface ToolEntry {
-  id: string
-  name: string
-  input: Record<string, any>
-  status: 'running' | 'success' | 'error'
-  output?: string
-  step: number
-}
-
-interface PermRequest {
-  requestId: string
-  tool: string
-  path: string
-  action: string
-}
-
-interface AskRequest {
-  requestId: string
-  prompt: string
-}
-
-type SidebarTab = 'sessions' | 'files' | 'skills' | 'mcp'
-
-// ═══════════════════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════════════════
+interface Message { id: string; role: 'user' | 'assistant'; content: string; step?: number; streaming?: boolean }
+interface ToolEntry { id: string; name: string; input: Record<string, any>; status: 'running' | 'success' | 'error'; output?: string; step: number }
+interface PermRequest { requestId: string; tool: string; path: string; action: string }
+interface AskRequest { requestId: string; prompt: string }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 
-function toolIcon(name: string): string {
-  const map: Record<string, string> = {
-    Read: '📖', Write: '✍️', Edit: '✏️', MultiEdit: '📝',
-    LS: '📁', Glob: '🔍', Grep: '🔎', Bash: '💻',
-    Skill: '🎯', TodoWrite: '📋', AskUser: '❓',
-  }
-  for (const [k, v] of Object.entries(map)) {
-    if (name.includes(k)) return v
-  }
-  return '⚙️'
+// ── Quick scenario tags ────────────────────────────────────────────
+const SCENARIOS = [
+  { label: '代码审查', prompt: '请帮我审查以下代码，关注安全性、性能和最佳实践：' },
+  { label: '调研报告', prompt: '请针对以下主题进行深度调研，生成一份结构化的报告：' },
+  { label: 'Bug 修复', prompt: '以下代码有一个 bug，请帮我定位并修复：' },
+  { label: '架构设计', prompt: '请帮我设计以下功能的系统架构：' },
+  { label: '写测试', prompt: '请为以下代码编写单元测试：' },
+  { label: '代码重构', prompt: '请重构以下代码，提高可读性和可维护性：' },
+]
+
+// ═══════════════════════════════════════════════════════════════════════
+// Icons (inline SVGs to avoid icon library dependency)
+// ═══════════════════════════════════════════════════════════════════════
+
+const Icons = {
+  search:   '🔍', skill: '🎯', clock: '⏱️', folder: '📁',
+  teams:    '👥', download: '📥', settings: '⚙️', plus: '+',
+  send:     '↑', brain: '🧠', check: '✓', cross: '✗',
+  dot:      '●', file: '📄', chat: '💬', agent: '🤖',
+  user:     '👤', lock: '🔒', ask: '❓',
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Modal: Permission
+// Permission Modal
 // ═══════════════════════════════════════════════════════════════════════
 
 function PermissionModal({ req, sid, onDone }: { req: PermRequest; sid: string; onDone: () => void }) {
-  const decide = async (d: string) => {
-    await api.sessions.resolvePerm(sid, req.requestId, d)
-    onDone()
-  }
+  const decide = async (d: string) => { await api.sessions.resolvePerm(sid, req.requestId, d); onDone() }
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => decide('denied')}>
-      <div className="bg-codex-surface border border-codex-border rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 text-codex-yellow mb-3">
-          <span className="text-xl">🔒</span>
-          <h2 className="text-lg font-semibold">Permission Required</h2>
-        </div>
-        <div className="space-y-2 text-sm text-codex-text mb-5">
-          <p><span className="text-codex-dim">Tool:</span> <code className="text-codex-accent">{req.tool}</code></p>
-          <p><span className="text-codex-dim">Path:</span> <code className="text-codex-yellow break-all">{req.path}</code></p>
-          <p><span className="text-codex-dim">Action:</span> {req.action}</p>
+    <div className="fixed inset-0 bg-black/25 flex items-center justify-center z-50 animate-fade-in" onClick={() => decide('denied')}>
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-surface-border" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 text-amber-600 mb-3"><span className="text-xl">{Icons.lock}</span><h2 className="text-lg font-semibold text-surface-text">权限请求</h2></div>
+        <div className="space-y-2 text-sm text-surface-text mb-5">
+          <p><span className="text-surface-muted">工具:</span> <code className="text-brand-600 font-medium">{req.tool}</code></p>
+          <p><span className="text-surface-muted">路径:</span> <code className="text-amber-700 break-all text-xs">{req.path}</code></p>
+          <p><span className="text-surface-muted">操作:</span> {req.action}</p>
         </div>
         <div className="flex gap-3 justify-end">
-          <button onClick={() => decide('denied')} className="px-4 py-2 rounded border border-codex-border text-codex-dim hover:bg-codex-border/30 transition-colors text-sm">
-            Deny
-          </button>
-          <button onClick={() => decide('granted')} className="px-4 py-2 rounded bg-codex-green text-white hover:bg-green-600 transition-colors text-sm font-medium">
-            Allow Once
-          </button>
+          <button onClick={() => decide('denied')} className="px-5 py-2 rounded-xl border border-surface-border text-surface-muted hover:bg-surface-hover transition-colors text-sm font-medium">拒绝</button>
+          <button onClick={() => decide('granted')} className="px-5 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors text-sm font-medium">允许一次</button>
         </div>
       </div>
     </div>
@@ -90,32 +60,23 @@ function PermissionModal({ req, sid, onDone }: { req: PermRequest; sid: string; 
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Modal: AskUser
+// AskUser Modal
 // ═══════════════════════════════════════════════════════════════════════
 
 function AskUserModal({ req, sid, onDone }: { req: AskRequest; sid: string; onDone: () => void }) {
   const [answer, setAnswer] = useState('')
-  const submit = async () => {
-    await api.sessions.answerAsk(sid, req.requestId, answer || '(no answer)')
-    onDone()
-  }
+  const submit = async () => { await api.sessions.answerAsk(sid, req.requestId, answer || '(无回答)'); onDone() }
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-codex-surface border border-codex-border rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 text-codex-purple mb-3">
-          <span className="text-xl">❓</span>
-          <h2 className="text-lg font-semibold">Agent asks</h2>
-        </div>
-        <pre className="text-sm text-codex-text mb-4 whitespace-pre-wrap bg-codex-bg p-3 rounded border border-codex-border">{req.prompt}</pre>
+    <div className="fixed inset-0 bg-black/25 flex items-center justify-center z-50 animate-fade-in">
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl border border-surface-border">
+        <div className="flex items-center gap-2 text-brand-600 mb-3"><span className="text-xl">{Icons.ask}</span><h2 className="text-lg font-semibold text-surface-text">Agent 提问</h2></div>
+        <pre className="text-sm text-surface-text mb-4 whitespace-pre-wrap bg-surface-hover p-3 rounded-xl">{req.prompt}</pre>
         <textarea value={answer} onChange={e => setAnswer(e.target.value)} rows={3}
-          className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-4 resize-none focus:border-codex-accent focus:outline-none"
-          placeholder="Type your answer..."
-          onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) submit() }}
-        />
+          className="w-full bg-surface-hover border border-surface-border rounded-xl p-3 text-surface-text text-sm mb-4 resize-none input-focus-ring"
+          placeholder="输入你的回答..."
+          onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) submit() }} />
         <div className="flex gap-3 justify-end">
-          <button onClick={submit} className="px-4 py-2 rounded bg-codex-accent text-white hover:bg-blue-600 transition-colors text-sm font-medium">
-            Answer (Ctrl+Enter)
-          </button>
+          <button onClick={submit} className="px-5 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors text-sm font-medium">回答 (Ctrl+Enter)</button>
         </div>
       </div>
     </div>
@@ -123,320 +84,28 @@ function AskUserModal({ req, sid, onDone }: { req: AskRequest; sid: string; onDo
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Chat message bubble
-// ═══════════════════════════════════════════════════════════════════════
-
-function ChatMessage({ msg }: { msg: Message }) {
-  return (
-    <div className={`flex gap-3 animate-slide-in ${msg.role === 'user' ? 'justify-end' : ''}`}>
-      {msg.role === 'assistant' && (
-        <div className="w-7 h-7 rounded bg-codex-purple/20 flex items-center justify-center text-xs shrink-0 mt-1">🤖</div>
-      )}
-      <div className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
-        msg.role === 'user'
-          ? 'bg-codex-accent/15 border border-codex-accent/30 text-codex-text'
-          : 'bg-codex-surface border border-codex-border text-codex-text'
-      }`}>
-        <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${msg.streaming ? 'cursor-blink' : ''}`}>
-          {msg.content || (msg.streaming ? '' : '(empty)')}
-        </div>
-        {msg.step && <div className="text-[10px] text-codex-dim mt-1">Step {msg.step}</div>}
-      </div>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Tool call inline card
+// Tool card — inline in chat
 // ═══════════════════════════════════════════════════════════════════════
 
 function ToolCard({ tool }: { tool: ToolEntry }) {
   const [expanded, setExpanded] = useState(false)
-  const statusColor = tool.status === 'running' ? 'text-codex-yellow' : tool.status === 'error' ? 'text-codex-red' : 'text-codex-green'
-  const statusBg = tool.status === 'running' ? 'bg-codex-yellow/10 border-codex-yellow/30' : tool.status === 'error' ? 'bg-codex-red/10 border-codex-red/30' : 'bg-codex-green/10 border-codex-green/30'
-
+  const colors = tool.status === 'running' ? 'border-amber-300 bg-amber-50' : tool.status === 'error' ? 'border-red-300 bg-red-50' : 'border-emerald-300 bg-emerald-50'
+  const dotColor = tool.status === 'running' ? 'text-amber-500 animate-pulse-dot' : tool.status === 'error' ? 'text-red-500' : 'text-emerald-500'
   return (
-    <div className={`ml-10 border rounded-lg px-3 py-2 text-xs animate-slide-in ${statusBg}`}>
+    <div className={`ml-10 border rounded-xl px-3 py-2 text-xs animate-slide-up ${colors}`}>
       <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
-        <span>{toolIcon(tool.name)}</span>
-        <span className="font-medium text-codex-text">{tool.name}</span>
-        {tool.status === 'running' && <span className={`${statusColor} animate-pulse`}>●</span>}
-        {tool.status === 'error' && <span className={statusColor}>✗</span>}
-        {tool.status === 'success' && <span className={statusColor}>✓</span>}
-        <span className="text-codex-dim ml-auto">{expanded ? '▾' : '▸'}</span>
+        <span className={dotColor}>{Icons.dot}</span>
+        <span className="font-medium text-surface-text">{tool.name}</span>
+        <span className="text-surface-muted ml-auto text-[10px]">{expanded ? '收起' : '展开'}</span>
       </div>
       {expanded && (
         <div className="mt-2 space-y-1">
-          <div className="text-codex-dim">Input:</div>
-          <pre className="bg-codex-bg p-2 rounded text-[11px] text-codex-text overflow-x-auto max-h-24">
-            {JSON.stringify(tool.input, null, 2)}
-          </pre>
-          {tool.output && (
-            <>
-              <div className="text-codex-dim mt-1">Output:</div>
-              <pre className="bg-codex-bg p-2 rounded text-[11px] text-codex-text overflow-x-auto max-h-40 whitespace-pre-wrap">
-                {tool.output.length > 2000 ? tool.output.slice(0, 2000) + '...(truncated)' : tool.output}
-              </pre>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Sidebar panels
-// ═══════════════════════════════════════════════════════════════════════
-
-function SessionsPanel({ sessions, activeId, onSelect, onCreate, onDelete }: {
-  sessions: SessionInfo[]
-  activeId: string | null
-  onSelect: (id: string) => void
-  onCreate: () => void
-  onDelete: (id: string) => void
-}) {
-  return (
-    <div className="p-3">
-      <button onClick={onCreate} className="w-full py-2 rounded bg-codex-accent/10 border border-codex-accent/30 text-codex-accent text-sm font-medium hover:bg-codex-accent/20 transition-colors mb-3">
-        + New Session
-      </button>
-      <div className="space-y-1">
-        {sessions.map(s => (
-          <div key={s.id}
-            onClick={() => onSelect(s.id)}
-            className={`flex items-center justify-between px-3 py-2 rounded text-sm cursor-pointer transition-colors ${
-              s.id === activeId ? 'bg-codex-accent/15 text-codex-accent border border-codex-accent/30' : 'hover:bg-codex-surface border border-transparent text-codex-text'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${s.busy ? 'bg-codex-yellow animate-pulse' : 'bg-codex-green'}`} />
-              <span className="truncate">{s.title || s.id.slice(0, 8)}</span>
-            </div>
-            <button onClick={e => { e.stopPropagation(); onDelete(s.id) }}
-              className="text-codex-dim hover:text-codex-red shrink-0 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-lg leading-none">
-              ×
-            </button>
-          </div>
-        ))}
-        {sessions.length === 0 && <div className="text-codex-dim text-xs text-center py-4">No sessions yet</div>}
-      </div>
-    </div>
-  )
-}
-
-function FilesPanel({ sid }: { sid: string | null }) {
-  const [entries, setEntries] = useState<FileEntry[]>([])
-  const [cwd, setCwd] = useState('.')
-  const [loading, setLoading] = useState(false)
-
-  const load = useCallback(async (path: string) => {
-    if (!sid) return
-    setLoading(true)
-    try {
-      const tree = await api.files.tree(sid, path)
-      setEntries(tree.entries)
-      setCwd(tree.path)
-    } catch { /* offline */ }
-    finally { setLoading(false) }
-  }, [sid])
-
-  useEffect(() => { load('.') }, [load])
-
-  if (!sid) return <div className="p-3 text-codex-dim text-xs">Select a session</div>
-
-  return (
-    <div className="p-3">
-      <div className="flex items-center gap-1 text-xs text-codex-dim mb-2">
-        <button onClick={() => load('.')} className="hover:text-codex-accent">~</button>
-        <span>/</span>
-        <span className="text-codex-text">{cwd}</span>
-        {loading && <span className="animate-pulse ml-1">…</span>}
-      </div>
-      <div className="space-y-0.5 max-h-96 overflow-y-auto">
-        {entries.map(e => (
-          <div key={e.path}
-            onClick={() => e.type === 'directory' && load(e.path)}
-            className={`flex items-center gap-2 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${
-              e.type === 'directory' ? 'text-codex-accent hover:bg-codex-accent/10' : 'text-codex-text hover:bg-codex-surface'
-            }`}
-          >
-            <span>{e.type === 'directory' ? '📁' : '📄'}</span>
-            <span className="truncate">{e.name}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function SkillsPanel() {
-  const [skills, setSkills] = useState<SkillInfo[]>([])
-  const [editing, setEditing] = useState<SkillInfo | null>(null)
-  const [detail, setDetail] = useState<api.SkillDetail | null>(null)
-  const [form, setForm] = useState({ name: '', description: '', content: '' })
-  const [creating, setCreating] = useState(false)
-
-  const reload = async () => {
-    try { setSkills(await api.skills.list()) } catch { /* offline */ }
-  }
-  useEffect(() => { reload() }, [])
-
-  const openEditor = async (s: SkillInfo) => {
-    try {
-      const d = await api.skills.get(s.name)
-      setDetail(d)
-      setForm({ name: d.name, description: d.description, content: d.content })
-      setEditing(s)
-      setCreating(false)
-    } catch { /* offline */ }
-  }
-
-  const saveSkill = async () => {
-    try {
-      if (creating) {
-        await api.skills.create(form.name, form.description, form.content)
-      } else if (editing) {
-        await api.skills.update(editing.name, { description: form.description, content: form.content })
-      }
-      setEditing(null); setCreating(false); reload()
-    } catch (e: any) { alert(e.message) }
-  }
-
-  const deleteSkill = async (name: string) => {
-    if (!confirm(`Delete skill "${name}"?`)) return
-    try { await api.skills.delete(name); reload() } catch (e: any) { alert(e.message) }
-  }
-
-  return (
-    <div className="p-3">
-      <button onClick={() => { setCreating(true); setEditing(null); setForm({ name: '', description: '', content: '# My Skill\n\nInstructions here...\n' }); setDetail(null) }}
-        className="w-full py-2 rounded bg-codex-purple/10 border border-codex-purple/30 text-codex-purple text-sm font-medium hover:bg-codex-purple/20 transition-colors mb-3">
-        + New Skill
-      </button>
-      <div className="space-y-1 max-h-64 overflow-y-auto">
-        {skills.map(s => (
-          <div key={s.name} onClick={() => openEditor(s)}
-            className="flex items-center justify-between px-3 py-2 rounded text-sm cursor-pointer hover:bg-codex-surface border border-transparent hover:border-codex-border transition-colors text-codex-text">
-            <div className="min-w-0">
-              <div className="font-medium text-codex-purple truncate">{s.name}</div>
-              <div className="text-[11px] text-codex-dim truncate">{s.description}</div>
-            </div>
-            <button onClick={e => { e.stopPropagation(); deleteSkill(s.name) }}
-              className="text-codex-dim hover:text-codex-red shrink-0 ml-2 text-lg leading-none">×</button>
-          </div>
-        ))}
-      </div>
-
-      {/* Editor modal */}
-      {(editing || creating) && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-codex-surface border border-codex-border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto shadow-2xl">
-            <h2 className="text-lg font-semibold text-codex-purple mb-4">{creating ? 'New Skill' : `Edit: ${editing?.name}`}</h2>
-            {creating && (
-              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="skill-name (lowercase, hyphens)"
-                className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-3 focus:border-codex-accent focus:outline-none" />
-            )}
-            <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-              placeholder="Description"
-              className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-3 focus:border-codex-accent focus:outline-none" />
-            <textarea value={form.content} onChange={e => setForm({ ...form, content: e.target.value })}
-              rows={15}
-              className="w-full bg-codex-bg border border-codex-border rounded p-3 text-codex-text text-sm mb-4 resize-none focus:border-codex-accent focus:outline-none font-mono" />
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => { setEditing(null); setCreating(false) }}
-                className="px-4 py-2 rounded border border-codex-border text-codex-dim hover:bg-codex-border/30 transition-colors text-sm">Cancel</button>
-              <button onClick={saveSkill}
-                className="px-4 py-2 rounded bg-codex-purple text-white hover:bg-purple-600 transition-colors text-sm font-medium">Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function McpPanel() {
-  const [servers, setServers] = useState<McpServerCfg[]>([])
-  const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState({ name: '', command: '', args: '' })
-  const [editingName, setEditingName] = useState<string | null>(null)
-
-  const reload = async () => {
-    try { setServers(await api.mcp.list()) } catch { /* offline */ }
-  }
-  useEffect(() => { reload() }, [])
-
-  const openNew = () => {
-    setEditingName(null); setForm({ name: '', command: 'npx', args: '-y @anthropic/mcp-server' }); setEditing(true)
-  }
-
-  const openEdit = (s: McpServerCfg) => {
-    setEditingName(s.name); setForm({ name: s.name, command: s.command, args: s.args.join(' ') }); setEditing(true)
-  }
-
-  const save = async () => {
-    try {
-      const argsList = form.args.split(/\s+/).filter(Boolean)
-      if (editingName) {
-        await api.mcp.update(editingName, form.command, argsList)
-      } else {
-        await api.mcp.create(form.name, form.command, argsList)
-      }
-      setEditing(false); reload()
-    } catch (e: any) { alert(e.message) }
-  }
-
-  const remove = async (name: string) => {
-    if (!confirm(`Remove MCP server "${name}"?`)) return
-    try { await api.mcp.delete(name); reload() } catch (e: any) { alert(e.message) }
-  }
-
-  return (
-    <div className="p-3">
-      <button onClick={openNew}
-        className="w-full py-2 rounded bg-codex-green/10 border border-codex-green/30 text-codex-green text-sm font-medium hover:bg-codex-green/20 transition-colors mb-3">
-        + Add MCP Server
-      </button>
-      <div className="space-y-1 max-h-64 overflow-y-auto">
-        {servers.map(s => (
-          <div key={s.name} onClick={() => openEdit(s)}
-            className="flex items-center justify-between px-3 py-2 rounded text-sm cursor-pointer hover:bg-codex-surface border border-transparent hover:border-codex-border transition-colors text-codex-text">
-            <div className="min-w-0">
-              <div className="font-medium truncate">{s.name}</div>
-              <div className="text-[11px] text-codex-dim truncate font-mono">{s.command} {s.args.join(' ')}</div>
-            </div>
-            <button onClick={e => { e.stopPropagation(); remove(s.name) }}
-              className="text-codex-dim hover:text-codex-red shrink-0 ml-2 text-lg leading-none">×</button>
-          </div>
-        ))}
-        {servers.length === 0 && <div className="text-codex-dim text-xs text-center py-4">No MCP servers configured</div>}
-      </div>
-
-      {/* Editor modal */}
-      {editing && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-codex-surface border border-codex-border rounded-lg p-6 max-w-lg w-full mx-4 shadow-2xl">
-            <h2 className="text-lg font-semibold text-codex-green mb-4">{editingName ? `Edit: ${editingName}` : 'Add MCP Server'}</h2>
-            {!editingName && (
-              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="Server name"
-                className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-3 focus:border-codex-accent focus:outline-none" />
-            )}
-            <input value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
-              placeholder="Command (e.g. npx, uvx, python)"
-              className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-3 focus:border-codex-accent focus:outline-none font-mono" />
-            <input value={form.args} onChange={e => setForm({ ...form, args: e.target.value })}
-              placeholder="Arguments (space-separated)"
-              className="w-full bg-codex-bg border border-codex-border rounded p-2 text-codex-text text-sm mb-4 focus:border-codex-accent focus:outline-none font-mono" />
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setEditing(false)}
-                className="px-4 py-2 rounded border border-codex-border text-codex-dim hover:bg-codex-border/30 transition-colors text-sm">Cancel</button>
-              <button onClick={save}
-                className="px-4 py-2 rounded bg-codex-green text-white hover:bg-green-600 transition-colors text-sm font-medium">Save</button>
-            </div>
-          </div>
+          <div className="text-surface-muted text-[10px] uppercase tracking-wide">Input</div>
+          <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-surface-text overflow-x-auto max-h-24">{JSON.stringify(tool.input, null, 2)}</pre>
+          {tool.output && <>
+            <div className="text-surface-muted text-[10px] uppercase tracking-wide mt-1">Output</div>
+            <pre className="bg-white/70 p-2 rounded-lg text-[11px] text-surface-text overflow-x-auto max-h-40 whitespace-pre-wrap">{tool.output.length > 2000 ? tool.output.slice(0, 2000) + '...(截断)' : tool.output}</pre>
+          </>}
         </div>
       )}
     </div>
@@ -455,224 +124,379 @@ export default function App() {
   const [permReq, setPermReq] = useState<PermRequest | null>(null)
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('sessions')
   const [sending, setSending] = useState(false)
+
+  // Config state
+  const [agentTeams, setAgentTeams] = useState(false)
+  const [thinkingLevel, setThinkingLevel] = useState('medium')
+  const [teamsList, setTeamsList] = useState<TeamInfo[]>([])
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'>('sessions')
+  const [showNewTeam, setShowNewTeam] = useState(false)
+  const [newTeamName, setNewTeamName] = useState('')
+
+  // Panels
+  const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
+  const [fileEntries, setFileEntries] = useState<FileEntry[]>([])
+  const [fileCwd, setFileCwd] = useState('.')
+
   const chatEndRef = useRef<HTMLDivElement>(null)
   const disconnectRef = useRef<(() => void) | null>(null)
 
-  // ── Session management ──────────────────────────────────────────
-  const loadSessions = async () => {
-    try { setSessions(await api.sessions.list()) } catch { /* offline */ }
-  }
+  // ── Sessions ────────────────────────────────────────────────────
+  const loadSessions = async () => { try { setSessions(await api.sessions.list()) } catch {} }
   useEffect(() => { loadSessions() }, [])
 
   const selectSession = async (sid: string) => {
-    // Disconnect previous
     disconnectRef.current?.()
-    setActiveSid(sid)
-    setMessages([])
-    setTools([])
-    setPermReq(null)
-    setAskReq(null)
-
-    // Connect WebSocket
-    disconnectRef.current = api.connectStream(sid,
-      (event: AgentEvent) => handleEvent(event, sid),
-      () => { /* disconnected */ },
-    )
+    setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
+    disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
+    try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setThinkingLevel(cfg.thinking_level) } catch {}
+    try { setTeamsList(await api.teams.list(sid)) } catch {}
   }
 
   const createSession = async () => {
-    try {
-      const s = await api.sessions.create()
-      setSessions(prev => [s, ...prev])
-      selectSession(s.id)
-    } catch (e: any) { alert(e.message) }
+    try { const s = await api.sessions.create(); setSessions(prev => [s, ...prev]); selectSession(s.id) } catch (e: any) { alert(e.message) }
   }
 
   const deleteSession = async (sid: string) => {
-    try {
-      await api.sessions.delete(sid)
-      setSessions(prev => prev.filter(s => s.id !== sid))
-      if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() }
-    } catch (e: any) { alert(e.message) }
+    try { await api.sessions.delete(sid); setSessions(prev => prev.filter(s => s.id !== sid)); if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() } } catch {}
   }
 
-  // ── Event handler ───────────────────────────────────────────────
-  const handleEvent = (event: AgentEvent, sid: string) => {
-    const { type, payload } = event
+  // ── Agent teams toggle ──────────────────────────────────────────
+  const toggleTeams = async () => {
+    if (!activeSid) return
+    const next = !agentTeams
+    setAgentTeams(next)
+    try { await api.config.update(activeSid, { enable_agent_teams: next }); setTeamsList(await api.teams.list(activeSid)) } catch { setAgentTeams(!next) }
+  }
 
+  const createTeam = async () => {
+    if (!activeSid || !newTeamName.trim()) return
+    try { await api.teams.create(activeSid, newTeamName.trim()); setTeamsList(await api.teams.list(activeSid)); setNewTeamName(''); setShowNewTeam(false) } catch (e: any) { alert(e.message) }
+  }
+
+  // ── Sidebar panels data ─────────────────────────────────────────
+  const loadSidebarData = async () => {
+    try { setSkillsList(await api.skills.list()) } catch {}
+    try { setMcpServers(await api.mcp.list()) } catch {}
+  }
+  useEffect(() => { loadSidebarData() }, [])
+
+  const loadFiles = async (path: string) => {
+    if (!activeSid) return
+    try { const tree = await api.files.tree(activeSid, path); setFileEntries(tree.entries); setFileCwd(tree.path) } catch {}
+  }
+  useEffect(() => { if (activeSid) loadFiles('.') }, [activeSid])
+
+  // ── Event handler ───────────────────────────────────────────────
+  const handleEvent = (event: AgentEvent) => {
+    const { type, payload } = event
     switch (type) {
-      case 'run.started':
-        break
-      case 'step.started':
-        break
       case 'tool.started':
-        setTools(prev => [...prev, {
-          id: payload.tool_call_id || uid(),
-          name: payload.tool,
-          input: payload.input || {},
-          status: 'running',
-          step: event.step,
-        }])
-        break
+        setTools(prev => [...prev, { id: payload.tool_call_id || uid(), name: payload.tool, input: payload.input || {}, status: 'running', step: event.step }]); break
       case 'tool.completed':
-        setTools(prev => prev.map(t =>
-          t.id === payload.tool_call_id ? { ...t, status: payload.status === 'success' ? 'success' : 'error', output: payload.output } : t
-        ))
-        break
+        setTools(prev => prev.map(t => t.id === payload.tool_call_id ? { ...t, status: payload.status === 'success' ? 'success' : 'error', output: payload.output } : t)); break
       case 'assistant.final':
         setMessages(prev => {
           const last = prev[prev.length - 1]
-          if (last && last.role === 'assistant' && last.streaming) {
-            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: payload.content, streaming: false, step: payload.step } : m)
-          }
+          if (last && last.role === 'assistant' && last.streaming) return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: payload.content, streaming: false, step: payload.step } : m)
           return [...prev, { id: uid(), role: 'assistant', content: payload.content, streaming: false, step: payload.step }]
-        })
-        setSending(false)
-        break
-      case 'run.finished':
-        setSending(false)
-        loadSessions()
-        break
-      case 'permission.requested':
-        setPermReq({ requestId: payload.request_id, tool: payload.tool, path: payload.path, action: payload.action })
-        break
-      case 'ask_user.requested':
-        setAskReq({ requestId: payload.request_id, prompt: payload.prompt })
-        break
-      case 'turn.completed':
-        setSending(false)
-        loadSessions()
-        break
-      case 'error':
-        setMessages(prev => [...prev, { id: uid(), role: 'assistant', content: `❌ Error: ${payload.message}` }])
-        setSending(false)
-        break
+        }); setSending(false); break
+      case 'run.finished': setSending(false); loadSessions(); break
+      case 'permission.requested': setPermReq({ requestId: payload.request_id, tool: payload.tool, path: payload.path, action: payload.action }); break
+      case 'ask_user.requested': setAskReq({ requestId: payload.request_id, prompt: payload.prompt }); break
+      case 'turn.completed': setSending(false); loadSessions(); if (activeSid) { try { api.teams.list(activeSid).then(setTeamsList) } catch {} }; break
+      case 'error': setMessages(prev => [...prev, { id: uid(), role: 'assistant', content: `❌ ${payload.message}` }]); setSending(false); break
     }
   }
 
-  // ── Auto-scroll ─────────────────────────────────────────────────
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, tools])
 
-  // ── Send message ────────────────────────────────────────────────
+  // ── Send ────────────────────────────────────────────────────────
   const sendMessage = async () => {
     if (!activeSid || !input.trim() || sending) return
-    const content = input.trim()
-    setInput('')
-    setSending(true)
+    const content = input.trim(); setInput(''); setSending(true)
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
-    // Add placeholder for streaming
-    const assistantId = uid()
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', streaming: true }])
-
-    try {
-      await api.sessions.send(activeSid, content)
-    } catch (e: any) {
-      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: `❌ ${e.message}`, streaming: false } : m))
-      setSending(false)
+    const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
+    try { await api.sessions.send(activeSid, content) } catch (e: any) {
+      setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `❌ ${e.message}`, streaming: false } : m)); setSending(false)
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
+  const fillScenario = (prompt: string) => { setInput(prompt) }
 
-  // ── Render ──────────────────────────────────────────────────────
-  const tabs: { key: SidebarTab; label: string; icon: string }[] = [
-    { key: 'sessions', label: 'Sessions', icon: '💬' },
-    { key: 'files', label: 'Files', icon: '📁' },
-    { key: 'skills', label: 'Skills', icon: '🎯' },
-    { key: 'mcp', label: 'MCP', icon: '🔌' },
+  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
+
+  // ── Model selector ──────────────────────────────────────────────
+  const [models, setModels] = useState<api.ModelInfo[]>([])
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  useEffect(() => { api.info.models().then(setModels).catch(() => {}) }, [])
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Render
+  // ═══════════════════════════════════════════════════════════════════
+
+  const sidebarTabs = [
+    { key: 'sessions' as const, label: '会话', icon: Icons.chat },
+    { key: 'files' as const, label: '文件', icon: Icons.folder },
+    { key: 'skills' as const, label: '技能', icon: Icons.skill },
+    { key: 'mcp' as const, label: 'MCP', icon: Icons.settings },
   ]
 
   return (
-    <div className="flex h-screen bg-codex-bg overflow-hidden">
-      {/* ── Sidebar ─────────────────────────────────────────────── */}
-      <aside className="w-64 bg-codex-surface border-r border-codex-border flex flex-col shrink-0">
-        <div className="px-4 py-3 border-b border-codex-border">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🐱</span>
-            <span className="font-semibold text-codex-text">MyCodeAgent</span>
+    <div className="flex h-screen bg-surface-bg overflow-hidden">
+      {/* ═════════════════════ LEFT SIDEBAR ═══════════════════════ */}
+      <aside className="w-64 bg-surface-bg border-r border-surface-border flex flex-col shrink-0">
+        {/* Brand + New Task */}
+        <div className="px-4 py-4 border-b border-surface-border">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xl">🐱</span>
+            <span className="font-bold text-surface-text text-lg">MyCodeAgent</span>
           </div>
+          <button onClick={createSession}
+            className="w-full py-2.5 rounded-xl bg-brand-500 text-white text-sm font-semibold hover:bg-brand-600 transition-colors shadow-sm">
+            + 新建任务
+          </button>
         </div>
-        <div className="flex border-b border-codex-border">
-          {tabs.map(t => (
+
+        {/* Nav tabs */}
+        <div className="flex border-b border-surface-border px-2">
+          {sidebarTabs.map(t => (
             <button key={t.key} onClick={() => setSidebarTab(t.key)}
-              className={`flex-1 py-2 text-xs font-medium transition-colors ${
-                sidebarTab === t.key ? 'text-codex-accent border-b-2 border-codex-accent' : 'text-codex-dim hover:text-codex-text'
-              }`}
-              title={t.label}>{t.icon}</button>
+              className={`flex-1 py-2.5 text-xs font-medium transition-colors rounded-t-lg ${
+                sidebarTab === t.key ? 'text-brand-600 border-b-2 border-brand-500' : 'text-surface-muted hover:text-surface-text'
+              }`}>{t.icon} {t.label}</button>
           ))}
         </div>
+
+        {/* Sidebar content */}
         <div className="flex-1 overflow-y-auto">
-          {sidebarTab === 'sessions' && <SessionsPanel sessions={sessions} activeId={activeSid} onSelect={selectSession} onCreate={createSession} onDelete={deleteSession} />}
-          {sidebarTab === 'files' && <FilesPanel sid={activeSid} />}
-          {sidebarTab === 'skills' && <SkillsPanel />}
-          {sidebarTab === 'mcp' && <McpPanel />}
+          {sidebarTab === 'sessions' && (
+            <div className="p-3 space-y-1">
+              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">最近任务</div>
+              {sessions.map(s => (
+                <div key={s.id} onClick={() => selectSession(s.id)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
+                    s.id === activeSid ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-surface-hover text-surface-text'
+                  }`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${s.busy ? 'bg-amber-400 animate-pulse-dot' : 'bg-emerald-400'}`} />
+                    <span className="truncate">{s.title || s.id.slice(0, 8)}</span>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); deleteSession(s.id) }}
+                    className="text-surface-dim hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none">×</button>
+                </div>
+              ))}
+              {sessions.length === 0 && <div className="text-surface-muted text-xs text-center py-6">暂无任务记录</div>}
+            </div>
+          )}
+
+          {sidebarTab === 'files' && (
+            <div className="p-3">
+              <div className="flex items-center gap-1 text-xs text-surface-muted mb-2">
+                <button onClick={() => loadFiles('.')} className="hover:text-brand-500">~</button><span>/</span><span className="text-surface-text">{fileCwd}</span>
+              </div>
+              <div className="space-y-0.5 max-h-96 overflow-y-auto">
+                {fileEntries.map(e => (
+                  <div key={e.path} onClick={() => e.type === 'directory' && loadFiles(e.path)}
+                    className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors ${
+                      e.type === 'directory' ? 'text-brand-600 hover:bg-brand-50' : 'text-surface-text hover:bg-surface-hover'
+                    }`}>
+                    <span>{e.type === 'directory' ? Icons.folder : Icons.file}</span>
+                    <span className="truncate">{e.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {sidebarTab === 'skills' && (
+            <div className="p-3 space-y-1">
+              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">已安装技能</div>
+              {skillsList.map(s => (
+                <div key={s.name} className="px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition-colors cursor-pointer text-surface-text">
+                  <div className="font-medium text-brand-700 truncate">{s.name}</div>
+                  <div className="text-[11px] text-surface-muted truncate">{s.description}</div>
+                </div>
+              ))}
+              {skillsList.length === 0 && <div className="text-surface-muted text-xs text-center py-4">暂无技能</div>}
+            </div>
+          )}
+
+          {sidebarTab === 'mcp' && (
+            <div className="p-3 space-y-1">
+              <div className="text-[11px] font-semibold text-surface-muted uppercase tracking-wide px-2 mb-2">MCP 服务器</div>
+              {mcpServers.map(s => (
+                <div key={s.name} className="px-3 py-2 rounded-xl text-sm hover:bg-surface-hover transition-colors cursor-pointer text-surface-text">
+                  <div className="font-medium truncate">{s.name}</div>
+                  <div className="text-[11px] text-surface-muted truncate font-mono">{s.command} {s.args.join(' ')}</div>
+                </div>
+              ))}
+              {mcpServers.length === 0 && <div className="text-surface-muted text-xs text-center py-4">未配置 MCP</div>}
+            </div>
+          )}
         </div>
-        <div className="px-3 py-2 border-t border-codex-border text-[10px] text-codex-dim">
-          {activeSid ? `Session: ${activeSid.slice(0, 8)}` : 'No session'}
+
+        {/* Agent Teams section */}
+        <div className="border-t border-surface-border p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-surface-muted uppercase tracking-wide">{Icons.teams} Agent 团队</span>
+            <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={!activeSid} /><span className="slider" /></label>
+          </div>
+          {agentTeams && (
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {teamsList.map(t => (
+                <div key={t.name} className="flex items-center justify-between px-2 py-1 text-xs text-surface-text hover:bg-surface-hover rounded-lg transition-colors">
+                  <span className="font-medium">{t.name}</span>
+                  <span className="text-surface-muted">{t.running}跑 {t.succeeded}成 {t.failed}败</span>
+                </div>
+              ))}
+              <button onClick={() => setShowNewTeam(true)}
+                className="w-full text-xs text-brand-500 hover:text-brand-600 py-1 text-left font-medium">+ 创建团队</button>
+              {showNewTeam && (
+                <div className="flex gap-1 mt-1">
+                  <input value={newTeamName} onChange={e => setNewTeamName(e.target.value)}
+                    placeholder="团队名称" className="flex-1 bg-surface-hover border border-surface-border rounded-lg px-2 py-1 text-xs input-focus-ring" />
+                  <button onClick={createTeam} className="px-2 py-1 bg-brand-500 text-white rounded-lg text-xs font-medium hover:bg-brand-600">创建</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* User footer */}
+        <div className="border-t border-surface-border px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 text-xs font-bold">U</div>
+            <div className="text-xs text-surface-text font-medium">用户</div>
+          </div>
+          <div className="flex gap-1">
+            <button className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-hover text-surface-muted text-sm" title="下载">{Icons.download}</button>
+            <button className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-hover text-surface-muted text-sm" title="设置">{Icons.settings}</button>
+          </div>
         </div>
       </aside>
 
-      {/* ── Main chat ───────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="px-4 py-3 border-b border-codex-border bg-codex-surface flex items-center justify-between shrink-0">
-          <div className="text-sm text-codex-dim">
-            {activeSid ? (
-              <span>Session <code className="text-codex-text">{activeSid.slice(0, 8)}</code></span>
-            ) : (
-              <span className="text-codex-dim">Create or select a session to start</span>
-            )}
-          </div>
-          {sending && <span className="text-xs text-codex-yellow animate-pulse">● Agent working…</span>}
+      {/* ═════════════════════ RIGHT MAIN AREA ════════════════════ */}
+      <main className="flex-1 flex flex-col min-w-0 bg-surface-bg">
+        {/* Top bar */}
+        <header className="px-6 py-3 border-b border-surface-border flex items-center justify-end shrink-0 gap-3">
+          {sending && <span className="text-xs text-brand-500 animate-pulse-dot font-medium">Agent 处理中…</span>}
+          <button className="px-3 py-1.5 text-xs text-surface-muted hover:text-surface-text hover:bg-surface-hover rounded-lg transition-colors">{Icons.download} 导出</button>
+          <button className="px-3 py-1.5 text-xs text-surface-muted hover:text-surface-text hover:bg-surface-hover rounded-lg transition-colors">{Icons.settings} 设置</button>
         </header>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {messages.map(msg => (
-            <Fragment key={msg.id}>
-              <ChatMessage msg={msg} />
-              {/* Show tool calls that happened in this step */}
-              {tools.filter(t => t.step === msg.step).map(t => (
+        {/* Scrollable chat area */}
+        <div className="flex-1 overflow-y-auto px-6">
+          {messages.length === 0 && !sending ? (
+            /* ── Empty state: hero + input center ── */
+            <div className="flex flex-col items-center justify-center min-h-full max-w-2xl mx-auto py-12">
+              <h1 className="text-2xl font-bold text-surface-text mb-2 tracking-tight">今天想做什么？</h1>
+              <p className="text-surface-muted text-sm mb-8">描述你的需求，Agent 将自动调用工具完成任务</p>
+
+              {/* Large input */}
+              <div className="w-full relative mb-6">
+                <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                  disabled={!activeSid || sending} rows={3}
+                  placeholder={activeSid ? '描述你的需求…' : '请先创建会话'}
+                  className="w-full bg-surface-bg border border-surface-border rounded-3xl px-6 py-4 text-surface-text resize-none input-focus-ring shadow-input text-[15px] leading-relaxed disabled:opacity-40"
+                />
+                {/* Input accessories */}
+                <div className="absolute bottom-3 left-4 flex items-center gap-2">
+                  <button className="w-8 h-8 rounded-full bg-surface-hover flex items-center justify-center text-surface-muted hover:bg-surface-active hover:text-surface-text transition-colors text-sm" title="添加附件">{Icons.plus}</button>
+                  {agentTeams && <span className="text-[11px] bg-brand-50 text-brand-600 px-2 py-0.5 rounded-full font-medium">{Icons.teams} Agent 团队</span>}
+                </div>
+                <div className="absolute bottom-3 right-4 flex items-center gap-2">
+                  {/* Thinking toggle */}
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <span className="text-[11px] text-surface-muted">{Icons.brain} 深度思考</span>
+                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                  </label>
+                  {/* Model selector */}
+                  <div className="relative">
+                    <button onClick={() => setShowModelPicker(!showModelPicker)}
+                      className="px-2.5 py-1 text-[11px] text-surface-muted hover:text-surface-text bg-surface-hover rounded-lg transition-colors font-mono">
+                      {models[0]?.name || 'Model'}
+                    </button>
+                    {showModelPicker && models.length > 0 && (
+                      <div className="absolute bottom-full right-0 mb-1 bg-white border border-surface-border rounded-xl shadow-lg py-1 z-10 min-w-[140px]">
+                        {models.map(m => (
+                          <button key={m.name} onClick={() => setShowModelPicker(false)}
+                            className="block w-full text-left px-3 py-1.5 text-xs text-surface-text hover:bg-surface-hover transition-colors">{m.name}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* Send button */}
+                  <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                    className="w-9 h-9 rounded-full bg-brand-500 text-white flex items-center justify-center hover:bg-brand-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shadow-sm text-sm font-bold">{Icons.send}</button>
+                </div>
+              </div>
+
+              {/* Quick scenario tags */}
+              <div className="flex flex-wrap gap-2 justify-center">
+                {SCENARIOS.map(s => (
+                  <button key={s.label} onClick={() => fillScenario(s.prompt)}
+                    className="px-3 py-1.5 rounded-full border border-surface-border text-xs text-surface-muted hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition-colors">
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Mode switch */}
+              <button className="mt-10 text-xs text-surface-dim hover:text-surface-muted transition-colors">切换到经典模式</button>
+            </div>
+          ) : (
+            /* ── Chat messages ── */
+            <div className="max-w-3xl mx-auto py-6 space-y-5">
+              {messages.map(msg => (
+                <div key={msg.id} className={`flex gap-3 animate-slide-up ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                  {msg.role === 'assistant' && (
+                    <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 text-sm shrink-0 mt-0.5">{Icons.agent}</div>
+                  )}
+                  <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${
+                    msg.role === 'user' ? 'bg-brand-500 text-white' : 'bg-surface-hover text-surface-text border border-surface-border'
+                  }`}>
+                    <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${msg.streaming ? 'cursor-blink' : ''}`}>
+                      {msg.content || (msg.streaming ? '' : '(空)')}
+                    </div>
+                    {msg.step && <div className="text-[10px] opacity-50 mt-1">Step {msg.step}</div>}
+                  </div>
+                </div>
+              ))}
+              {/* Inline tool cards */}
+              {tools.filter(t => !messages.find(m => m.step === t.step)).map(t => (
                 <ToolCard key={t.id} tool={t} />
               ))}
-            </Fragment>
-          ))}
-          {messages.length === 0 && !sending && (
-            <div className="flex items-center justify-center h-full text-codex-dim text-sm">
-              {activeSid ? 'Send a message to start…' : 'Create a session →'}
+              <div ref={chatEndRef} />
             </div>
           )}
-          <div ref={chatEndRef} />
         </div>
 
-        {/* Input */}
-        <div className="px-4 py-3 border-t border-codex-border bg-codex-surface shrink-0">
-          <div className="flex gap-2">
-            <textarea
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={!activeSid || sending}
-              rows={2}
-              placeholder={activeSid ? 'Type a message… (Enter to send, Shift+Enter for newline)' : 'Select a session first'}
-              className="flex-1 bg-codex-bg border border-codex-border rounded-lg px-4 py-2 text-sm text-codex-text resize-none focus:border-codex-accent focus:outline-none disabled:opacity-50 font-mono"
-            />
-            <button
-              onClick={sendMessage}
-              disabled={!activeSid || sending || !input.trim()}
-              className="px-5 py-2 rounded-lg bg-codex-accent text-white font-medium text-sm hover:bg-blue-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            >
-              {sending ? '…' : 'Send'}
-            </button>
+        {/* Bottom input bar (when chat has started) */}
+        {messages.length > 0 && (
+          <div className="px-6 py-4 border-t border-surface-border bg-surface-bg shrink-0">
+            <div className="max-w-3xl mx-auto relative">
+              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                disabled={!activeSid || sending} rows={2}
+                placeholder="继续对话… (Enter 发送)"
+                className="w-full bg-surface-hover border border-surface-border rounded-2xl px-4 py-3 text-sm text-surface-text resize-none input-focus-ring disabled:opacity-40 pr-28"
+              />
+              <div className="absolute bottom-2 right-3 flex items-center gap-2">
+                <label className="flex items-center gap-1 cursor-pointer select-none">
+                  <span className="text-[10px] text-surface-muted">{Icons.brain}</span>
+                  <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                </label>
+                <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                  className="w-8 h-8 rounded-full bg-brand-500 text-white flex items-center justify-center hover:bg-brand-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm font-bold">{Icons.send}</button>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
-      {/* ── Modals ───────────────────────────────────────────────── */}
+      {/* ── Modals ──────────────────────────────────────────────── */}
       {permReq && activeSid && <PermissionModal req={permReq} sid={activeSid} onDone={() => setPermReq(null)} />}
       {askReq && activeSid && <AskUserModal req={askReq} sid={activeSid} onDone={() => setAskReq(null)} />}
     </div>

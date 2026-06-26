@@ -57,6 +57,10 @@ from desktop.service.schemas import (
     McpServerConfig,
     McpServerCreate,
     McpServerUpdate,
+    SessionConfig,
+    SessionConfigUpdate,
+    TeamCreate,
+    TeamInfo,
 )
 
 logger = logging.getLogger("mycodeagent.service")
@@ -246,6 +250,97 @@ def create_app(
         if not ok:
             raise HTTPException(404, "AskUser request not found or timed out")
         return {"status": "answered"}
+
+    # ═══════════════════════════════════════════════════════════════
+    # Session config
+    # ═══════════════════════════════════════════════════════════════
+
+    @app.get("/api/sessions/{sid}/config", response_model=SessionConfig)
+    async def get_session_config(sid: str):
+        """Get session configuration."""
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        agent = session._agent
+        if agent is None:
+            raise HTTPException(400, "Session not started yet")
+        model = getattr(agent.llm, 'model', '')
+        provider = getattr(agent.llm, 'provider', '')
+        teams = bool(getattr(agent, 'enable_agent_teams', False))
+        return SessionConfig(
+            model=model,
+            provider=provider,
+            enable_agent_teams=teams,
+            thinking_level="medium",
+        )
+
+    @app.put("/api/sessions/{sid}/config")
+    async def update_session_config(sid: str, body: SessionConfigUpdate):
+        """Update session configuration (e.g. toggle agent teams)."""
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        agent = session._agent
+        if agent is None:
+            raise HTTPException(400, "Session not started yet")
+        if body.enable_agent_teams is not None:
+            agent.enable_agent_teams = bool(body.enable_agent_teams)
+            if hasattr(agent.config, 'enable_agent_teams'):
+                agent.config.enable_agent_teams = agent.enable_agent_teams
+        return {"status": "updated"}
+
+    # ═══════════════════════════════════════════════════════════════
+    # Agent teams
+    # ═══════════════════════════════════════════════════════════════
+
+    @app.get("/api/sessions/{sid}/teams", response_model=list[TeamInfo])
+    async def list_teams(sid: str):
+        """List agent teams and their task board status."""
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None or session._agent is None:
+            return []
+        agent = session._agent
+        if not getattr(agent, 'enable_agent_teams', False) or agent.team_manager is None:
+            return []
+        try:
+            state = agent.team_manager.export_state()
+        except Exception:
+            return []
+        work_items = state.get("work_items", {})
+        teams_data = state.get("teams", {})
+        result = []
+        for team_name, team_state in teams_data.items():
+            result.append(TeamInfo(
+                name=team_name,
+                queued=team_state.get("queued", 0),
+                running=team_state.get("running", 0),
+                succeeded=team_state.get("succeeded", 0),
+                failed=team_state.get("failed", 0),
+                active=team_state.get("active", 0),
+                idle=team_state.get("idle", 0),
+                approvals_pending=team_state.get("approvals_pending", 0),
+                blocked=team_state.get("blocked", 0),
+            ))
+        return result
+
+    @app.post("/api/sessions/{sid}/teams", status_code=201)
+    async def create_team(sid: str, body: TeamCreate):
+        """Create an agent team."""
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None or session._agent is None:
+            raise HTTPException(404, "Session not found")
+        agent = session._agent
+        if not getattr(agent, 'enable_agent_teams', False) or agent.team_manager is None:
+            raise HTTPException(400, "Agent teams not enabled. Toggle enable_agent_teams in session config first.")
+        try:
+            team = agent.team_manager.create_team(body.team_name)
+            return {"status": "created", "team": team.get("name", body.team_name)}
+        except Exception as exc:
+            raise HTTPException(500, str(exc))
 
     # ═══════════════════════════════════════════════════════════════
     # WebSocket — event stream

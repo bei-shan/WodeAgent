@@ -130,3 +130,34 @@ class McpServerCreate(BaseModel):
 class McpServerUpdate(BaseModel):
     command: str | None = None
     args: list[str] | None = None
+
+
+# ── Session config ────────────────────────────────────────────────────
+
+class SessionConfig(BaseModel):
+    model: str = ""
+    provider: str = ""
+    enable_agent_teams: bool = False
+    thinking_level: str = "medium"  # low | medium | high
+
+
+class SessionConfigUpdate(BaseModel):
+    enable_agent_teams: bool | None = None
+
+
+# ── Teams ─────────────────────────────────────────────────────────────
+
+class TeamCreate(BaseModel):
+    team_name: str = Field(..., min_length=1)
+
+
+class TeamInfo(BaseModel):
+    name: str
+    queued: int = 0
+    running: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    active: int = 0
+    idle: int = 0
+    approvals_pending: int = 0
+    blocked: int = 0

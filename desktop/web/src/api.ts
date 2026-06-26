@@ -148,6 +148,23 @@ export const mcp = {
     req<{ status: string }>('DELETE', `/mcp/servers/${encodeURIComponent(name)}`),
 };
 
+// ── Session config ───────────────────────────────────────────────────
+
+export interface SessionConfig { model: string; provider: string; enable_agent_teams: boolean; thinking_level: string }
+export interface TeamInfo { name: string; queued: number; running: number; succeeded: number; failed: number; active: number; idle: number; approvals_pending: number; blocked: number }
+
+export const config = {
+  get:    (sid: string) => req<SessionConfig>('GET', `/sessions/${sid}/config`),
+  update: (sid: string, data: { enable_agent_teams?: boolean }) =>
+    req<{ status: string }>('PUT', `/sessions/${sid}/config`, data),
+};
+
+export const teams = {
+  list:   (sid: string) => req<TeamInfo[]>('GET', `/sessions/${sid}/teams`),
+  create: (sid: string, team_name: string) =>
+    req<{ status: string; team: string }>('POST', `/sessions/${sid}/teams`, { team_name }),
+};
+
 // ── WebSocket ────────────────────────────────────────────────────────
 
 export function connectStream(

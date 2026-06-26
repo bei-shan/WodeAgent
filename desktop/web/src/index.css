@@ -2,71 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Codex CLI-inspired terminal styling */
-:root {
-  color-scheme: dark;
-}
+/* ── Global ───────────────────────────────────────────────────────── */
+:root { color-scheme: light; }
+body { margin: 0; overflow: hidden; }
+#root { height: 100vh; display: flex; }
 
-body {
-  margin: 0;
-  overflow: hidden;
-}
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d7de; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b0b8c0; }
 
-#root {
-  height: 100vh;
-  display: flex;
-}
+/* ── Animations ───────────────────────────────────────────────────── */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.animate-fade-in { animation: fadeIn 0.25s ease-out; }
+.animate-slide-up { animation: slideUp 0.3s ease-out; }
+.animate-pulse-dot { animation: pulse-dot 1.5s infinite; }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #30363d;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
-}
+/* ── Streaming cursor ─────────────────────────────────────────────── */
+.cursor-blink::after { content: '▍'; animation: pulse-dot 1s infinite; color: #60a5fa; }
+.cursor-blink.done::after { content: ''; animation: none; }
 
-/* Tool timeline animation */
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(-8px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-.animate-slide-in {
-  animation: slideIn 0.2s ease-out;
-}
+/* ── Markdown / code ──────────────────────────────────────────────── */
+pre { background: #f6f8fa; border: 1px solid #e8ecf1; border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 13px; }
+code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; background: #f6f8fa; padding: 1px 5px; border-radius: 4px; }
 
-/* Pulsing cursor for streaming */
-@keyframes blink {
-  0%, 50%  { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
-.cursor-blink::after {
-  content: '█';
-  animation: blink 1s infinite;
-  color: #58a6ff;
-}
-.cursor-blink.done::after {
-  content: '';
-  animation: none;
-}
+/* ── Toggle switch ────────────────────────────────────────────────── */
+.toggle { position: relative; width: 40px; height: 22px; display: inline-block; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #d0d7de; border-radius: 22px; transition: 0.2s; }
+.toggle .slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.toggle input:checked + .slider { background: #4b80d9; }
+.toggle input:checked + .slider::before { transform: translateX(18px); }
 
-/* Inline code */
-pre {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 12px;
-  overflow-x: auto;
-  font-size: 13px;
-}
-code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 13px;
-}
+/* ── Input focus ──────────────────────────────────────────────────── */
+.input-focus-ring { transition: border-color 0.2s, box-shadow 0.2s; }
+.input-focus-ring:focus { outline: none; border-color: #4b80d9; box-shadow: 0 2px 20px rgba(75,128,217,0.15), 0 1px 3px rgba(0,0,0,0.08); }
