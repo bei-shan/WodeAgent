@@ -881,25 +881,6 @@ export default function App() {
               />
             </div>
 
-            {/* Toggles — below input card */}
-            <div className="flex items-center gap-3 justify-center mt-3">
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-[11px] text-gray-400">深度思考</span>
-                <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-[11px] text-gray-400">Agent 团队</span>
-                <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                <span className="text-[11px] text-gray-400">Plan</span>
-                <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
-                  const next = !planMode; setPlanMode(next);
-                  if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
-                }} /><span className="slider" /></label>
-              </label>
-            </div>
-
             {/* Uploaded files preview */}
             {uploadedFiles.length > 0 && (
               <div className="flex flex-wrap gap-2 justify-center mt-3">
