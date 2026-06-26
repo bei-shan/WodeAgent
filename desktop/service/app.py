@@ -120,17 +120,16 @@ def create_app(
     )
 
     # ── Shared state ──────────────────────────────────────────────
+    import os as _os
+    app.state.data_dir = _os.path.abspath(
+        _os.getenv("MYCODEAGENT_DATA_DIR", _os.path.join(project_root, ".mycodeagent"))
+    )
     app.state.controller = SessionController(
         workspace_base=os.path.join(app.state.data_dir, "sessions")
     )
     app.state.agent_factory = agent_factory
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
-    # Base directory for session workspaces — configurable for deployment.
-    import os as _os
-    app.state.data_dir = _os.path.abspath(
-        _os.getenv("MYCODEAGENT_DATA_DIR", _os.path.join(project_root, ".mycodeagent"))
-    )
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
