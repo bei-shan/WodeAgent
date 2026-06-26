@@ -51,6 +51,12 @@ from desktop.service.schemas import (
     ToolParam,
     McpStatusResponse,
     McpServerStatus,
+    SkillCreate,
+    SkillUpdate,
+    SkillInfo,
+    McpServerConfig,
+    McpServerCreate,
+    McpServerUpdate,
 )
 
 logger = logging.getLogger("mycodeagent.service")
@@ -466,6 +472,203 @@ def create_app(
             mode = "unknown"
 
         return McpStatusResponse(servers=servers, pending=pending, connect_mode=mode)
+
+    # ═══════════════════════════════════════════════════════════════
+    # Skills — user-configurable skill management
+    # ═══════════════════════════════════════════════════════════════
+
+    @app.get("/api/skills", response_model=list[SkillInfo])
+    async def list_skills():
+        """List all project skills."""
+        from core.skills.skill_loader import SkillLoader
+        loader = SkillLoader(app.state.project_root)
+        try:
+            skills = loader.list_skills(refresh=True)
+        except Exception:
+            skills = []
+        return [
+            SkillInfo(name=s.name, description=s.description, base_dir=s.base_dir)
+            for s in skills
+        ]
+
+    @app.get("/api/skills/{name}/content")
+    async def get_skill_content(name: str):
+        """Read a skill's SKILL.md file content."""
+        from core.skills.skill_loader import SkillLoader
+        loader = SkillLoader(app.state.project_root)
+        skill = loader.get_skill(name, refresh=True)
+        if skill is None:
+            raise HTTPException(404, f"Skill not found: {name}")
+        try:
+            content = Path(skill.path).read_text(encoding="utf-8")
+        except Exception:
+            raise HTTPException(500, "Failed to read skill file")
+        # Strip frontmatter to get body
+        body = content.split("---\n", 2)[-1] if content.count("---") >= 2 else content
+        # Re-parse frontmatter
+        parts = content.split("---", 2)
+        fm_lines = parts[1].strip().splitlines() if len(parts) >= 3 else []
+        frontmatter = {}
+        for line in fm_lines:
+            if ":" in line:
+                k, v = line.split(":", 1)
+                frontmatter[k.strip()] = v.strip().strip('"')
+        return {
+            "name": skill.name,
+            "description": skill.description,
+            "content": body.strip(),
+            "frontmatter": frontmatter,
+        }
+
+    @app.post("/api/skills", status_code=201)
+    async def create_skill(body: SkillCreate):
+        """Create a new skill — writes SKILL.md to skills/<name>/."""
+        from desktop.service.schemas import SkillCreate
+        skills_dir = Path(app.state.project_root) / "skills" / body.name
+        if skills_dir.exists():
+            raise HTTPException(409, f"Skill '{body.name}' already exists")
+        try:
+            skills_dir.mkdir(parents=True, exist_ok=False)
+            # Write SKILL.md with YAML frontmatter
+            frontmatter = f"---\nname: {body.name}\ndescription: \"{body.description}\"\n---\n"
+            (skills_dir / "SKILL.md").write_text(
+                frontmatter + "\n" + body.content + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise HTTPException(500, f"Failed to create skill: {exc}")
+        return {"status": "created", "name": body.name}
+
+    @app.put("/api/skills/{name}")
+    async def update_skill(name: str, body: SkillUpdate):
+        """Update an existing skill."""
+        from core.skills.skill_loader import SkillLoader
+        loader = SkillLoader(app.state.project_root)
+        skill = loader.get_skill(name, refresh=True)
+        if skill is None:
+            raise HTTPException(404, f"Skill not found: {name}")
+        try:
+            current = Path(skill.path).read_text(encoding="utf-8")
+        except Exception:
+            raise HTTPException(500, "Failed to read skill file")
+
+        # Update frontmatter description if provided
+        if body.description is not None:
+            parts = current.split("---", 2)
+            if len(parts) >= 3:
+                fm_lines = parts[1].strip().splitlines()
+                new_fm_lines = []
+                for line in fm_lines:
+                    if line.strip().startswith("description:"):
+                        new_fm_lines.append(f"description: \"{body.description}\"")
+                    else:
+                        new_fm_lines.append(line)
+                parts[1] = "\n".join(new_fm_lines)
+                current = "---".join(parts)
+
+        # Update body if provided
+        if body.content is not None:
+            parts = current.split("---", 2)
+            if len(parts) >= 3:
+                current = "---".join(parts[:2]) + "---\n" + body.content + "\n"
+            else:
+                current = current.rstrip() + "\n" + body.content + "\n"
+
+        try:
+            Path(skill.path).write_text(current, encoding="utf-8")
+        except Exception:
+            raise HTTPException(500, "Failed to write skill file")
+        return {"status": "updated", "name": name}
+
+    @app.delete("/api/skills/{name}")
+    async def delete_skill(name: str):
+        """Delete a skill directory."""
+        from core.skills.skill_loader import SkillLoader
+        import shutil
+        loader = SkillLoader(app.state.project_root)
+        skill = loader.get_skill(name, refresh=True)
+        if skill is None:
+            raise HTTPException(404, f"Skill not found: {name}")
+        try:
+            shutil.rmtree(Path(skill.path).parent)
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to delete skill: {exc}")
+        return {"status": "deleted", "name": name}
+
+    # ═══════════════════════════════════════════════════════════════
+    # MCP servers — user-configurable MCP server management
+    # ═══════════════════════════════════════════════════════════════
+
+    _mcp_config_path = Path(app.state.project_root) / "mcp_servers.json"
+
+    def _read_mcp_config() -> dict:
+        if not _mcp_config_path.exists():
+            return {"mcpServers": {}}
+        try:
+            import json
+            return json.loads(_mcp_config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"mcpServers": {}}
+
+    def _write_mcp_config(data: dict) -> None:
+        import json
+        _mcp_config_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    @app.get("/api/mcp/servers", response_model=list[McpServerConfig])
+    async def list_mcp_servers():
+        """List configured MCP servers."""
+        data = _read_mcp_config()
+        servers = data.get("mcpServers", {})
+        return [
+            McpServerConfig(
+                name=name,
+                command=cfg.get("command", ""),
+                args=cfg.get("args", []),
+            )
+            for name, cfg in servers.items()
+        ]
+
+    @app.post("/api/mcp/servers", status_code=201)
+    async def add_mcp_server(body: McpServerCreate):
+        """Add a new MCP server configuration."""
+        data = _read_mcp_config()
+        servers = data.setdefault("mcpServers", {})
+        if body.name in servers:
+            raise HTTPException(409, f"MCP server '{body.name}' already exists")
+        servers[body.name] = {
+            "command": body.command,
+            "args": body.args,
+        }
+        _write_mcp_config(data)
+        return {"status": "created", "name": body.name}
+
+    @app.put("/api/mcp/servers/{name}")
+    async def update_mcp_server(name: str, body: McpServerUpdate):
+        """Update an existing MCP server configuration."""
+        data = _read_mcp_config()
+        servers = data.get("mcpServers", {})
+        if name not in servers:
+            raise HTTPException(404, f"MCP server '{name}' not found")
+        if body.command is not None:
+            servers[name]["command"] = body.command
+        if body.args is not None:
+            servers[name]["args"] = body.args
+        _write_mcp_config(data)
+        return {"status": "updated", "name": name}
+
+    @app.delete("/api/mcp/servers/{name}")
+    async def remove_mcp_server(name: str):
+        """Remove an MCP server configuration."""
+        data = _read_mcp_config()
+        servers = data.get("mcpServers", {})
+        if name not in servers:
+            raise HTTPException(404, f"MCP server '{name}' not found")
+        del servers[name]
+        _write_mcp_config(data)
+        return {"status": "deleted", "name": name}
 
     return app
 

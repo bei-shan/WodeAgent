@@ -92,3 +92,41 @@ class McpStatusResponse(BaseModel):
     servers: list[McpServerStatus]
     pending: list[str] = []
     connect_mode: str = "manual"
+
+
+# ── Skills ────────────────────────────────────────────────────────────
+
+class SkillInfo(BaseModel):
+    name: str
+    description: str
+    base_dir: str = ""
+
+
+class SkillCreate(BaseModel):
+    name: str = Field(..., pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    description: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, description="SKILL.md body (markdown)")
+
+
+class SkillUpdate(BaseModel):
+    description: str | None = None
+    content: str | None = None
+
+
+# ── MCP server config ─────────────────────────────────────────────────
+
+class McpServerConfig(BaseModel):
+    name: str
+    command: str = ""
+    args: list[str] = []
+
+
+class McpServerCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    command: str = Field(..., min_length=1)
+    args: list[str] = []
+
+
+class McpServerUpdate(BaseModel):
+    command: str | None = None
+    args: list[str] | None = None
