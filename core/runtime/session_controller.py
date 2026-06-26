@@ -170,19 +170,11 @@ class AgentSession:
 
         agent = self._agent_factory()
 
-        # Redirect agent to session workspace
-        agent.project_root = str(workspace)
+        # Redirect agent to session workspace using the built-in rebind
+        # which properly updates project_root, permission gate, tools,
+        # context builder, skill loader, and team manager.
+        agent._rebind_project_root(str(workspace))
         agent._original_project_root = str(workspace)
-        # Rebind permission gate to new root
-        if hasattr(agent, "_permission_gate") and agent._permission_gate:
-            agent._permission_gate._project_root = workspace
-        # Update tools that cache project_root
-        if hasattr(agent, "tool_registry"):
-            for tool in agent.tool_registry.get_all_tools():
-                if hasattr(tool, "_project_root"):
-                    tool._project_root = workspace
-                if hasattr(tool, "_working_dir"):
-                    tool._working_dir = workspace
 
         # Install session-scoped event sink → queue.
         agent.event_sink = _QueueEventSink(self.events)
