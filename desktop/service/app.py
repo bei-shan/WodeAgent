@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 # Ensure project root on path.
@@ -323,6 +323,33 @@ def create_app(
             raise HTTPException(404, "Session not found")
         session.interrupt()
         return {"status": "interrupted"}
+
+    @app.post("/api/sessions/{sid}/upload")
+    async def upload_file(sid: str, file: UploadFile = File(...)):
+        """Upload a file to the session workspace. Returns the saved path."""
+        import shutil
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        # Use session workspace — ensure agent is initialized first
+        from pathlib import Path as Pt
+        ws = Pt(".mycodeagent/sessions") / sid
+        ws.mkdir(parents=True, exist_ok=True)
+        # Sanitize filename
+        safe_name = Pt(file.filename or "upload").name
+        dest = ws / safe_name
+        # Avoid overwriting: add counter if exists
+        if dest.exists():
+            stem, ext = Pt(safe_name).stem, Pt(safe_name).suffix
+            i = 1
+            while dest.exists():
+                dest = ws / f"{stem}_{i}{ext}"
+                i += 1
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        rel_path = str(dest.relative_to(Pt.cwd())).replace("\\", "/")
+        return {"path": rel_path, "name": safe_name, "size": dest.stat().st_size}
 
     # ═══════════════════════════════════════════════════════════════
     # Permissions

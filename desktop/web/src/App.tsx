@@ -477,7 +477,9 @@ export default function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)  // session id to confirm deletion
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Config
   const [agentTeams, setAgentTeams] = useState(false)
@@ -608,7 +610,14 @@ export default function App() {
         disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
       } catch (e: any) { return }
     }
-    const content = input.trim(); setInput(''); setSending(true)
+    // Append @file references for uploaded files
+    let content = input.trim()
+    if (uploadedFiles.length > 0) {
+      const refs = uploadedFiles.map(f => `@${f.path}`).join(' ')
+      content = content ? `${content}\n${refs}` : refs
+      setUploadedFiles([])
+    }
+    setInput(''); setSending(true)
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
     try { await api.sessions.send(sid, content) } catch (e: any) {
@@ -618,6 +627,20 @@ export default function App() {
 
   const fillScenario = (prompt: string) => { setInput(prompt) }
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
+
+  // File upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files; if (!files || !activeSid) return
+    for (let i = 0; i < files.length; i++) {
+      const form = new FormData(); form.append('file', files[i])
+      try {
+        const res = await fetch(`/api/sessions/${activeSid}/upload`, { method: 'POST', body: form })
+        const data = await res.json()
+        setUploadedFiles(prev => [...prev, { name: data.name, path: data.path }])
+      } catch {}
+    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // Render
@@ -825,10 +848,12 @@ export default function App() {
                   </label>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Microphone placeholder */}
-                  <button className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 transition-colors">
-                    <Svg d={Icons.brain} size={17} />
+                  {/* File upload */}
+                  <button onClick={() => fileInputRef.current?.click()}
+                    className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
+                    <Svg d={Icons.plus} size={17} />
                   </button>
+                  <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
                   {/* Send */}
                   <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
                     className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
@@ -843,6 +868,19 @@ export default function App() {
                 className="w-full bg-transparent px-5 pb-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
               />
             </div>
+
+            {/* Uploaded files preview */}
+            {uploadedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center mt-3">
+                {uploadedFiles.map((f, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-blue-50 text-blue-600 text-xs">
+                    <Svg d={Icons.file} size={12} /> {f.name}
+                    <button onClick={() => setUploadedFiles(prev => prev.filter(x => x.path !== f.path))}
+                      className="ml-1 text-blue-400 hover:text-red-500">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
 
             {/* Quick tags */}
             <div className="flex flex-wrap gap-2 justify-center mt-5">
@@ -902,6 +940,10 @@ export default function App() {
             <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-gray-200 shadow-sm">
               <div className="flex items-center justify-between px-5 pt-4 pb-2">
                 <div className="flex items-center gap-3">
+                  <button onClick={() => fileInputRef.current?.click()}
+                    className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
+                    <Svg d={Icons.plus} size={14} />
+                  </button>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <span className="text-sm text-gray-500">深度思考</span>
                     <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
@@ -912,6 +954,17 @@ export default function App() {
                   <Svg d={Icons.send} size={15} />
                 </button>
               </div>
+              {uploadedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-5 pb-1">
+                  {uploadedFiles.map((f, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[11px]">
+                      <Svg d={Icons.file} size={11} /> {f.name}
+                      <button onClick={() => setUploadedFiles(prev => prev.filter(x => x.path !== f.path))}
+                        className="ml-0.5 text-blue-400 hover:text-red-500">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
                 disabled={sending} rows={2}
                 placeholder="继续对话… (Enter 发送)"
