@@ -23,6 +23,9 @@ class AskUserTool(Tool):
             working_dir=working_dir,
         )
         self._interactive = bool(interactive)
+        # Custom input function for TUI integration (prompt_toolkit, etc.).
+        # When set, this replaces the built-in input() call.
+        self._input_func = None
 
     def get_parameters(self) -> List[ToolParameter]:
         return [
@@ -62,7 +65,10 @@ class AskUserTool(Tool):
                 continue
             prompt = f"[Agent 问] {prompt_text}\n> "
             try:
-                user_input = input(prompt)
+                if self._input_func is not None:
+                    user_input = self._input_func(prompt)
+                else:
+                    user_input = input(prompt)
             except EOFError:
                 user_input = ""
             answers.append({"id": item.get("id"), "answer": user_input})

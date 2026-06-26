@@ -68,28 +68,39 @@ class RichConsoleCodeAgent(CodeAgent):
     Extensions of CodeAgent with Rich UI features.
     Overrides _console and _execute_tool to provide better visual feedback.
     """
-    
+
     def __init__(self, *args, ui: Optional['EnhancedUI'] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.ui = ui
         self._step_count = 0
         self._current_step_input_tokens = 0
         self._thinking_active = False
+        # During streaming, _console messages are buffered to avoid
+        # interrupting the Rich Live display (which causes duplicate renders).
+        self._console_deferred: list[tuple[str, str]] = []  # (type, content)
+        self._streaming_mode: bool = False
         
     def run(self, user_input: str, show_raw: bool = False) -> str:
         """Override run to integrate with enhanced UI"""
-        # Start thinking timer
-        if self.ui and not self._thinking_active:
+        # In streaming mode the caller manages the thinking timer so that
+        # console output happens before Live starts / after Live stops,
+        # avoiding any console.print() that would corrupt the Live display.
+        if self.ui and not self._thinking_active and not self._streaming_mode:
             self.ui.start_thinking()
             self._thinking_active = True
-            
+
         try:
             result = super().run(user_input, show_raw=show_raw)
             return result
         finally:
-            # Stop thinking timer
+            # Stop thinking timer (but defer console output if streaming is active,
+            # to avoid interrupting the Live display — caller handles display timing)
             if self.ui and self._thinking_active:
-                self.ui.stop_thinking()
+                if self._streaming_mode:
+                    # Streaming: timer stopped silently; caller handles display.
+                    self.ui.timer.stop()
+                else:
+                    self.ui.stop_thinking()
                 self._thinking_active = False
                 
                 # Update token tracker from trace logger if available
@@ -103,9 +114,42 @@ class RichConsoleCodeAgent(CodeAgent):
                         )
         
     def _console(self, message: str) -> None:
-        """Override to render messages with Rich"""
+        """Override to render messages with Rich.
+
+        During streaming, messages are buffered and flushed after the
+        Live display stops, so they don't corrupt the Live rendering.
+        """
         msg = message.strip()
-        
+
+        if self._streaming_mode:
+            # Buffer: defer all console output until streaming ends.
+            tag = ""
+            if "Engine 启动" in msg:
+                return  # skip
+            elif "--- Step" in msg:
+                tag = "step"
+            elif "🤔 Thought:" in message:
+                tag = "thought"
+            elif "🧠 Reasoning:" in message:
+                tag = "reasoning"
+            elif "🎬 Action:" in message:
+                tag = "action"
+            elif "👀 Observation:" in message:
+                tag = "observation"
+            elif "✅ Finish" in msg or "✅ Agent" in msg:
+                tag = "finish"
+            elif "⏳" in msg or "Process" in msg:
+                tag = "progress"
+            elif "📎" in msg:
+                tag = "info"
+            elif "📦" in msg:
+                tag = "warning"
+            else:
+                tag = "fallback"
+            self._console_deferred.append((tag, message))
+            return
+
+        # Normal (non-streaming) path — print immediately.
         if "Engine 启动" in msg:
              pass # Skip start message to reduce noise
         elif "--- Step" in msg:
@@ -157,6 +201,50 @@ class RichConsoleCodeAgent(CodeAgent):
              if msg:
                 console.print(f"[dim]{msg}[/dim]")
 
+    def flush_console_buffer(self) -> None:
+        """Print all deferred _console messages (called after streaming ends)."""
+        if not self._console_deferred:
+            return
+        for tag, message in self._console_deferred:
+            msg = message.strip()
+            content = ""
+            if tag == "step":
+                console.print(Rule(style="dim", title=msg))
+            elif tag == "thought":
+                content = message.split("🤔 Thought:", 1)[-1].strip()
+                if content:
+                    console.print(Panel(Markdown(content), title="[thinking]Thinking[/thinking]", border_style="yellow", title_align="left"))
+            elif tag == "reasoning":
+                content = message.split("🧠 Reasoning:", 1)[-1].strip()
+                if content:
+                    console.print(Panel(Markdown(content), title="[thinking]Reasoning[/thinking]", border_style="magenta", title_align="left"))
+            elif tag == "action":
+                content = message.split("🎬 Action:", 1)[-1].strip()
+                console.print(Panel(Text(content, style="bold cyan"), title="[action]Action[/action]", border_style="cyan", title_align="left"))
+            elif tag == "observation":
+                content = message.split("👀 Observation:", 1)[-1].strip()
+                if len(content) > 1000:
+                    content = content[:1000] + "\n... (remaining content truncated for display)"
+                if content.strip().startswith("{") or content.strip().startswith("["):
+                    try:
+                        json.loads(content)
+                        renderable = Syntax(content, "json", theme="monokai", word_wrap=True)
+                    except Exception:
+                        renderable = Text(content, style="dim")
+                else:
+                    renderable = Text(content, style="dim")
+                console.print(Panel(renderable, title="[observation]Observation[/observation]", border_style="dim", title_align="left"))
+            elif tag in ("finish", "progress"):
+                console.print(f"[dim]{msg}[/dim]")
+            elif tag == "info":
+                console.print(f"[info]{msg}[/info]")
+            elif tag == "warning":
+                console.print(f"[warning]{msg}[/warning]")
+            elif tag == "fallback":
+                if msg:
+                    console.print(f"[dim]{msg}[/dim]")
+        self._console_deferred.clear()
+
     def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
         """Override to show tool call in UI tree and spinner during execution"""
         # Show tool call in enhanced UI
@@ -172,10 +260,13 @@ class RichConsoleCodeAgent(CodeAgent):
                     f"{tool_name}{mode_suffix}"
                 )
         
-        with console.status(f"[bold cyan]Executing {tool_name}...[/bold cyan]", spinner="dots"):
-            # artificial small delay to make the spinner visible if tool is too fast
-            # time.sleep(0.1) 
+        # Skip spinner for interactive tools (AskUser uses input() which
+        # conflicts with Rich's Live/Status terminal control).
+        if tool_name == "AskUser":
             result = super()._execute_tool(tool_name, tool_input)
+        else:
+            with console.status(f"[bold cyan]Executing {tool_name}...[/bold cyan]", spinner="dots"):
+                result = super()._execute_tool(tool_name, tool_input)
 
         if self.ui and self.enable_agent_teams and self.team_manager and tool_name in {"Task", "TeamFanout", "TeamCollect"}:
             try:
@@ -466,11 +557,10 @@ def main() -> None:
         project_root=Path(PROJECT_ROOT),
     )
 
-    # Permission dialog (replaces input() in PermissionGate)
+    # Permission dialog — wire via broker instead of monkey-patching.
     permission_dialog = PermissionDialog()
-    # Patch agent's permission gate to use the dialog
     if hasattr(agent, "_permission_gate") and agent._permission_gate:
-        agent._permission_gate.ask = lambda path, tool, action: permission_dialog.ask(
+        agent._permission_gate._broker = lambda path, tool, action: permission_dialog.ask(
             tool=tool, path=path, action=action
         )
 
@@ -489,6 +579,14 @@ def main() -> None:
         completer=mention_completer,
         style=PromptStyle.from_dict(prompt_style_dict),
     )
+
+    # Wire AskUser tool to use prompt_toolkit for input (instead of
+    # raw input() which conflicts with the TUI display and Rich Live).
+    ask_tool = tool_registry.get_tool("AskUser")
+    if ask_tool is not None:
+        ask_tool._input_func = lambda prompt: session.prompt(
+            HTML(f"<style fg='yellow'>{prompt}</style>")
+        )
 
     # Streaming response renderer
     stream = StreamingResponse(console)
@@ -565,21 +663,51 @@ def main() -> None:
                 enhanced_ui.tool_tree = ToolCallTree()
                 enhanced_ui.token_tracker.calls.clear()
 
-                # Show thinking with streaming response
+                # Show thinking with streaming response.
+                # CRITICAL: all console.print() must happen BEFORE stream.start()
+                # or AFTER stream.finish().  Any print during Live corrupts the
+                # display and causes duplicate rendering.
                 start_time = time.time()
                 console.print()
 
-                # Stream the response
+                # Thinking timer — prints BEFORE Live starts.
+                enhanced_ui.start_thinking()
+
+                # Buffer _console messages during streaming so they don't
+                # interrupt the Rich Live display.
+                agent._streaming_mode = True
                 stream.start("Agent")
-                response = agent.run(user_input, show_raw=args.show_raw)
-                stream.finish()
+                previous_callback = getattr(agent, "llm_stream_callback", None)
+                agent.llm_stream_callback = lambda event_type, text, step: stream.append(text) if event_type == "content" else None
+                streamed_response = ""
+                try:
+                    response = agent.run(user_input, show_raw=args.show_raw)
+                finally:
+                    agent.llm_stream_callback = previous_callback
+                    streamed_response = stream.finish()
+                    agent._streaming_mode = False
 
+                # ── Display order (after Live is done) ──
+
+                # 1. Console messages that happened during the agent run
+                #    (step markers, reasoning — should appear BEFORE the response).
+                agent.flush_console_buffer()
+
+                # 2. The Agent response itself.
+                if streamed_response:
+                    _print_assistant_response(streamed_response)
+                elif response:
+                    _print_assistant_response(response)
+
+                # 3. Thinking timer result.
+                elapsed_stream = time.time() - start_time
+                console.print(Text(f"  ({elapsed_stream:.1f}s)", style="dim"))
+                enhanced_ui.stop_thinking()
+
+                # 4. Tool tree, wall-clock timing, token summary.
                 elapsed = time.time() - start_time
-
-                # Show tool tree and response
                 console.print()
                 enhanced_ui.show_tool_tree()
-                _print_assistant_response(response)
 
                 # Show timing and token summary
                 timing_text = Text()

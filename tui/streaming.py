@@ -25,6 +25,10 @@ class StreamingResponse:
         result = stream.finish()
 
     Thread-safe — chunks can arrive from any thread.
+
+    ``finish()`` stops the Live display and returns the accumulated text.
+    It does **not** print — the caller controls display ordering so that
+    console messages (step info, reasoning) appear before the response.
     """
 
     def __init__(self, console: Console):
@@ -45,45 +49,44 @@ class StreamingResponse:
             renderable,
             console=self._console,
             refresh_per_second=10,
-            transient=False,
+            transient=True,
         )
         self._live.start()
 
     def append(self, chunk: str) -> None:
         """Add a chunk of text.  Call from any thread."""
+        if not chunk:
+            return
         with self._lock:
             self._buffer.append(str(chunk))
+        if self._live:
+            self._live.update(self._render(), refresh=True)
 
     def append_text(self, text: str, style: str = "") -> None:
         """Add styled text.  For non-streaming use."""
         self._console.print(text, style=style)
 
     def finish(self) -> str:
-        """Stop streaming, return the full accumulated text."""
+        """Stop streaming and return the full accumulated text.
+
+        Clears the Live area (transient=True).  Does **not** print —
+        the caller decides where the response text appears relative to
+        other console output (step info, reasoning, timing).
+        """
         if self._live:
             self._live.stop()
             self._live = None
         with self._lock:
             result = "".join(self._buffer)
-        elapsed = time.monotonic() - self._started_at
-        # Print final rendered version
-        if self._title:
-            self._console.print(
-                Panel(Markdown(result), title=self._title, border_style="blue", title_align="left")
-            )
-        else:
-            self._console.print(Markdown(result))
-        self._console.print(Text(f"  ({elapsed:.1f}s)", style="dim"))
         return result
 
     def _render(self):
-        """Build the current renderable."""
+        """Build the current renderable (with cursor for streaming)."""
         with self._lock:
             text = "".join(self._buffer)
         if not text:
             return Text("…", style="dim")
-        elapsed = time.monotonic() - self._started_at
-        content = Markdown(text + "█")  # cursor
+        content = Markdown(text + "█")  # blinking cursor during streaming
         if self._title:
             return Panel(content, title=self._title, border_style="blue", title_align="left")
         return Panel(content, border_style="blue")

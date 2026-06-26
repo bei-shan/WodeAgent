@@ -84,6 +84,10 @@ class PermissionGate:
         self._soft_sandbox = bool(soft_sandbox)
         self._cache: dict[str, str] = {}  # resolved_path → "granted" | "denied"
         self._cache_size = max(1, int(cache_size))
+        # Optional broker: callable(path, tool_name, action) -> "granted"|"denied"
+        # When set, ask() delegates to it instead of using input().
+        # UI adapters inject their own dialog here — no monkey-patching needed.
+        self._broker = None
 
     def subagent_gate(self) -> "PermissionGate":
         """Return a non-interactive view that shares the same cache.
@@ -149,8 +153,21 @@ class PermissionGate:
 
         Returns ``"granted"`` or ``"denied"``.  Does NOT block when
         ``interactive=False`` (returns ``"denied"`` immediately).
+
+        When a broker is set (via ``self._broker``), delegates to it
+        instead of calling ``input()`` directly.
         """
         if not self._interactive:
+            self._cache_decision(resolved_path, "denied")
+            return "denied"
+
+        # ── Delegate to UI adapter if wired ──
+        if self._broker is not None:
+            decision = self._broker(resolved_path, tool_name, action)
+            if decision in ("granted", "denied"):
+                self._cache_decision(resolved_path, decision)
+                return decision
+            # Broker returned something unexpected — fall through to deny.
             self._cache_decision(resolved_path, "denied")
             return "denied"
 

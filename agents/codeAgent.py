@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, List, Tuple
 
 from core.agent import Agent
+from core.events import AgentEvent, EventType, EventSink
 from core.llm import HelloAgentsLLM
 from core.message import Message
 from core.config import Config
@@ -57,14 +58,15 @@ class CodeAgent(Agent):
     }
     
     def __init__(
-        self, 
-        name: str, 
-        llm: HelloAgentsLLM, 
+        self,
+        name: str,
+        llm: HelloAgentsLLM,
         tool_registry: ToolRegistry,
         project_root: str,
         system_prompt: Optional[str] = None,
         config: Optional[Config] = None,
         logger=None,
+        event_sink=None,  # core.events.EventSink — UI decoupling
     ):
         super().__init__(name, llm, system_prompt=system_prompt, config=config)
         self.project_root = project_root
@@ -75,6 +77,13 @@ class CodeAgent(Agent):
             level=self.config.log_level,
         )
         self.last_response_raw: Optional[Any] = None
+        self.llm_stream_callback = None
+        # Structured event sink — UI adapters subscribe here instead of
+        # overriding _console().  Default is no-op (headless/testing safe).
+        if event_sink is None:
+            from core.events import EventSink
+            event_sink = EventSink()
+        self.event_sink = event_sink
         self.max_steps = int(getattr(self.config, "max_steps", 50))
         self.verbose = bool(self.config.debug)
         self.console_verbose = bool(self.config.show_react_steps)
@@ -88,21 +97,8 @@ class CodeAgent(Agent):
         self.delegate_mode = bool(getattr(self.config, "delegate_mode", False))
         if self.teammate_mode_warning:
             self.logger.warning(self.teammate_mode_warning)
+        # TeamManager is initialized by AgentTeamsFeature to keep feature lifecycle single-owned.
         self.team_manager = None
-        if self.enable_agent_teams:
-            try:
-                from core.team_engine.manager import TeamManager
-                self.team_manager = TeamManager(
-                    project_root=self.project_root,
-                    team_store_dir=self.team_store_dir,
-                    task_store_dir=self.task_store_dir,
-                    llm=self.llm,
-                    tool_registry=self.tool_registry,
-                    teammate_runtime_mode=self.teammate_runtime_mode,
-                )
-            except Exception as exc:
-                self.logger.warning("Failed to initialize TeamManager, AgentTeams disabled: %s", exc)
-                self.enable_agent_teams = False
         self.logger.info(
             "AgentTeams enabled=%s, team_store_dir=%s, task_store_dir=%s, teammate_mode=%s, teammate_runtime_mode=%s, delegate_mode=%s",
             self.enable_agent_teams,
@@ -263,11 +259,9 @@ class CodeAgent(Agent):
             pass
 
         self._active_worktree = entry or {"name": name or str(wt_path.name), "path": str(wt_path)}
-        self.project_root = str(wt_path)
 
-        # Refresh tools with new project_root.
-        self._inject_permission_gate()
-        self.context_builder.project_root = self.project_root if hasattr(self.context_builder, "project_root") else self.context_builder._project_root
+        # Refresh tools and runtime components with new project_root.
+        self._rebind_project_root(str(wt_path))
 
         self.logger.info(
             "Entered worktree '%s' at %s",
@@ -285,13 +279,10 @@ class CodeAgent(Agent):
             return
 
         wt_name = self._active_worktree.get("name", "unknown")
-        self.project_root = str(self._original_project_root)
         self._active_worktree = None
 
-        # Refresh tools with original project_root.
-        self._inject_permission_gate()
-        if hasattr(self.context_builder, "project_root"):
-            self.context_builder.project_root = self.project_root
+        # Refresh tools and runtime components with original project_root.
+        self._rebind_project_root(str(self._original_project_root))
 
         self.logger.info("Exited worktree '%s', restored to %s", wt_name, self.project_root)
 
@@ -471,6 +462,29 @@ class CodeAgent(Agent):
         budget = int(os.getenv("SKILLS_PROMPT_CHAR_BUDGET", "12000"))
         self._skills_prompt = self._skill_loader.format_skills_for_prompt(budget)
 
+    def _rebind_project_root(self, project_root: str) -> None:
+        """Rebind path-aware runtime components after worktree root changes."""
+        root = Path(project_root).resolve()
+        self.project_root = str(root)
+        self._permission_gate = create_permission_gate(project_root=self.project_root)
+        for tool in self.tool_registry.get_all_tools():
+            if hasattr(tool, "_project_root"):
+                tool._project_root = root
+            if hasattr(tool, "_working_dir"):
+                tool._working_dir = root
+            if hasattr(tool, "_root"):
+                tool._root = root
+            tool._permission_gate = self._permission_gate
+        if hasattr(self, "context_builder"):
+            self.context_builder.project_root = self.project_root
+        if hasattr(self, "_skill_loader"):
+            self._skill_loader = SkillLoader(self.project_root)
+            self._refresh_skills_prompt()
+            if hasattr(self, "context_builder"):
+                self.context_builder.set_skills_prompt(self._skills_prompt)
+        if self.team_manager and hasattr(self.team_manager, "set_project_root"):
+            self.team_manager.set_project_root(self.project_root)
+
     def _inject_permission_gate(self) -> None:
         """将 PermissionGate 注入到所有已注册的工具实例中。
 
@@ -529,6 +543,11 @@ class CodeAgent(Agent):
         self._run_id += 1
         run_id = self._run_id
 
+        self.event_sink.emit(AgentEvent(EventType.RUN_STARTED, {
+            "run_id": run_id,
+            "input": input_text,
+        }))
+
         self._log_system_messages_if_needed(trace_logger)
         trace_logger.log_event(
             "run_start",
@@ -565,6 +584,10 @@ class CodeAgent(Agent):
                 {"run_id": run_id, "final": response_text if "response_text" in locals() else ""},
                 step=0,
             )
+            self.event_sink.emit(AgentEvent(EventType.RUN_FINISHED, {
+                "run_id": run_id,
+                "final": response_text if "response_text" in locals() else "",
+            }))
         if self.console_progress:
             self._console("✅ Agent 已完成")
 
@@ -596,6 +619,11 @@ class CodeAgent(Agent):
         if self.trace_logger:
             self.trace_logger.finalize()
             self.trace_logger = None
+        if self.team_manager:
+            try:
+                self.team_manager.shutdown()
+            except Exception as exc:
+                self.logger.warning("TeamManager shutdown failed: %s", exc)
         for client in getattr(self, "_mcp_clients", []):
             try:
                 client.close_sync()
@@ -622,6 +650,11 @@ class CodeAgent(Agent):
         for step in range(1, self.max_steps + 1):
             # Auto-retry pending MCP servers each step so tools appear
             # MCP retry handled by MCPFeature.runtime_blocks()
+
+            self.event_sink.emit(AgentEvent(EventType.STEP_STARTED, {
+                "step": step,
+                "max_steps": self.max_steps,
+            }, step=step))
 
             tools_schema = self._get_openai_tools_for_current_mode()
             self._collect_runtime_blocks(step)
@@ -657,6 +690,10 @@ class CodeAgent(Agent):
 
             # 无工具调用：视为最终回答
             final_text = str(response_text).strip()
+            self.event_sink.emit(AgentEvent(EventType.ASSISTANT_FINAL, {
+                "content": final_text,
+                "step": step,
+            }, step=step))
             self.history_manager.append_assistant(
                 content=final_text,
                 metadata={"step": step, "action_type": "final"},
@@ -762,11 +799,35 @@ class CodeAgent(Agent):
         reasoning_content = None
 
         while True:
+            self.event_sink.emit(AgentEvent(EventType.LLM_STARTED, {
+                "step": step,
+            }, step=step))
+
             # Build intercept chain (features wrap the real LLM call).
             def _real_call():
-                return self.llm.invoke_raw(
-                    messages, tools=tools_schema, tool_choice=tool_choice
-                )
+                use_streaming = bool(getattr(self.config, "llm_streaming", True)) and hasattr(self.llm, "stream_raw")
+                if not use_streaming:
+                    return self.llm.invoke_raw(
+                        messages, tools=tools_schema, tool_choice=tool_choice
+                    )
+
+                def _on_delta(event_type: str, text: str) -> None:
+                    callback = getattr(self, "llm_stream_callback", None)
+                    if callback:
+                        callback(event_type, text, step)
+
+                try:
+                    return self.llm.stream_raw(
+                        messages,
+                        tools=tools_schema,
+                        tool_choice=tool_choice,
+                        on_delta=_on_delta,
+                    )
+                except Exception as exc:
+                    self.logger.warning("LLM streaming failed, falling back to invoke_raw: %s", exc)
+                    return self.llm.invoke_raw(
+                        messages, tools=tools_schema, tool_choice=tool_choice
+                    )
             intercept = _real_call
             for feat in reversed(self._features):
                 prev = intercept
@@ -789,6 +850,11 @@ class CodeAgent(Agent):
                 # Budget tracking
                 if hasattr(self, "_budget_tracker"):
                     self._budget_tracker.spend(usage["total_tokens"])
+
+            self.event_sink.emit(AgentEvent(EventType.LLM_COMPLETED, {
+                "step": step,
+                "usage": usage or {},
+            }, step=step))
 
             response_meta = extract_response_meta(raw_response)
             tool_calls = extract_tool_calls(raw_response)
@@ -906,6 +972,11 @@ class CodeAgent(Agent):
                 )
             else:
                 trace_logger.log_event("tool_call", {"tool": tool_name, "args": tool_input, "tool_call_id": tool_call_id}, step=step)
+                self.event_sink.emit(AgentEvent(EventType.TOOL_STARTED, {
+                    "tool": tool_name,
+                    "input": tool_input,
+                    "tool_call_id": tool_call_id,
+                }, step=step))
                 if self.console_verbose:
                     self._console(f"\n🎬 Action: {tool_name}[{tool_input}]\n")
                 elif self.logger.isEnabledFor(logging.DEBUG):
@@ -921,6 +992,19 @@ class CodeAgent(Agent):
                     error_result = {"status": "error", "error": {"code": "EXECUTION_ERROR", "message": str(e)}, "data": {}}
                     observation = json.dumps(error_result, ensure_ascii=False)
                     trace_logger.log_event("error", {"stage": "tool_execution", "error_code": "EXECUTION_ERROR", "message": str(e), "tool": tool_name, "traceback": tb.format_exc()}, step=step)
+
+                # Emit structured event for UI — success or failure.
+                try:
+                    obs_obj = json.loads(observation)
+                    status = obs_obj.get("status", "success")
+                except (json.JSONDecodeError, TypeError):
+                    status = "success"
+                self.event_sink.emit(AgentEvent(EventType.TOOL_COMPLETED, {
+                    "tool": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "status": status,
+                    "output": observation,
+                }, step=step))
 
             self.history_manager.append_tool(
                 tool_name=tool_name,
