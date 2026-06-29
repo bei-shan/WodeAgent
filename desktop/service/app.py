@@ -79,6 +79,11 @@ _STREAM_EVENTS = {
     SESSION_EVENT_ASK_USER,
     SESSION_EVENT_TURN_DONE,
     SESSION_EVENT_ERROR,
+    # Subagent streaming events
+    EventType.SUBAGENT_STARTED,
+    EventType.SUBAGENT_DELTA,
+    EventType.SUBAGENT_TOOL_USE,
+    EventType.SUBAGENT_FINISHED,
 }
 
 
