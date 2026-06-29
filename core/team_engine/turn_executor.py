@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.context_engine.observation_truncator import truncate_observation
 from core.response_parser import (
@@ -31,8 +31,13 @@ class TurnExecutor:
         self.denied_tools = set(denied_tools or set())
         self._tools_schema = self._get_tools_schema()
 
-    def execute_turn(self, messages: list[dict[str, Any]], tool_usage: Dict[str, int]) -> Dict[str, Any]:
-        raw_response = self.llm.invoke_raw(messages, tools=self._tools_schema, tool_choice="auto")
+    def execute_turn(
+        self,
+        messages: list[dict[str, Any]],
+        tool_usage: Dict[str, int],
+        on_delta: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict[str, Any]:
+        raw_response = self._invoke_llm(messages, on_delta=on_delta)
         response_text = extract_content(raw_response) or ""
         reasoning_content = extract_reasoning_content(raw_response)
         tool_calls = extract_tool_calls(raw_response)
@@ -96,6 +101,33 @@ class TurnExecutor:
                 for c in tool_calls
             ],
         }
+
+    def _invoke_llm(
+        self,
+        messages: list[dict[str, Any]],
+        on_delta: Optional[Callable[[str, str], None]] = None,
+    ) -> Any:
+        """Invoke the LLM, using streaming when a delta callback is provided.
+
+        The non-streaming path is unchanged for existing callers. Streaming
+        callers get token-level deltas via ``on_delta(kind, text)`` and the
+        same merged raw response shape as ``invoke_raw`` via stream_raw(). If
+        a provider lacks streaming or raises in the streaming path, fall back
+        to invoke_raw so subagent execution remains correct (visibility degrades).
+        """
+        if on_delta is not None and hasattr(self.llm, "stream_raw"):
+            try:
+                return self.llm.stream_raw(
+                    messages,
+                    tools=self._tools_schema,
+                    tool_choice="auto",
+                    on_delta=on_delta,
+                )
+            except Exception:
+                # Streaming is observability, not correctness. Degrade to the
+                # known-good non-streaming path if a provider rejects streaming.
+                pass
+        return self.llm.invoke_raw(messages, tools=self._tools_schema, tool_choice="auto")
 
     def _get_tools_schema(self) -> list[dict[str, Any]]:
         tools = self.tool_registry.get_openai_tools()

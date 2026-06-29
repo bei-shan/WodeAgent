@@ -19,7 +19,7 @@ Usage in UI::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 # ── Event type literals ──────────────────────────────────────────────
@@ -41,6 +41,12 @@ class EventType:
     ASK_USER_REQUESTED = "ask_user.requested"
     TURN_COMPLETED = "turn.completed"
 
+    # Subagent events (emitted by Task/BackgroundTask/Team workers):
+    SUBAGENT_STARTED = "subagent.started"
+    SUBAGENT_DELTA = "subagent.delta"
+    SUBAGENT_TOOL_USE = "subagent.tool_use"
+    SUBAGENT_FINISHED = "subagent.finished"
+
 
 # ── Event dataclass ──────────────────────────────────────────────────
 
@@ -54,6 +60,7 @@ class AgentEvent:
     type: str
     payload: dict[str, Any] = field(default_factory=dict)
     step: int = 0
+    subagent_id: Optional[str] = None
 
 
 # ── Sink interface ───────────────────────────────────────────────────
