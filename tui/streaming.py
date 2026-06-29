@@ -14,35 +14,43 @@ from rich.text import Text
 
 
 class StreamingResponse:
-    """Displays LLM output as it streams in, using Rich Live.
+    """Displays LLM content and reasoning as they stream, using Rich Live.
+
+    Provides separate channels for content and reasoning text, token-rate
+    counting, and dynamic title updates (e.g. step labelling).  Thread-safe.
 
     Usage::
 
         stream = StreamingResponse(console)
-        stream.start("Thinking...")
-        for chunk in llm.think(messages):
-            stream.append(chunk)
-        result = stream.finish()
-
-    Thread-safe — chunks can arrive from any thread.
-
-    ``finish()`` stops the Live display and returns the accumulated text.
-    It does **not** print — the caller controls display ordering so that
-    console messages (step info, reasoning) appear before the response.
+        stream.start("Agent")
+        # As deltas arrive:
+        stream.append("He")          # content token
+        stream.append_reasoning("…") # reasoning token (shown in collapsible panel)
+        # After all deltas consumed:
+        final = stream.finish()
+        # final = (content_text, reasoning_text, elapsed_s, total_tokens)
     """
 
     def __init__(self, console: Console):
         self._console = console
         self._buffer: list[str] = []
+        self._reasoning_buffer: list[str] = []
         self._lock = threading.Lock()
         self._live: Optional[Live] = None
         self._started_at: float = 0.0
         self._title: str = ""
 
+    @property
+    def elapsed(self) -> float:
+        if self._started_at == 0.0:
+            return 0.0
+        return time.monotonic() - self._started_at
+
     def start(self, title: str = "") -> None:
         """Begin streaming display."""
         self._title = title
         self._buffer = []
+        self._reasoning_buffer = []
         self._started_at = time.monotonic()
         renderable = self._render()
         self._live = Live(
@@ -54,39 +62,96 @@ class StreamingResponse:
         self._live.start()
 
     def append(self, chunk: str) -> None:
-        """Add a chunk of text.  Call from any thread."""
+        """Add a content token.  Call from any thread."""
         if not chunk:
             return
         with self._lock:
             self._buffer.append(str(chunk))
-        if self._live:
-            self._live.update(self._render(), refresh=True)
+        self._refresh()
+
+    def append_reasoning(self, chunk: str) -> None:
+        """Add a reasoning token (rendered in a magenta-bordered panel)."""
+        if not chunk:
+            return
+        with self._lock:
+            self._reasoning_buffer.append(str(chunk))
+        self._refresh()
+
+    def update_title(self, title: str) -> None:
+        """Change the panel title mid-stream (e.g. step label update)."""
+        self._title = title
+        self._refresh()
 
     def append_text(self, text: str, style: str = "") -> None:
-        """Add styled text.  For non-streaming use."""
+        """Add styled text to the console — not for streaming, for one-off."""
         self._console.print(text, style=style)
 
-    def finish(self) -> str:
-        """Stop streaming and return the full accumulated text.
+    def finish(self):
+        """Stop streaming and return ``(content, reasoning, elapsed, total_tokens)``.
 
-        Clears the Live area (transient=True).  Does **not** print —
-        the caller decides where the response text appears relative to
-        other console output (step info, reasoning, timing).
+        Clears the Live area.  Does **not** print — the caller controls
+        display ordering.
         """
         if self._live:
             self._live.stop()
             self._live = None
         with self._lock:
-            result = "".join(self._buffer)
-        return result
+            content = "".join(self._buffer)
+            reasoning = "".join(self._reasoning_buffer)
+        total = len(self._buffer) + len(self._reasoning_buffer)
+        return content, reasoning, self.elapsed, total
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _refresh(self) -> None:
+        if self._live:
+            self._live.update(self._render(), refresh=True)
 
     def _render(self):
-        """Build the current renderable (with cursor for streaming)."""
         with self._lock:
-            text = "".join(self._buffer)
-        if not text:
+            content_text = "".join(self._buffer)
+            reasoning_text = "".join(self._reasoning_buffer)
+
+        has_content = bool(content_text)
+        has_reasoning = bool(reasoning_text)
+
+        if not has_content and not has_reasoning:
             return Text("…", style="dim")
-        content = Markdown(text + "█")  # blinking cursor during streaming
-        if self._title:
-            return Panel(content, title=self._title, border_style="blue", title_align="left")
-        return Panel(content, border_style="blue")
+
+        # Title decoration: append token count and rate when measurable.
+        title = self._title
+        total_tokens = len(self._buffer) + len(self._reasoning_buffer)
+        if total_tokens and self._started_at > 0.0 and self.elapsed > 0.0:
+            rate = total_tokens / self.elapsed
+            suffix = f"  {total_tokens} tok @ {rate:.0f} tok/s"
+        else:
+            suffix = ""
+
+        # Content panel (blue border).
+        if has_content:
+            content_md = Markdown(content_text + "█")  # cursor for streaming
+        else:
+            content_md = Text("…", style="dim")
+        content_panel = Panel(
+            content_md,
+            title=f"{title} Response{suffix}" if title else f"Response{suffix}",
+            border_style="blue",
+            title_align="left",
+        )
+
+        # Reasoning panel (magenta border, collapsed when empty).
+        if has_reasoning:
+            reasoning_md = Text(reasoning_text, style="dim")
+            reasoning_panel = Panel(
+                reasoning_md,
+                title="🧠 Thinking",
+                border_style="magenta",
+                title_align="left",
+            )
+            # Stack: reasoning above, response below.
+            from rich.console import Group
+            return Group(reasoning_panel, content_panel)
+
+        return content_panel
