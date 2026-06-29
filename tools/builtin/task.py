@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.llm import HelloAgentsLLM
 from core.message import Message
+from core.runtime.subagent_bridge import SubagentEventBridge
 from core.team_engine.turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
 from ..base import Tool, ToolParameter, ErrorCode
@@ -180,6 +181,9 @@ class SubagentRunner:
         system_prompt: str,
         project_root: Path,
         max_steps: int = 50,
+        event_sink: Any = None,
+        subagent_id: Optional[str] = None,
+        parent_step: int = 0,
     ):
         self.llm = llm
         self.tool_registry = tool_registry
@@ -188,6 +192,11 @@ class SubagentRunner:
         self.max_steps = max_steps
         self.messages: List[Dict[str, str]] = []
         self.tool_usage: Dict[str, int] = {}
+        self.event_bridge = (
+            SubagentEventBridge(event_sink, subagent_id, parent_step)
+            if event_sink is not None and subagent_id
+            else None
+        )
         
     def run(self, task_prompt: str, progress_callback=None) -> Tuple[str, Dict[str, int]]:
         """
@@ -206,6 +215,11 @@ class SubagentRunner:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": task_prompt}
         ]
+        if self.event_bridge:
+            self.event_bridge.emit_started(
+                description="Subagent task",
+                prompt_preview=str(task_prompt)[:200],
+            )
 
         executor = TurnExecutor(
             llm=self.llm,
@@ -217,11 +231,27 @@ class SubagentRunner:
         # Simple ReAct loop
         for step in range(1, self.max_steps + 1):
             try:
-                turn = executor.execute_turn(self.messages, tool_usage=self.tool_usage)
+                def _on_delta(kind: str, text: str, _step: int = step) -> None:
+                    if self.event_bridge:
+                        self.event_bridge.emit_llm_delta(kind, text, subagent_step=_step)
+
+                turn = executor.execute_turn(
+                    self.messages,
+                    tool_usage=self.tool_usage,
+                    on_delta=_on_delta if self.event_bridge else None,
+                    event_bridge=self.event_bridge,
+                    subagent_step=step,
+                )
             except Exception as e:
                 logger.error("Subagent LLM error: %s", e)
                 if progress_callback:
                     progress_callback(step, "error", {"message": str(e)})
+                if self.event_bridge:
+                    self.event_bridge.emit_finished(
+                        ok=False,
+                        result_preview=f"Error: LLM call failed - {str(e)}",
+                        steps=step,
+                    )
                 return f"Error: LLM call failed - {str(e)}", self.tool_usage
 
             self.messages = turn["messages"]
@@ -243,9 +273,20 @@ class SubagentRunner:
                 final_result = turn.get("final_result") or ""
                 if not str(final_result).strip():
                     return "Error: Empty response from subagent", self.tool_usage
+                if self.event_bridge:
+                    self.event_bridge.emit_finished(
+                        ok=True,
+                        result_preview=str(final_result)[:200],
+                        steps=step,
+                    )
                 return str(final_result), self.tool_usage
 
-        # Max steps reached
+        if self.event_bridge:
+            self.event_bridge.emit_finished(
+                ok=False,
+                result_preview="Subagent reached maximum steps without completing.",
+                steps=self.max_steps,
+            )
         return "Subagent reached maximum steps without completing.", self.tool_usage
 
 
@@ -274,6 +315,7 @@ class TaskTool(Tool):
         tool_registry: Optional[ToolRegistry] = None,
         team_manager: Optional[Any] = None,
         background_runner: Optional[Any] = None,
+        event_sink: Optional[Any] = None,
     ):
         if project_root is None:
             raise ValueError("project_root must be provided by the framework")
@@ -294,6 +336,7 @@ class TaskTool(Tool):
         self._tool_registry = tool_registry
         self._team_manager = team_manager
         self._background_runner = background_runner
+        self._event_sink = event_sink
         if _task_config is not None:
             self._subagent_max_steps = _task_config.subagent_max_steps
         else:
@@ -448,7 +491,6 @@ class TaskTool(Tool):
         subagent_tools = self._create_filtered_registry()
 
         if run_in_background and self._background_runner is not None:
-            import uuid
             task_id = f"bg_{uuid.uuid4().hex[:10]}"
 
             def _run_sync(progress_cb=None) -> tuple:
@@ -458,6 +500,9 @@ class TaskTool(Tool):
                     system_prompt=system_prompt,
                     project_root=self._project_root,
                     max_steps=self._subagent_max_steps,
+                    event_sink=self._event_sink,
+                    subagent_id=task_id,
+                    parent_step=0,
                 )
                 return runner.run(prompt, progress_callback=progress_cb)
 
@@ -481,14 +526,18 @@ class TaskTool(Tool):
 
         # Create and run subagent (synchronous)
         try:
+            sync_subagent_id = f"task_{uuid.uuid4().hex[:10]}"
             runner = SubagentRunner(
                 llm=llm,
                 tool_registry=subagent_tools,
                 system_prompt=system_prompt,
                 project_root=self._project_root,
                 max_steps=self._subagent_max_steps,
+                event_sink=self._event_sink,
+                subagent_id=sync_subagent_id,
+                parent_step=0,
             )
-            
+
             result, tool_usage = runner.run(prompt)
             
         except Exception as e:
@@ -515,6 +564,7 @@ class TaskTool(Tool):
             "tool_summary": tool_summary,
             "model_used": model_choice,
             "subagent_type": subagent_type,
+            "subagent_id": sync_subagent_id,
         }
         
         text = f"Subagent ({subagent_type}, {model_choice}) completed.\n\n{result}"

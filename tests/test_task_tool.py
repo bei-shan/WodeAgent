@@ -461,7 +461,7 @@ class TestTaskToolExecution:
         captured = {}
 
         class DummyRunner:
-            def __init__(self, llm, tool_registry, system_prompt, project_root, max_steps):
+            def __init__(self, llm, tool_registry, system_prompt, project_root, max_steps, **kwargs):
                 captured["system_prompt"] = system_prompt
 
             def run(self, task_prompt):

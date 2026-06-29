@@ -36,6 +36,8 @@ class TurnExecutor:
         messages: list[dict[str, Any]],
         tool_usage: Dict[str, int],
         on_delta: Optional[Callable[[str, str], None]] = None,
+        event_bridge: Any = None,
+        subagent_step: Optional[int] = None,
     ) -> Dict[str, Any]:
         raw_response = self._invoke_llm(messages, on_delta=on_delta)
         response_text = extract_content(raw_response) or ""
@@ -83,7 +85,21 @@ class TurnExecutor:
                     ensure_ascii=False,
                 )
             else:
+                if event_bridge is not None:
+                    event_bridge.emit_tool(
+                        phase="started",
+                        name=tool_name,
+                        args=tool_input if isinstance(tool_input, dict) else {},
+                        subagent_step=subagent_step,
+                    )
                 observation = self._execute_tool(tool_name, tool_input, tool_usage)
+                if event_bridge is not None:
+                    event_bridge.emit_tool(
+                        phase="completed",
+                        name=tool_name,
+                        result_preview=str(observation)[:200],
+                        subagent_step=subagent_step,
+                    )
 
             output_messages.append({
                 "role": "tool",

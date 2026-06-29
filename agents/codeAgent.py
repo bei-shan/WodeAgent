@@ -191,6 +191,7 @@ class CodeAgent(Agent):
         bootstrap.provide("skill_loader", self._skill_loader)
         bootstrap.provide("main_llm", self.llm)
         bootstrap.provide("tool_registry", self.tool_registry)
+        bootstrap.provide("event_sink", self.event_sink)
         bootstrap.provide("interactive", self.interactive)
         bootstrap.provide("worktree_manager", self._worktree_manager)
 
