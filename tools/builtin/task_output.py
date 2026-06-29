@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional  # noqa: F811
 
 from core.background_task import BackgroundTaskRunner
 from ..base import ErrorCode, Tool, ToolParameter
@@ -55,6 +55,8 @@ class TaskOutputTool(Tool):
             )
 
         status = self._runner.get_status(task_id)
+        info = self._runner.get_rich_status(task_id)
+
         if status == "not_found":
             return self.create_error_response(
                 error_code=ErrorCode.NOT_FOUND,
@@ -64,15 +66,32 @@ class TaskOutputTool(Tool):
             )
 
         if status == "running":
-            tasks = self._runner.list_all()
-            elapsed = 0.0
-            for t in tasks:
-                if t["task_id"] == task_id:
-                    elapsed = t.get("elapsed", 0)
-                    break
+            elapsed = info.get("elapsed", 0)
+            data: dict[str, Any] = {
+                "task_id": task_id,
+                "status": "running",
+                "elapsed": elapsed,
+                "last_step": info.get("last_step"),
+                "current_tool": info.get("current_tool"),
+            }
+            last = info.get("last_event")
+            if last:
+                data["last_event"] = last
+
+            # Build readable summary for the LLM
+            parts = [f"Task '{task_id}' is running ({elapsed:.0f}s)."]
+            if data.get("last_step"):
+                parts.append(f"At step {data['last_step']}.")
+            if data.get("current_tool"):
+                parts.append(f"Currently using tool: {data['current_tool']}.")
+            if last:
+                content = str(last.get("content", ""))[:200]
+                if content:
+                    parts.append(f"Last output: {content}")
+
             return self.create_success_response(
-                data={"task_id": task_id, "status": "running", "elapsed": elapsed},
-                text=f"Task '{task_id}' is still running ({elapsed:.0f}s).",
+                data=data,
+                text=" ".join(parts),
                 params_input=params_input,
                 time_ms=int((time.monotonic() - start_time) * 1000),
             )

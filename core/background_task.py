@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ class BackgroundTaskRunner:
         self._progress_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: Dict[str, dict] = {}
         self._lock = threading.Lock()
+        # Memory observers: each callback receives (task_id, progress_record).
+        # Registered observers MUST be thread-safe — invoked from daemon threads.
+        self._observers: list[Callable[[str, dict], None]] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,16 +88,31 @@ class BackgroundTaskRunner:
             pass
 
         def _progress_callback(step: int, event_type: str, data: dict) -> None:
-            """Write a progress entry to the JSONL file."""
+            """Write a progress entry to the JSONL file + fanout to observers."""
+            entry = json.dumps(
+                {"step": step, "type": event_type, **data},
+                ensure_ascii=False,
+            )
             try:
-                entry = json.dumps(
-                    {"step": step, "type": event_type, **data},
-                    ensure_ascii=False,
-                )
                 with open(progress_path, "a", encoding="utf-8") as f:
                     f.write(entry + "\n")
             except Exception:
                 pass
+
+            # Update in-memory snapshot for get_status() enrichment.
+            record = {"step": step, "type": event_type, **data}
+            with self._lock:
+                task_record = self._tasks.get(task_id)
+                if task_record is not None:
+                    task_record["last_progress"] = record
+
+            # Fanout to observers (after JSONL write so disk truth is
+            # established first; observer exceptions never break the task).
+            for obs in self._observers:
+                try:
+                    obs(task_id, record)
+                except Exception:
+                    pass
 
         def _run() -> None:
             try:
@@ -136,8 +154,45 @@ class BackgroundTaskRunner:
         except (json.JSONDecodeError, OSError):
             return None
 
+    def get_rich_status(self, task_id: str) -> dict:
+        """Return rich task status dict.
+
+        Returns ``{"status": ..., "elapsed": float}`` for all tasks.
+
+        For running tasks additionally returns ``last_step``, ``current_tool``,
+        and ``last_event`` when progress records have been written.
+
+        Returns ``{"status": "not_found"}`` when unknown.
+        """
+        result = self.get_result(task_id)
+        if result is not None:
+            return {
+                "status": str(result.get("status", "unknown")),
+                "elapsed": (result.get("finished_at", time.time()) -
+                            self._tasks.get(task_id, {}).get("started_at", result.get("finished_at", 0))
+                            if task_id in self._tasks else 0),
+            }
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return {"status": "not_found"}
+            info: dict[str, Any] = {
+                "status": str(task.get("status", "running")),
+                "elapsed": time.time() - task.get("started_at", time.time()),
+            }
+            last = task.get("last_progress")
+            if last is not None:
+                info["last_step"] = last.get("step", 0)
+                info["last_event"] = last
+                if last.get("tool"):
+                    info["current_tool"] = last["tool"]
+            return info
+
     def get_status(self, task_id: str) -> str:
-        """Return the current status: 'running' | 'completed' | 'failed' | 'not_found'."""
+        """Return the current status: 'running' | 'completed' | 'failed' | 'not_found'.
+
+        (backward-compatible string interface; for richer info see get_rich_status.)
+        """
         result = self.get_result(task_id)
         if result is not None:
             return str(result.get("status", "unknown"))
@@ -186,6 +241,26 @@ class BackgroundTaskRunner:
                 desc = str(t.get("description", ""))[:60]
                 lines.append(f"- {tid}: ⏳ running ({elapsed:.0f}s) — {desc}")
         return "\n".join(lines)
+
+    def register_observer(self, callback: Callable[[str, dict], None]) -> None:
+        """Register a memory observer for progress records.
+
+        The callback receives ``(task_id, progress_record)`` for every
+        progress entry written by *any* background task.  Invoked from
+        daemon threads — callbacks must be thread-safe.  Exceptions are
+        silently swallowed (a broken observer must not kill the task).
+        """
+        with self._lock:
+            if callback not in self._observers:
+                self._observers.append(callback)
+
+    def unregister_observer(self, callback: Callable[[str, dict], None]) -> None:
+        """Remove a previously registered observer (idempotent)."""
+        with self._lock:
+            try:
+                self._observers.remove(callback)
+            except ValueError:
+                pass
 
     def clear_completed(self) -> int:
         """Remove completed/failed tasks from memory tracking.  Returns count."""
