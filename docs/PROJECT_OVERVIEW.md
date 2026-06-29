@@ -16,7 +16,7 @@ MyCodeAgent（内部代号 WodeAgent）是一个面向学习与实验的 AI 编�
 
 | 时间 | 里程碑 | 关键产物 |
 | --- | --- | --- |
-| 早期 | ReAct 主循环 + 33 个内置工具 + 通用工具响应协议 | `agents/codeAgent.py`、`tools/builtin/`、`docs/通用工具响应协议.md` |
+| 早期 | ReAct 主循环 + 32 个内置工具 + 通用工具响应协议 | `agents/codeAgent.py`、`tools/builtin/`、`docs/通用工具响应协议.md` |
 | 中期 | 上下文工程引擎（历史树 + L1/L2 系统提示 + 压缩 + Trace） | `core/context_engine/` 八模块、`docs/上下文工程设计文档.md` |
 | 中期 | 工具守护：软沙箱权限门 + 熔断器 + 工具输出截断 | `tools/permission_gate.py`、`tools/circuit_breaker.py`、`core/context_engine/observation_truncator.py` |
 | 中期 | 多供应商 LLM 客户端 + Model Profiles + Pointer 路由 | `core/llm.py`、`core/model_profiles.py` |
@@ -111,15 +111,15 @@ MyCodeAgent（内部代号 WodeAgent）是一个面向学习与实验的 AI 编�
 - **发现机制**：`ToolBootstrap` 用 `pkgutil.iter_modules` 扫描 `tools/builtin/`，`importlib` 导入每个模块，`inspect.getmembers` 找 `Tool` 子类（只接受 `__module__` 与导入模块一致的类，避免 re-export 重复注册）。
 - **依赖注入**：`inspect.signature` 读 `__init__` 参数名，从 providers dict 按名取值（典型 provider：`project_root`、`working_dir`、`code_agent`、`team_manager`、`background_runner`、`skill_loader`、`main_llm`、`interactive`）。
 - **团队工具特殊处理**：`_TEAM_TOOL_MODULES` 是冻结集（15 个 `team_*` 模块 + `send_message`），自动发现时跳过；当 `enable_agent_teams=true` 时由 `register_team_tools()` 显式注册，注入 `team_manager` 依赖。
-- **工具构成（33 个）**
+- **工具构成（32 个）**
   - 文件操作 6：Read / Write / Edit / MultiEdit / LS / Glob
   - 搜索 1：Grep（优先 ripgrep，回退 Python）
   - 系统 4：Bash（含 INTERACTIVE/DESTRUCTIVE/PRIVILEGE/READ_SEARCH 黑名单）/ TodoWrite / AskUser / Skill
   - 子代理 2：Task / TaskOutput
   - Worktree 2：EnterWorktree / ExitWorktree
   - Plan 2：EnterPlanMode / ExitPlanMode
-  - 模型 1：SwitchModel
   - 团队 15：SendMessage + 14 个 `team_*`
+- **模型切换不暴露为工具**：模型切换是用户策略，不在 LLM 工具表里。用户通过 `/model <id>` 触发 `CodeAgent.switch_model()`；框架按角色（MAIN / TASK / COMPACT pointer）在 `core/model_profiles.py` 内部路由。
 - **响应协议**：`ToolRegistry` 把所有返回值规范化为 `{status, data, text, stats, context, error}`，并在 Write/Edit/MultiEdit 上自动注入 `expected_mtime_ms` 与 `expected_size_bytes`（来自 Read 缓存）实现乐观锁。
 - **守护机制**：`PermissionGate`（根内自动放行，根外咨询用户或拒绝；硬编码 `_ALWAYS_DENY_PATTERNS` 永远拒绝系统目录/SSH 私钥/AWS 凭证/.env.production）+ `CircuitBreaker`（每工具 CLOSED/OPEN/HALF_OPEN，失败 3 次熔断 5 分钟，参数错误等 6 类错误码不计入失败）。
 - **MCP**：`tools/mcp/` 六模块（config/client/loader/adapter/protocol/__init__）支持 stdio + streamable-HTTP，三种连接模式 `startup/manual/disabled`，manual 模式后台线程懒连接，pending server 在首次 ReAct 步重试。

@@ -125,8 +125,8 @@ def test_discover_registers_all_builtin_tools():
 
     registered = bootstrap.discover_and_register()
 
-    # All 18 non-team tools should be registered
-    assert len(registered) >= 18
+    # All 17 non-team tools should be registered (SwitchModel removed — user-driven /model command only)
+    assert len(registered) >= 17
     tool_names = set(registry.list_tools())
     assert "Read" in tool_names
     assert "Write" in tool_names
@@ -145,7 +145,7 @@ def test_discover_registers_all_builtin_tools():
     assert "ExitPlanMode" in tool_names
     assert "EnterWorktree" in tool_names
     assert "ExitWorktree" in tool_names
-    assert "SwitchModel" in tool_names
+    assert "SwitchModel" not in tool_names  # removed: model switching is user-driven via /model
 
 
 def test_discover_skips_team_tools():
@@ -219,8 +219,8 @@ def test_discover_then_team_tools_no_duplicates():
     all_tools = set(registry.list_tools())
     # No overlap between non-team and team
     assert len(set(non_team) & set(team)) == 0
-    # Total should be 18 non-team + 15 team = 33
-    assert len(all_tools) == 33
+    # Total should be 17 non-team + 15 team = 32 (SwitchModel removed)
+    assert len(all_tools) == 32
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ def test_real_tool_registration_via_bootstrap():
     non_team = bootstrap.discover_and_register()
     team = register_team_tools(bootstrap)
 
-    assert len(non_team) == 18
+    assert len(non_team) == 17  # SwitchModel removed
     assert len(team) == 15
 
     # All tools are executable (run returns valid JSON)

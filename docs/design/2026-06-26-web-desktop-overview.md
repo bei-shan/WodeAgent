@@ -45,7 +45,7 @@ MyCodeAgent 最早只有一个 TUI 入口（`scripts/chat_test_agent.py`），�
    |   CodeAgent (agents/codeAgent.py)        |
    |   - ReAct 循环                            |
    |   - features/ 11 个能力插件                |
-   |   - tools/builtin/ 33 个工具               |
+   |   - tools/builtin/ 32 个工具               |
    |   - context_engine/ 历史与压缩             |
    |   - team_engine/ 多智能体协作              |
    +------------------------------------------+

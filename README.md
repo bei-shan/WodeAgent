@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)]()
 [![Tests](https://img.shields.io/badge/tests-79%20files%20%7C%20936%20cases-brightgreen.svg)]()
-[![Tools](https://img.shields.io/badge/builtin%20tools-33-orange.svg)]()
+[![Tools](https://img.shields.io/badge/builtin%20tools-32-orange.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)]()
 
 > 一个用来"边写边学"的 AI Code Agent 框架 —— 围绕 ReAct 循环、可组合 Feature、上下文工程、子代理 / 多代理团队、TUI 与 Web 桌面端、可观测 Trace 一并打造的实验场。
@@ -29,7 +29,7 @@ MyCodeAgent 是一个用 Python 实现的 AI Code Agent 框架，目标是把一
 - **LLM 供应商**：OpenAI / DeepSeek / Qwen (DashScope) / Zhipu (GLM) / Kimi (Moonshot) / Modelscope / SiliconFlow / Ollama / vLLM
 - **入口形态**：交互式 TUI（prompt_toolkit + Rich）、Web 桌面端（FastAPI + Vite）
 - **存储**：JSON 快照 + JSONL 会话树 + JSONL Trace
-- **可组合性**：11 个内建 AgentFeature + 插件目录（`.mycode/plugins/`）+ 33 个内建工具 + MCP 外部工具
+- **可组合性**：11 个内建 AgentFeature + 插件目录（`.mycode/plugins/`）+ 32 个内建工具 + MCP 外部工具
 - **测试**：79 个 `test_*.py` 文件，约 936 个测试用例（pytest）
 
 ---
@@ -41,7 +41,7 @@ MyCodeAgent 是一个用 Python 实现的 AI Code Agent 框架，目标是把一
 - 每轮 LLM 调用支持 streaming（`LLM_STREAMING=true` 默认开启），失败时回退到非流式 `invoke_raw`。
 - 内建 `BudgetTracker` / `_total_usage_tokens` 统计 token 用量。
 
-### 工具系统（33 个内建工具）
+### 工具系统（32 个内建工具）
 | 分类 | 数量 | 工具 |
 |---|---|---|
 | 文件操作 | 6 | Read / Write / Edit / MultiEdit / LS / Glob |
@@ -50,8 +50,9 @@ MyCodeAgent 是一个用 Python 实现的 AI Code Agent 框架，目标是把一
 | 子代理 | 2 | Task / TaskOutput |
 | Worktree | 2 | EnterWorktree / ExitWorktree |
 | Plan | 2 | EnterPlanMode / ExitPlanMode |
-| 模型 | 1 | SwitchModel |
 | 团队 | 15 | SendMessage + 14 个 team_* |
+
+> **模型切换不暴露为工具**：模型切换是用户策略而非 LLM 决策，由用户通过 `/model <id>` 斜杠命令触发；框架内部按角色（MAIN / TASK / COMPACT pointer）自动路由。LLM 看不到 SwitchModel 工具。
 
 - `ToolRegistry` 统一生成 OpenAI function-calling schema、归一化 Universal Tool Response、自动注入 `expected_mtime_ms/size_bytes` 做乐观锁。
 - `CircuitBreaker` 按工具维度的 CLOSED / OPEN / HALF_OPEN 熔断，模型层错误（INVALID_PARAM 等）不计失败。
@@ -300,7 +301,7 @@ MyCodeAgent/
 │   └── worktree/                   # WorktreeManager
 ├── tools/
 │   ├── base.py / registry.py / permission_gate.py / circuit_breaker.py
-│   ├── builtin/                    # 33 个内建工具
+│   ├── builtin/                    # 32 个内建工具
 │   └── mcp/                        # adapter / client / config / loader / protocol
 ├── tui/
 │   ├── __init__.py
@@ -316,7 +317,7 @@ MyCodeAgent/
 │   └── ui_components.py            # EnhancedUI (banner/tree/timer)
 ├── prompts/
 │   ├── agents_prompts/             # L1 / 子代理提示
-│   ├── tools_prompts/              # 工具描述（33 个）
+│   ├── tools_prompts/              # 工具描述（32 个）
 │   └── output_styles/              # default / explanatory / learning
 ├── scripts/
 │   ├── __init__.py
