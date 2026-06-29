@@ -733,13 +733,19 @@ def create_app(
             if session is None or session._agent is None:
                 continue
             agent = session._agent
+            registry_tools = list(agent.tool_registry.get_all_tools()) if hasattr(agent, "tool_registry") else []
             for client in getattr(agent, "_mcp_clients", []):
                 name = getattr(client.config, "name", "unknown") if hasattr(client, "config") else "unknown"
                 connected = client.is_connected if hasattr(client, "is_connected") else False
+                # Count tools registered for THIS mcp client (MCPToolAdapter stores its client)
+                tool_count = sum(
+                    1 for t in registry_tools
+                    if getattr(t, "_mcp_client", None) is client
+                )
                 servers.append(McpServerStatus(
                     name=name,
                     connected=connected,
-                    tool_count=0,  # TODO: count registered MCP tools
+                    tool_count=tool_count,
                 ))
 
         # Pending servers from loader.
