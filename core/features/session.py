@@ -35,3 +35,21 @@ class SessionFeature(AgentFeature):
             agent._session_manager.save_session(agent._session_id, snapshot)
         except Exception:
             pass
+
+    def on_model_changed(
+        self, agent: "CodeAgent", old_model: str, new_model: str
+    ) -> None:
+        """Record the model change to the session trace if a trace logger
+        is wired up. Demonstrates the event hook without duplicating
+        history_manager.append_model_change (which CodeAgent already
+        called before dispatching this event)."""
+        trace = getattr(agent, "trace_logger", None)
+        if trace is None:
+            return
+        try:
+            trace.log_event(
+                "model_change",
+                {"old_model": old_model, "new_model": new_model},
+            )
+        except Exception:
+            pass

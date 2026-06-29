@@ -151,3 +151,20 @@ class AgentFeature(ABC):
         The raw LLM response object.
         """
         return fallback()
+
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
+
+    def on_model_changed(
+        self, agent: "CodeAgent", old_model: str, new_model: str
+    ) -> None:
+        """Called after ``agent.switch_model()`` swaps the active model.
+
+        Features can react to model changes — e.g. reset per-model
+        warning thresholds, re-emit style prompts that depend on the
+        model family, or log to a trace.  Default: no-op.
+
+        Errors raised here are swallowed by the dispatcher so one
+        feature's failure doesn't block others.
+        """

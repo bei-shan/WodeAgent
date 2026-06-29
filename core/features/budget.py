@@ -55,3 +55,22 @@ class BudgetFeature(AgentFeature):
             ),
             "error_code": "BUDGET_EXCEEDED",
         }
+
+    def on_model_changed(
+        self, agent: "CodeAgent", old_model: str, new_model: str
+    ) -> None:
+        """Log model change so the user knows budget tracking continues
+        across the swap. Different models may have different per-token
+        pricing, so the remaining-token count translates to a different
+        dollar cost — but we don't reset the budget here (that's a
+        deliberate user decision, exposed via /budget)."""
+        if old_model == new_model:
+            return
+        tracker = getattr(agent, "_budget_tracker", None)
+        if tracker is None or tracker.total is None:
+            return
+        agent.logger.info(
+            "Budget unchanged across model swap %s → %s (%s / %s tokens still tracked; "
+            "note: per-token pricing may differ)",
+            old_model, new_model, tracker.spent, tracker.total,
+        )

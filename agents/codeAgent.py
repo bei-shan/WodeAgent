@@ -403,6 +403,17 @@ class CodeAgent(Agent):
                 model_id=model_name,
             )
 
+        # Dispatch the on_model_changed event to all features. Errors per
+        # feature are swallowed so one reactor's bug doesn't break the switch.
+        for feat in getattr(self, "_features", []):
+            try:
+                feat.on_model_changed(self, previous, model_name)
+            except Exception as exc:  # pragma: no cover - defensive
+                self.logger.warning(
+                    "Feature %s.on_model_changed raised: %s",
+                    getattr(feat, "name", type(feat).__name__), exc,
+                )
+
     # ------------------------------------------------------------------
     # Output Styles
     # ------------------------------------------------------------------
