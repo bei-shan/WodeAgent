@@ -1,6 +1,6 @@
 # MyCodeAgent Roadmap
 
-> **最后更新**：2026-06-29
+> **最后更新**：2026-06-29（晚间 — P1 §1-5 全部清零）
 > **本次重写依据**：基于跨项目对比（Hermes / Pi / Kode）+ 项目完整度审计的综合产物
 > **关联文档**：
 > - 设计反思：[docs/design/2026-06-29-feature-system-reflections.md](../design/2026-06-29-feature-system-reflections.md)
@@ -40,22 +40,24 @@
 | 2026-06-29 | feature 系统反思文档（8 个改进点） | ✅ |
 | 2026-06-29 | TurnExecutor reasoning_content 修复（DeepSeek/Qwen 兼容） | ✅ |
 | 2026-06-29 | README / CLAUDE.md / PROJECT_OVERVIEW 刷新到当前状态 | ✅ |
+| **2026-06-29 P1 §1** | MCP 工具计数从 ToolRegistry 拿（`desktop/service/app.py:742` TODO 清掉）`de3bd03` | ✅ |
+| **2026-06-29 P1 §5** | WorktreeFeature 非 git 目录预检 + 工具自动剔除 + 3 测试 `69803ad` | ✅ |
+| **2026-06-29 P1 §4** | BudgetFeature enforce 模式（opt-in，`BUDGET_ENFORCE=true`）+ `BudgetExceeded` 异常 + 6 测试 `ac9de49` | ✅ |
+| **2026-06-29 P1 §3** | `on_model_changed` lifecycle hook + SessionFeature/BudgetFeature 2 个 reactor + 8 测试 `dc47226` | ✅ |
+| **2026-06-29 P1 §2** | `cleanup()` 协议激活：close() 反向迭代 features；MCPFeature/AgentTeamsFeature.cleanup 新建；idempotent + 10 测试 `13c59b7` | ✅ |
+
+**P1 §1-5 累计**：5 个 commit，~600 行代码，+27 测试（958 → 985），实际耗时约 2.5 小时（vs 估时 2.5 人天，因 scope 清晰）。
 
 ---
 
-## 🔥 P1 立即可做（"小快好省"）
+## 🔥 P1 立即可做（"小快好省"）—— ✅ 全部完成
 
-这些都是 **半天 ~ 1 天** 能完成、scope 清晰、独立可发版的项。打包做完一口气清掉若干技术债。
-
-| # | 项 | 工作量 | 来源 |
-|---|---|---|---|
-| 1 | **`desktop/service/app.py:742` MCP 工具计数 TODO** —— 唯一一处真 TODO 注释，从 ToolRegistry 拿前缀工具数 | 15 分钟 | code |
-| 2 | **`AgentFeature.cleanup()` 协议激活** —— `CodeAgent.close()` 反向迭代 features 调 cleanup；HookFeature/SessionFeature inline teardown 下沉 | 半天 | reflections §4.1 |
-| 3 | **`on_model_changed` 事件 hook** —— `_dispatch_feature_event("model_changed", old, new)` + optional hook + BudgetFeature/OutputStyleFeature 各一个 reactor | 半天 | reflections §3.3 |
-| 4 | **BudgetFeature 真 enforce** —— `runtime_blocks` 或 `pre_tool_use` 加 `is_exceeded()` 短路，新增 `BudgetExceeded` 异常 | 半天 | `core/budget_tracker.py:96-104` |
-| 5 | **WorktreeFeature 非 git 目录预检** —— init 时调 `_ensure_git_available`，失败把 worktree 工具剔出注册表 + warn | 半天 | `core/features/worktree.py:20-30` |
-
-**这 5 项合计 ≤ 2.5 人天，能一口气清掉 4 个 P1 独立点。**
+> 2026-06-29 已 ship，详见上方里程碑表。原 5 项内容备查：
+> 1. MCP 工具计数 TODO（`de3bd03`）
+> 2. `cleanup()` 协议激活（`13c59b7`）
+> 3. `on_model_changed` 事件 hook（`dc47226`）
+> 4. BudgetFeature enforce 模式（`ac9de49`）
+> 5. WorktreeFeature 非 git 预检（`69803ad`）
 
 ---
 
@@ -157,31 +159,38 @@
 
 ---
 
-## 实施建议
+## 实施建议（已调整 — P1 §1-5 已 ship）
 
-### 第 1 周：清"小快好省"（P1 §1-5）
-2.5 人天打包做完上面 5 项小项 → 一口气把 cleanup 协议、on_model_changed、Budget enforce、WorktreeFeature 预检全清。
+### 第 1 周 ✅ —— P1 §1-5 已完成（2026-06-29）
 
-### 第 2 周：tmux 真做 + Phase 3 启动
-- **A. tmux teammate 驱动**（1-2 天）—— 这是唯一一个"画了壳没装核"的显眼项
-- **B. ReAct Phase 3 Step 16-19**（3-4 天，留 Step 20 作收尾）
+### 下一步（推荐 A，按 ROI 排序）
 
-### 第 3 周：Phase 3 收尾 + 选一个 P2 启动
-- **B. Phase 3 Step 20** 废弃旧 save/load
-- 选 P2 #6 `post_tool_use` 改 result（最独立、影响最小）
-- 选 P2 #7+#8 ContextEngineFeature + kind=exclusive（最有架构价值）
+**A. tmux 真做（1-2 天）—— 推荐首选**
+- 项目里唯一"画了壳没装核"的显眼功能
+- scope 清晰：`tmux_orchestrator.py` 加 send-keys/respawn-pane，TeamManager 钩子已就位
+- 体验上立竿见影：`TEAMMATE_MODE=tmux` 真能用了
 
-### 第 4-6 周：P2 主力 + Phase 5
-按 P2 项的依赖关系串行：
-- P2 #9 BackgroundTaskFeature shutdown（独立）
-- P2 #10 Team Engine 拆分 + 加固（关键加固，6-10 天）
-- C. Phase 5 子代理流式（2-3 天）
-- P2 #11 Web 鉴权 + WS 双向化（独立）
+**B. ReAct Phase 3 Step 16-20（3-5 天）**
+- 框架级瘦身，影响所有未来的 feature 改动
+- 难度中等，独立性强
+- 推荐 A 之后做
+
+**C. Phase 5 子代理流式（2-3 天）**
+- BackgroundTaskRunner 进度回调 + TUI 展示
+- 需要在 P1 LLM streaming 完成后做（已完成）
+- 解锁"看子代理在干嘛"的体验
+
+**D. 选一个 P2 启动**（推荐顺序）
+- P2 #6 `post_tool_use` 改 result（最独立，1 天）
+- P2 #7+#8 ContextEngineFeature + plugin kind=exclusive（一起出，2-3 天）
+- P2 #9 BackgroundTaskFeature shutdown（独立，1 天）
+- P2 #11 Web 鉴权 + WS 双向化（独立，2-3 天）
+- P2 #10 Team Engine 拆分（大工程，6-10 天，最后做）
 
 ### 长期（按需）
 - Phase 4 测试补全
-- Anthropic 适配
-- P3 体验项
+- Anthropic 主路径适配
+- P3 体验项（`/team msg <name>`、TUI MCP 状态等）
 - 文档清理：把放弃项的 ❌ 标到原设计文档里
 
 ---
@@ -195,4 +204,4 @@
 
 ---
 
-**TL;DR**：P1 立即可做项（5 个，2.5 天）+ tmux 真做（1-2 天）+ Phase 3（3-5 天）= 第 1-2 周的工作。第 3 周起进入 P2，按依赖串行。
+**TL;DR**：P1 §1-5 全部 ship ✅（2026-06-29）。下一首选 tmux 真做（1-2 天）→ Phase 3 ReAct 瘦身（3-5 天）→ 选一个 P2 启动。
