@@ -81,3 +81,11 @@ class MCPFeature(AgentFeature):
             agent.context_builder.set_mcp_tools_prompt(agent._mcp_tools_prompt)
 
         return blocks
+
+    def cleanup(self, agent: "CodeAgent") -> None:
+        """Close every MCP client that was registered at init."""
+        for client in getattr(agent, "_mcp_clients", []) or []:
+            try:
+                client.close_sync()
+            except Exception as exc:
+                logger.debug("MCP client close failed: %s", exc)

@@ -613,33 +613,48 @@ class CodeAgent(Agent):
         return response_text
 
     def close(self):
-        """关闭 Agent 并写入 trace 总结"""
-        # Final auto-save
-        try:
-            self._auto_save_session()
-        except Exception:
-            pass
+        """Close the Agent: run feature cleanups in reverse-init order,
+        then finalize framework-level state (trace logger).
 
-        # SessionEnd hooks
-        if self._hook_manager.has_any_hooks:
+        Idempotent: calling close() more than once is a no-op after the
+        first invocation. Per-feature exceptions are logged but do not
+        abort the chain — every feature gets its chance to clean up
+        even if an earlier one fails.
+
+        Cleanup flow (LIFO over self._features by order):
+            100 SessionFeature  → save final snapshot
+             90 VCRFeature      → (no-op)
+             85 HookFeature     → run SessionEnd hooks
+             70 BackgroundTask  → (no-op)
+             60 PlanMode        → (no-op)
+             55 Budget          → (no-op)
+             40 DelegateMode    → (no-op)
+             30 AgentTeams      → team_manager.shutdown()
+             25 MCP             → close all mcp clients
+             20 Worktree        → (no-op; ExitWorktree tool handles its own)
+            [framework]         → trace_logger.finalize()
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
+        # Reverse-init iteration so teardown mirrors construction (LIFO).
+        for feat in reversed(getattr(self, "_features", []) or []):
             try:
-                self._hook_manager.run_session_end()
+                feat.cleanup(self)
             except Exception as exc:
-                self.logger.warning("SessionEnd hooks failed: %s", exc)
+                self.logger.warning(
+                    "Feature %s.cleanup failed: %s",
+                    getattr(feat, "name", type(feat).__name__), exc,
+                )
 
-        if self.trace_logger:
-            self.trace_logger.finalize()
+        # Framework-level teardown (not associated with any feature).
+        if getattr(self, "trace_logger", None):
+            try:
+                self.trace_logger.finalize()
+            except Exception as exc:
+                self.logger.warning("Trace finalize failed: %s", exc)
             self.trace_logger = None
-        if self.team_manager:
-            try:
-                self.team_manager.shutdown()
-            except Exception as exc:
-                self.logger.warning("TeamManager shutdown failed: %s", exc)
-        for client in getattr(self, "_mcp_clients", []):
-            try:
-                client.close_sync()
-            except Exception:
-                pass
 
     # =========================================================================
     # ReAct Core（Message List 自然累积模式）

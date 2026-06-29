@@ -65,3 +65,13 @@ class AgentTeamsFeature(AgentFeature):
         return agent._format_runtime_system_blocks(
             events, runtime_state=runtime_state
         )
+
+    def cleanup(self, agent: "CodeAgent") -> None:
+        """Shut down the team manager if one was created at init."""
+        manager = getattr(agent, "team_manager", None)
+        if manager is None:
+            return
+        try:
+            manager.shutdown()
+        except Exception as exc:
+            agent.logger.warning("TeamManager shutdown failed: %s", exc)
