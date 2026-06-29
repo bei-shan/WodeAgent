@@ -48,6 +48,10 @@
 
 **P1 §1-5 累计**：5 个 commit，~600 行代码，+27 测试（958 → 985），实际耗时约 2.5 小时（vs 估时 2.5 人天，因 scope 清晰）。
 
+| **2026-06-29 Phase 5** | 子代理流式（Step 25-28：事件契约 + TurnExecutor 流式 + sync Task 事件总线 + 后台 observer + TaskOutput 中间态 + Web/TUI 渲染）4 个 commit `8e39b60`, `fbbb381`, `f946e9a`, now | ✅ |
+
+**Phase 5 统计**：4 个 commit，~700 行代码，+24 测试（985 → 1009），约 3 小时。`docs/design/2026-06-29-subagent-streaming-design.md`。
+
 ---
 
 ## 🔥 P1 立即可做（"小快好省"）—— ✅ 全部完成
@@ -83,11 +87,14 @@
 | 19 | 添加工具耗时统计 | 小 |
 | 20 | 废弃旧 `/save` `/load` API | 小 |
 
-### C. 架构重构 Phase 5 —— 子代理流式（2-3 天）
+### C. 架构重构 Phase 5 —— 子代理流式 ✅ 已完成
 
-| Step | 内容 |
-|---|---|
-| 25-28 | BackgroundTaskRunner 进度回调 + TUI 展示 |
+> 2026-06-29 已 ship（Steps 25-28，4 commits，24 new tests）。设计文档：
+> `docs/design/2026-06-29-subagent-streaming-design.md`。
+> 子代理（同步 Task ± 后台 Task）的 LLM token、工具调用现在通过事件总线实时回流。
+> WebSocket 白名单已放行 4 个 subagent 事件类型；TUI `tui/subagent_renderer.py` 新增。
+> 主 Agent 通过 `TaskOutput(task_id)` 可查询运行中子代理的 `last_step / current_tool / last_event`。
+> 详情：`docs/design/2026-06-29-subagent-streaming-design.md §7 验收标准`。
 
 ### D. TUI streaming.py 真正激活（1 天）
 
@@ -159,9 +166,9 @@
 
 ---
 
-## 实施建议（已调整 — P1 §1-5 已 ship）
+## 实施建议（已调整 — P1 §1-5 和 Phase 5 全部 ship）
 
-### 第 1 周 ✅ —— P1 §1-5 已完成（2026-06-29）
+### 第 1 批 ✅ —— P1 §1-5 + Phase 5 已完成（2026-06-29）
 
 ### 下一步（推荐 A，按 ROI 排序）
 
@@ -204,4 +211,4 @@
 
 ---
 
-**TL;DR**：P1 §1-5 全部 ship ✅（2026-06-29）。下一首选 tmux 真做（1-2 天）→ Phase 3 ReAct 瘦身（3-5 天）→ 选一个 P2 启动。
+**TL;DR**：P1 §1-5 + Phase 5 全部 ship ✅（2026-06-29）。下一首选 tmux 真做（1-2 天）→ Phase 3 ReAct 瘦身（3-5 天）→ 选一个 P2 启动。
