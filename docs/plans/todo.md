@@ -48,9 +48,13 @@
 
 **P1 §1-5 累计**：5 个 commit，~600 行代码，+27 测试（958 → 985），实际耗时约 2.5 小时（vs 估时 2.5 人天，因 scope 清晰）。
 
-| **2026-06-29 Phase 5** | 子代理流式（Step 25-28：事件契约 + TurnExecutor 流式 + sync Task 事件总线 + 后台 observer + TaskOutput 中间态 + Web/TUI 渲染）4 个 commit `8e39b60`, `fbbb381`, `f946e9a`, now | ✅ |
+| **2026-06-29 Phase 5** | 子代理流式（Step 25-28）4 个 commit `8e39b60`, `fbbb381`, `f946e9a`, `175b701` | ✅ |
 
 **Phase 5 统计**：4 个 commit，~700 行代码，+24 测试（985 → 1009），约 3 小时。`docs/design/2026-06-29-subagent-streaming-design.md`。
+
+| **2026-06-29 P1-D** | TUI streaming.py 活性化（推理面板 / token rate / 步标签 / 7 测试）`00e11e7` | ✅ |
+
+**P1-D 统计**：1 个 commit，~200 行代码，+7 测试（1009 → 1016）。`docs/design/2026-06-29-tui-streaming-activation.md`。
 
 ---
 
@@ -96,11 +100,13 @@
 > 主 Agent 通过 `TaskOutput(task_id)` 可查询运行中子代理的 `last_step / current_tool / last_event`。
 > 详情：`docs/design/2026-06-29-subagent-streaming-design.md §7 验收标准`。
 
-### D. TUI streaming.py 真正激活（1 天）
+### D. TUI streaming.py 真正激活 ✅ 已完成
 
-**现状**：P1 LLM streaming 主链路完成，但 TUI `streaming.py` 仍是骨架，reasoning delta 在 `scripts/chat_test_agent.py:681` 被显式 drop。
-
-**完成态**：reasoning block 单独渲染、token 速率显示、step 标识。
+> 2026-06-29 已 ship（`00e11e7`，+7 测试）。设计文档：
+> `docs/design/2026-06-29-tui-streaming-activation.md`。
+> `StreamingResponse` 现在提供推理面板（`append_reasoning`）、动态步标签（`update_title`）、
+> token 速率显示、`finish()` 返回 `(content, reasoning, elapsed, tokens)` 四元组。
+> `chat_test_agent.py` 的 `_stream_callback` 已接入 reasoning 分流。
 
 ### E. 审计 P1 项剩余（每项 0.5-1 天）
 
@@ -211,4 +217,4 @@
 
 ---
 
-**TL;DR**：P1 §1-5 + Phase 5 全部 ship ✅（2026-06-29）。下一首选 tmux 真做（1-2 天）→ Phase 3 ReAct 瘦身（3-5 天）→ 选一个 P2 启动。
+**TL;DR**：P1 §1-5 + Phase 5 + P1-D 全部 ship ✅（2026-06-29）。下一首选 tmux 真做（1-2 天）→ Phase 3 ReAct 瘦身（3-5 天）→ 选一个 P2 启动。
