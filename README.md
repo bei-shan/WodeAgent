@@ -1,7 +1,7 @@
 # MyCodeAgent (WodeAgent)
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)]()
-[![Tests](https://img.shields.io/badge/tests-79%20files%20%7C%20936%20cases-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-82%20files%20%7C%201009%20cases-brightgreen.svg)]()
 [![Tools](https://img.shields.io/badge/builtin%20tools-32-orange.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)]()
 
@@ -18,6 +18,8 @@
 - **会话树 (v2)**：JSONL 树形存储 + `/tree` / `/fork` / `/thinking` 等命令，支持回溯、分叉、思考等级追踪。
 - **Team Engine 生产硬化**：TeamManager 单一所有权、worktree 重绑、MessageRouter / ApprovalService 文件级持久化、Worker LLM 重试 + 心跳 sweep。
 - **LLM Streaming**：`HelloAgentsLLM.stream_raw()` 接入主 ReAct 循环，TUI Rich Live + Web WebSocket 实时渲染。
+- **子代理流式**：同步 / 后台 `Task` 子代理的 LLM token 与工具调用通过事件总线实时回流到 UI，`TaskOutput` 可查询运行中子代理的当前状态（step / tool / event）。
+- **Feature 系统完善**：`cleanup()` 协议激活（LIFO teardown）、`on_model_changed` 事件 hook（模型切换通知 feature 层）、BudgetFeature enforce 模式（opt-in 超额阻断）、WorktreeFeature 非 git 目录自动降级。
 
 ---
 
@@ -30,7 +32,7 @@ MyCodeAgent 是一个用 Python 实现的 AI Code Agent 框架，目标是把一
 - **入口形态**：交互式 TUI（prompt_toolkit + Rich）、Web 桌面端（FastAPI + Vite）
 - **存储**：JSON 快照 + JSONL 会话树 + JSONL Trace
 - **可组合性**：11 个内建 AgentFeature + 插件目录（`.mycode/plugins/`）+ 32 个内建工具 + MCP 外部工具
-- **测试**：79 个 `test_*.py` 文件，约 936 个测试用例（pytest）
+- **测试**：87 个 `test_*.py` 文件，约 1009 个测试用例（pytest）
 
 ---
 
@@ -61,13 +63,13 @@ MyCodeAgent 是一个用 Python 实现的 AI Code Agent 框架，目标是把一
 ### Web 桌面端 (`desktop/`)
 - `desktop/service/app.py` 暴露 **40 个 REST 端点 + 1 个 WebSocket**，分组：Health / Sessions / Messages / Permissions & AskUser / Session Config / Agent Teams / Files / Models & Tools / Skills / MCP Servers / Hooks。
 - `desktop/web/` 是 Vite + TypeScript + Tailwind 前端工程，构建产物供桌面端加载。
-- WebSocket `/api/sessions/{sid}/stream` 转发 12 种事件（8 个 core + 4 个 session 层），payload 经 `_sanitize_payload` 脱敏与截断。
+- WebSocket `/api/sessions/{sid}/stream` 转发 16 种事件（8 个 core + 4 个 session + 4 个子代理流式），payload 经 `_sanitize_payload` 脱敏与截断。
 
 ### 运行时与事件系统 (`core/runtime/`)
 - `SessionController` 用纯标准库（`queue` / `threading` / `uuid`）管理 `dict[str, AgentSession]`，提供 `create_session / get_session / delete_session / list_sessions`。
 - `AgentSession` 在独立守护线程上跑 `agent.run()`，共享 `queue.Queue[AgentEvent]`。
 - `_SessionPermissionBroker`（120 s 超时）与 `_SessionAskUserFunc`（300 s 超时）把权限 / AskUser 通过事件 + `threading.Event` 桥接到 UI 线程。
-- `core/events.py` 定义 11 种事件：`run.started / run.finished / step.started / llm.started / llm.completed / tool.started / tool.completed / assistant.final / permission.requested / ask_user.requested / turn.completed`（+ `error`）。
+- `core/events.py` 定义 15 种事件：`run.started / run.finished / step.started / llm.started / llm.completed / tool.started / tool.completed / assistant.final / permission.requested / ask_user.requested / turn.completed / subagent.started / subagent.delta / subagent.tool_use / subagent.finished`（+ `error`）。
 
 ### Agent 特性框架 (`core/features/`)
 | 顺序 | Feature | 作用 |
@@ -477,8 +479,8 @@ pytest tests/test_llm_streaming.py \
        tests/test_llm_provider_resolution.py -q
 ```
 
-- 测试文件：79 个 `test_*.py`
-- 测试用例：~936 个（其中 `test_write_tool` 48、`test_todo_write_tool` 47、`test_read_tool` 45、`test_multi_edit_tool` 43、`test_edit_tool` 40）
+- 测试文件：87 个 `test_*.py`
+- 测试用例：~1009 个（其中 `test_write_tool` 48、`test_todo_write_tool` 47、`test_read_tool` 45、`test_multi_edit_tool` 43、`test_edit_tool` 40）
 - 共享 fixture：`tests/conftest.py`（`temp_project / ls_tool / glob_tool / grep_tool`）
 
 ---
@@ -487,11 +489,14 @@ pytest tests/test_llm_streaming.py \
 
 - `docs/PROJECT_OVERVIEW.md` —— 四层架构总览（CodeAgent → SessionController → EventSink → UI 适配器）
 - `docs/IMPLEMENTATION_SUMMARY.md` —— 实现要点与改造里程碑
-- `docs/design/2026-06-26-llm-streaming-design.md` —— LLM Streaming 设计（P1 已入主循环）
+- `docs/design/2026-06-26-llm-streaming-design.md` —— LLM Streaming 设计（P1 主循环 + Phase 5 子代理流式均已接入）
 - `docs/design/2026-06-26-team-engine-production-hardening.md` —— TeamManager 单一所有权、持久化、Worker 重试硬化
+- `docs/design/2026-06-29-subagent-streaming-design.md` —— Phase 5 子代理流式设计（4 Steps，+24 测试）
+- `docs/design/2026-06-29-feature-system-reflections.md` —— Feature 系统反思（Hermes/Pi/Kode 对比 + 8 改进点）
+- `docs/design/2026-06-29-tui-streaming-activation.md` —— P1-D TUI streaming.py 活性化设计
 - `docs/agent_teams/` —— AgentTeams 完整功能 / 协议 / 加速验收文档
 - `docs/design/` —— 全部历史设计文档（按日期命名）
-- `docs/plans/` / `docs/archive/` —— 计划与历史归档
+- `docs/plans/todo.md` —— 完整路线图与实施计划
 - `CLAUDE.md` —— Agent / 维护者协作指引（命令、风格、commit 规范）
 
 ---
