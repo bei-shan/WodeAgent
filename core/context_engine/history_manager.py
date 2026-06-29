@@ -665,8 +665,12 @@ class HistoryManager:
                                 name = call.get("name") or "unknown_tool"
                                 call_id = call.get("id")
                                 arguments = call.get("arguments") or {}
+                                # byte-stable serialization: sort_keys + no whitespace
+                                # so identical tool calls produce identical bytes — friendly to
+                                # Anthropic prefix cache / OpenAI prompt_cache_key when we add them.
                                 args_str = (arguments if isinstance(arguments, str)
-                                            else json.dumps(arguments, ensure_ascii=False))
+                                            else json.dumps(arguments, ensure_ascii=False,
+                                                            sort_keys=True, separators=(",", ":")))
                                 am["tool_calls"].append({
                                     "id": call_id, "type": "function",
                                     "function": {"name": name, "arguments": args_str},
@@ -682,7 +686,8 @@ class HistoryManager:
                                 am["tool_calls"] = [{
                                     "id": tool_call_id, "type": "function",
                                     "function": {"name": tool_name,
-                                                 "arguments": json.dumps(tool_args or {}, ensure_ascii=False)},
+                                                 "arguments": json.dumps(tool_args or {}, ensure_ascii=False,
+                                                                          sort_keys=True, separators=(",", ":"))},
                                 }]
                             except Exception as exc:
                                 logger.warning("Failed to build tool_calls: %s", exc)
@@ -695,7 +700,16 @@ class HistoryManager:
                 else:
                     messages.append({"role": "user", "content": f"Observation ({tool_name}): {msg.content}"})
             elif msg.role == "summary":
-                messages.append({"role": "system", "content": f"## Archived History Summary\n{msg.content}"})
+                # Pi-style: wrap compaction summary as a user message with explicit
+                # XML delimiters so the model treats it as reference background, not
+                # an active instruction. Keeps the system prefix byte-stable, which
+                # matters for prompt-cache friendliness.
+                wrapped = (
+                    "The conversation history before this point was compacted into "
+                    "the following summary:\n\n"
+                    f"<summary>\n{msg.content}\n</summary>"
+                )
+                messages.append({"role": "user", "content": wrapped})
         return messages
 
     def get_rounds_count(self) -> int:

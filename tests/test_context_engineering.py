@@ -297,8 +297,8 @@ class TestLongHorizonCompression:
 
         summary_serialized = [
             m for m in serialized
-            if m.get("role") == "system"
-            and "Archived History Summary" in m.get("content", "")
+            if m.get("role") == "user"
+            and "<summary>" in m.get("content", "")
         ]
         assert summary_serialized
 
