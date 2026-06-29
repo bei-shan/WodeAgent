@@ -695,26 +695,21 @@ def main() -> None:
                     response = agent.run(user_input, show_raw=args.show_raw)
                 finally:
                     agent.llm_stream_callback = previous_callback
-                    streamed_response, streamed_reasoning, _elapsed, _tokens = stream.finish()
+                    streamed_response, _streamed_reasoning, _elapsed, _tokens = stream.finish()
                     agent._streaming_mode = False
 
                 # ── Display order (after Live is done) ──
 
                 # 1. Console messages that happened during the agent run
-                #    (step markers, tool info — BEFORE the response).
+                #    (step markers, reasoning — BEFORE the response).
+                #    Note: reasoning is already shown during streaming via
+                #    append_reasoning(); _console() captures it too, so
+                #    flush_console_buffer replays it once as a post-stream
+                #    recap in the old panel style. This is intentional — the
+                #    streaming Live is transient and clears on finish().
                 agent.flush_console_buffer()
 
-                # 2. Reasoning content (if any was captured during streaming).
-                if streamed_reasoning.strip():
-                    console.print(
-                        Panel(
-                            Text(streamed_reasoning, style="dim"),
-                            title="🧠 Thinking", border_style="magenta",
-                            title_align="left",
-                        )
-                    )
-
-                # 3. The Agent response itself.
+                # 2. The Agent response itself.
                 if streamed_response:
                     _print_assistant_response(streamed_response)
                 elif response:
