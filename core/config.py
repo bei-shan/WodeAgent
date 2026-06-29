@@ -98,6 +98,13 @@ class Config(BaseModel):
     skills_refresh_on_call: bool = True
     skills_prompt_char_budget: int = 12000
 
+    # ===== Budget =====
+    # When True, BudgetFeature.pre_tool_use blocks tool calls once
+    # is_exceeded() returns True. Default False — existing behavior is
+    # "track only", flipping enforcement on without warning would break
+    # users who set generous budgets just for visibility.
+    budget_enforce: bool = False
+
     # ===== Background Task =====
     bg_task_output_dir: str = ".tasks/output"
 
@@ -185,6 +192,8 @@ class Config(BaseModel):
             # Skills
             skills_refresh_on_call=env_bool("SKILLS_REFRESH_ON_CALL", True),
             skills_prompt_char_budget=env_int("SKILLS_PROMPT_CHAR_BUDGET", 12000),
+            # Budget
+            budget_enforce=env_bool("BUDGET_ENFORCE", False),
             # Background Task
             bg_task_output_dir=env_str("BG_TASK_OUTPUT_DIR", ".tasks/output"),
             # Team Advanced
