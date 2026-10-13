@@ -240,7 +240,12 @@ class AgentSession:
             status = getattr(self._agent, "last_turn_status", "completed")
             if status not in {"completed", "failed", "cancelled"}:
                 status = "completed"
-            outcome = TurnOutcome(TurnStatus(status), response=response)
+            outcome = TurnOutcome(
+                TurnStatus(status),
+                response=response,
+                error_kind=getattr(self._agent, "last_turn_error_kind", None)
+                if status == "failed" else None,
+            )
         except Exception as exc:
             logger.exception("Agent turn failed in session %s", self.session_id[:8])
             outcome = failure_outcome(exc)
