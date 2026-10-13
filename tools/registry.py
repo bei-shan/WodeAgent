@@ -13,6 +13,7 @@ from .base import Tool, ToolStatus, ErrorCode, ToolParameter
 from .circuit_breaker import CircuitBreaker
 from core.env import load_env
 from core.runtime.config_scope import active_config
+from core.runtime.tool_contracts import validate_tool_input
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -309,6 +310,27 @@ class ToolRegistry:
                 "context": {"cwd": ".", "params_input": parameters},
             }
             return json.dumps(payload, ensure_ascii=False, indent=2)
+
+        # Validate the *final* parameters immediately before dispatch.
+        # Hooks have already rewritten inputs in ToolRuntime; optimistic-lock
+        # metadata has already been injected. Neither may bypass this gate.
+        # Sandbox allowlist and open circuits are checked above, first.
+        tool = self._tools.get(name)
+        if tool is not None and getattr(tool, "strict_input_contract", False):
+            try:
+                validation_error = validate_tool_input(parameters, tool.get_parameters())
+            except Exception:
+                logger.exception("Invalid schema for tool %s", name)
+                validation_error = "Tool parameter schema is unavailable."
+            if validation_error:
+                return json.dumps({
+                    "status": ToolStatus.ERROR.value,
+                    "data": {},
+                    "text": validation_error,
+                    "error": {"code": ErrorCode.INVALID_PARAM.value, "message": validation_error},
+                    "stats": {"time_ms": 0},
+                    "context": {"cwd": ".", "params_input": parameters},
+                }, ensure_ascii=False)
 
         # 优先查找Tool对象
         if name in self._tools:
