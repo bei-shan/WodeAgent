@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -90,10 +92,7 @@ class TaskBoardStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_meta(self, team_name: str, payload: Dict[str, Any]) -> None:
-        self._meta_path(team_name).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._atomic_write_json(self._meta_path(team_name), payload)
 
     def _iter_task_paths(self, team_name: str) -> List[Path]:
         team_dir = self._team_dir(team_name)
@@ -107,8 +106,36 @@ class TaskBoardStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     @staticmethod
+    def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+        """Publish complete JSON atomically for lock-free readers.
+
+        The board lock protects competing writers. Readers intentionally do
+        not take that lock; os.replace ensures they see complete old or new
+        data, never a truncated file.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.stem}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temp_path = handle.name
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
     def _write_task(path: Path, task: Dict[str, Any]) -> None:
-        path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
+        TaskBoardStore._atomic_write_json(path, task)
 
     def create_task(
         self,
