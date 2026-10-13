@@ -714,77 +714,10 @@ class CodeAgent(Agent):
     # ReAct 循环（拆分为 3 个子方法以提高可读性和可测试性）
     # ------------------------------------------------------------------
 
-    def _react_loop(
-        self,
-        pending_input: str,
-        show_raw: bool,
-        trace_logger,
-    ) -> str:
-        """ReAct 循环入口。每步：准备 → LLM → 工具执行 → 下一轮。"""
-        tool_choice = "auto"
-
-        for step in range(1, self.max_steps + 1):
-            if self._interrupt_requested.is_set():
-                return "已停止生成（用户中断）"
-            # Auto-retry pending MCP servers each step so tools appear
-            # MCP retry handled by MCPFeature.runtime_blocks()
-
-            self.event_sink.emit(AgentEvent(EventType.STEP_STARTED, {
-                "step": step,
-                "max_steps": self.max_steps,
-            }, step=step))
-
-            tools_schema = self._get_openai_tools_for_current_mode()
-            self._collect_runtime_blocks(step)
-
-            if self.console_verbose:
-                self._console(f"\n--- Step {step}/{self.max_steps} ---")
-            elif self.console_progress:
-                self._console(f"… Step {step}/{self.max_steps}")
-            elif self.logger.isEnabledFor(logging.DEBUG):
-                self.logger.debug("Step %d/%d", step, self.max_steps)
-
-            self._maybe_compress_history(pending_input, trace_logger, step)
-
-            messages, base_messages = self._build_step_messages(trace_logger, step)
-
-            result = self._invoke_llm_with_retry(
-                messages, base_messages, tools_schema, tool_choice,
-                show_raw, trace_logger, step,
-            )
-            if self._interrupt_requested.is_set():
-                return "已停止生成（用户中断）"
-            if result is None:
-                break
-
-            tool_calls = result["tool_calls"]
-            response_text = result["response_text"]
-            reasoning_content = result["reasoning_content"]
-
-            if not tool_calls and (not response_text or not str(response_text).strip()):
-                break
-
-            if tool_calls:
-                self._execute_step_tools(tool_calls, response_text, reasoning_content, trace_logger, step)
-                continue
-
-            # 无工具调用：视为最终回答
-            final_text = str(response_text).strip()
-            self.event_sink.emit(AgentEvent(EventType.ASSISTANT_FINAL, {
-                "content": final_text,
-                "step": step,
-            }, step=step))
-            self.history_manager.append_assistant(
-                content=final_text,
-                metadata={"step": step, "action_type": "final"},
-                reasoning_content=reasoning_content,
-            )
-            self._log_message_write(trace_logger, "assistant", final_text, {"action_type": "final"}, step)
-            trace_logger.log_event("finish", {"final": final_text}, step=step)
-            return final_text
-
-        self._run_limit_hit = True
-        return "抱歉，我无法在限定步数内完成这个任务。"
+    def _react_loop(self, pending_input: str, show_raw: bool, trace_logger) -> str:
+        """Compatibility adapter for the extracted AgentLoop orchestrator."""
+        from core.runtime.agent_loop import AgentLoop
+        return AgentLoop(self).run(pending_input, show_raw, trace_logger)
 
     # ------------------------------------------------------------------
     # ReAct 子方法
