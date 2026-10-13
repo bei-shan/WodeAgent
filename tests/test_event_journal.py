@@ -145,3 +145,22 @@ def test_reconnecting_with_stale_future_cursor_after_restart(tmp_path, monkeypat
             session.events.put(event("step.started"))
             next_frame = ws.receive_json()
             assert next_frame["seq"] == 1
+
+def test_fresh_browser_replays_in_flight_turn(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    with TestClient(app) as client:
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        session = app.state.controller.get_session(sid)
+        session.events.put(event("turn.completed"))
+        session.events.put(event("run.started"))
+        session.events.put(AgentEvent("llm.delta", {"kind": "content", "text": "partial"}, step=1))
+        session._busy = True
+        try:
+            with client.websocket_connect(f"/api/sessions/{sid}/stream") as ws:
+                one = ws.receive_json()
+                two = ws.receive_json()
+                assert [one["type"], two["type"]] == ["run.started", "llm.delta"]
+                assert [one["seq"], two["seq"]] == [2, 3]
+        finally:
+            session._busy = False
