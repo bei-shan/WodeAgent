@@ -1103,7 +1103,7 @@ export default function App() {
                     <label className="toggle"><input type="checkbox" disabled title="功能暂未接入" /><span className="slider" /></label>
                   </label>
                 </div>
-                <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                <button onClick={sendMessage} disabled={sending || !input.trim()}
                   className="w-8 h-8 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
                   <Svg d={Icons.send} size={15} />
                 </button>
