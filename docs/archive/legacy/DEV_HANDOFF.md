@@ -1,5 +1,8 @@
 # 项目现状与交接说明
 
+> **历史资料（2026-10-13 归档）**：此文档记录旧阶段方案或状态，不代表 Ridge Code 的当前行为；请以 [当前架构](../../ARCHITECTURE.md)、源代码和测试为准。
+
+
 ## 项目概况（当前结构）
 - `core/`：基础能力（`Agent` 抽象基类、`HelloAgentsLLM`、`Message`、`Config`、异常体系）。
 - `agents/`：Agent 实现（`CodeAgent`）。

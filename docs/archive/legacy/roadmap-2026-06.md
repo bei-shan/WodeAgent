@@ -3,11 +3,11 @@
 > **最后更新**：2026-06-29（晚间 — P1 §1-5 全部清零）
 > **本次重写依据**：基于跨项目对比（Hermes / Pi / Kode）+ 项目完整度审计的综合产物
 > **关联文档**：
-> - 设计反思：[docs/design/2026-06-29-feature-system-reflections.md](../design/2026-06-29-feature-system-reflections.md)
-> - Team Engine 硬化路线：[docs/design/2026-06-26-team-engine-production-hardening.md](../design/2026-06-26-team-engine-production-hardening.md)
-> - LLM Streaming 设计：[docs/design/2026-06-26-llm-streaming-design.md](../design/2026-06-26-llm-streaming-design.md)
-> - Web/桌面端总览：[docs/design/2026-06-26-web-desktop-overview.md](../design/2026-06-26-web-desktop-overview.md)
-> - AgentTeams 设计：[docs/agent_teams/AgentTeams功能设计文档.md](../agent_teams/AgentTeams功能设计文档.md)
+> - 设计反思：[docs/design/2026-06-29-feature-system-reflections.md](../../design/2026-06-29-feature-system-reflections.md)
+> - Team Engine 硬化路线：[docs/design/2026-06-26-team-engine-production-hardening.md](../../design/2026-06-26-team-engine-production-hardening.md)
+> - LLM Streaming 设计：[docs/design/2026-06-26-llm-streaming-design.md](../../design/2026-06-26-llm-streaming-design.md)
+> - Web/桌面端总览：[docs/design/2026-06-26-web-desktop-overview.md](../../design/2026-06-26-web-desktop-overview.md)
+> - AgentTeams 设计：[docs/agent_teams/AgentTeams功能设计文档.md](../../agent_teams/AgentTeams功能设计文档.md)
 
 ---
 
