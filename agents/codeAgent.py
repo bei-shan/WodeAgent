@@ -758,35 +758,20 @@ class CodeAgent(Agent):
                 "step": step,
             }, step=step))
 
-            # Build intercept chain (features wrap the real LLM call).
-            def _real_call():
-                use_streaming = bool(getattr(self.config, "llm_streaming", True)) and hasattr(self.llm, "stream_raw")
-                if not use_streaming:
-                    return self.llm.invoke_raw(
-                        messages, tools=tools_schema, tool_choice=tool_choice
-                    )
+            from core.runtime.model_gateway import ModelGateway
 
-                def _on_delta(event_type: str, text: str) -> None:
-                    callback = getattr(self, "llm_stream_callback", None)
-                    if callback:
-                        callback(event_type, text, step)
+            def _on_delta(kind: str, text: str) -> None:
+                callback = getattr(self, "llm_stream_callback", None)
+                if callback:
+                    callback(kind, text, step)
 
-                # Provider errors must propagate to the Turn state machine.
-                # Silent stream->nonstream fallback can replay partially
-                # emitted tokens and diverge tool calls.
-                return self.llm.stream_raw(
-                    messages,
-                    tools=tools_schema,
-                    tool_choice=tool_choice,
-                    on_delta=_on_delta,
-                )
-            intercept = _real_call
-            for feat in reversed(self._features):
-                prev = intercept
-                intercept = lambda f=feat, p=prev: f.llm_intercept(
-                    self, messages, tools_schema, tool_choice, p
-                )
-            raw_response = intercept()
+            raw_response = ModelGateway(
+                self.llm, streaming=bool(getattr(self.config, "llm_streaming", True)),
+            ).invoke(
+                messages=messages, tools_schema=tools_schema,
+                tool_choice=tool_choice, features=self._features,
+                agent=self, on_delta=_on_delta,
+            )
             if show_raw:
                 self.last_response_raw = (
                     raw_response.model_dump()
