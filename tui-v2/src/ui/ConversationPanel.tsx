@@ -4,7 +4,7 @@ import type { SessionView } from "../state/reducer"
 /** Pure presentation: this module cannot send HTTP requests or execute tools. */
 export function ConversationPanel(props: { view: SessionView }) {
   return (
-    <>
+    <box flexDirection="column" flexGrow={1} minHeight={0} width="100%">
       <scrollbox flexGrow={1} minHeight={0} width="100%" paddingLeft={1}>
         <For each={props.view.messages.slice(-80)}>
           {(message) => (
@@ -24,12 +24,12 @@ export function ConversationPanel(props: { view: SessionView }) {
           )}
         </For>
       </scrollbox>
-      <Show when={props.view.subagent}>
+      <Show when={props.view.subagent || undefined}>
         <box height={1}><text fg="#c09ef0">{props.view.subagent}</text></box>
       </Show>
-      <Show when={props.view.notice}>
+      <Show when={props.view.notice || undefined}>
         <box height={1}><text fg="#f3bb6e">{props.view.notice}</text></box>
       </Show>
-    </>
+    </box>
   )
 }
