@@ -67,7 +67,7 @@ def validate_archive(payload: Any) -> dict:
             not isinstance(parent, str) or not _ID.fullmatch(parent) or parent not in seen
         ):
             _invalid(f"unknown or forward parent at index {index}")
-        if role not in _ROLES or not isinstance(role, str):
+        if not isinstance(role, str) or role not in _ROLES:
             _invalid(f"unsupported message role at index {index}")
         if not isinstance(content, str) or len(content) > MAX_CONTENT_CHARS:
             _invalid(f"message content exceeds limit at index {index}")
