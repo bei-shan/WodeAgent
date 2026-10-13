@@ -40,6 +40,13 @@ class Config(BaseModel):
     agent_interactive: bool = True
     max_steps: int = 50  # ReAct loop max steps
 
+    # ===== Sandboxed Tool Execution (explicit opt-in) =====
+    sandbox_mode: str = "local_trusted"  # "local_trusted" or "docker"
+    sandbox_docker_image: str = "python:3.12-alpine"
+    sandbox_memory: str = "512m"
+    sandbox_cpus: float = 1.0
+    sandbox_pids_limit: int = 64
+
     # ===== AgentTeams =====
     enable_agent_teams: bool = False
     agent_teams_store_dir: str = ".teams"
@@ -150,6 +157,11 @@ class Config(BaseModel):
             # Agent
             agent_interactive=env_bool("AGENT_INTERACTIVE", True),
             max_steps=env_int("MAX_STEPS", 50),
+            sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
+            sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
+            sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
+            sandbox_cpus=env_float("AGENT_SANDBOX_CPUS", 1.0),
+            sandbox_pids_limit=env_int("AGENT_SANDBOX_PIDS_LIMIT", 64),
             # AgentTeams
             enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),
