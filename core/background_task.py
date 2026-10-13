@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import threading
+from core.runtime.config_scope import bind_current_context
 import time
 import uuid
 from pathlib import Path
@@ -137,7 +138,12 @@ class BackgroundTaskRunner:
                 except Exception:
                     pass
 
-        thread = threading.Thread(target=_run, name=f"BgTask[{task_id[:8]}]", daemon=True)
+        # Capture a fresh snapshot *per launch*. Background subagents must
+        # inherit the initiating Agent's scope, not the worker thread default.
+        thread = threading.Thread(
+            target=bind_current_context(_run),
+            name=f"BgTask[{task_id[:8]}]", daemon=True,
+        )
         thread.start()
         logger.info("Background task %s started: %s", task_id, description)
 
