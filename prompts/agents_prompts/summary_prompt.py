@@ -29,6 +29,14 @@ Use the following fixed structure:
 * **Learnings**: [Configs, API formats, pitfalls]
 * **User Preferences**: [Any stated preferences]
 
+### Active Work, remaining TODOs and Blockers
+* **Active**: [Current task and evidence of progress]
+* **Blocked**: [Failures, unresolved questions, missing inputs]
+* **Next Move**: [Concrete next action, with relevant paths or commands]
+* **Verification**: [Tests passed or still required]
+* **Workflow state**: [Uncommitted / committed / PR open / merged when applicable]
+
+
 ### File System State (Snapshot)
 *(Modified files in this archive segment)*
 * `path/to/file`: [Brief change]
