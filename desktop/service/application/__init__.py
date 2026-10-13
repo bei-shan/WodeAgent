@@ -4,8 +4,10 @@ from .errors import ServiceError, NotFoundError, ConflictError, InvalidInputErro
 from .sessions import SessionService
 from .turns import TurnService
 from .settings import SessionSettingsService, TeamsService
+from .workspace import WorkspaceService
 
 __all__ = [
     "ServiceError", "NotFoundError", "ConflictError", "InvalidInputError",
     "SessionService", "TurnService", "SessionSettingsService", "TeamsService",
+    "WorkspaceService",
 ]
