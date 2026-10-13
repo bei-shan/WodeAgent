@@ -33,6 +33,7 @@ export function connectStream(
   onEvent: (event: AgentEvent) => void,
   onConnection: (state: ConnectionState) => void,
   after: number | null = null,
+  bearerToken?: string,
 ): () => void {
   let closed = false
   let socket: WebSocket | undefined
@@ -42,7 +43,12 @@ export function connectStream(
   const open = () => {
     if (closed) return
     onConnection("connecting")
-    const ws = new WebSocket(streamUrl(base, sessionId, cursor.lastSeq))
+    // Bun-only WebSocket constructor supports Authorization headers.
+    // Never expose credentials in the URL, subprotocol or event payloads.
+    const ws = new WebSocket(
+      streamUrl(base, sessionId, cursor.lastSeq),
+      bearerToken ? { headers: { Authorization: "Bearer " + bearerToken } } : undefined,
+    )
     socket = ws
     ws.onopen = () => {
       if (closed) return
@@ -55,9 +61,10 @@ export function connectStream(
       if (event && cursor.accept(event)) onEvent(event)
     }
     ws.onerror = () => ws.close()
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (closed) return
       onConnection("disconnected")
+      if (event?.code === 1008) return // policy rejection is not retryable
       attempts++
       timer = setTimeout(open, Math.min(10_000, 500 * 2 ** Math.min(attempts, 5)))
     }

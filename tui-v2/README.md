@@ -22,7 +22,7 @@ bun run dev
 
 服务端地址默认 `http://127.0.0.1:8000`，可使用 `RIDGECODE_SERVER` 修改；为了兼容旧配置，仍接受 `WODEAGENT_SERVER`，新变量优先。
 
-**安全限制**：仅连接受信任的本机服务。当前 TUI v2 尚未接入 `WEB_AUTH_TOKEN` 的网页登录流程；启用服务端认证时，相关 API 请求可能收到 401，因此不能视为已支持认证服务。不要将未认证后端绑定公网地址。
+**鉴权**：服务端使用 `WEB_AUTH_TOKEN` 时，TUI 端设置 `RIDGECODE_AUTH_TOKEN` 为相同值（旧变量 `WODEAGENT_AUTH_TOKEN` 仍兼容）。HTTP 和 WebSocket 都通过 `Authorization: Bearer` 请求头认证，令牌不会出现在 URL 或终端日志。仅向可信本地服务发送凭据；远程服务器须使用 HTTPS/WSS。本地鉴权是单操作员保护，尚不是多用户 RBAC。
 
 ## 能力与模块
 
