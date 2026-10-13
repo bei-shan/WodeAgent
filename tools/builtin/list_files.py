@@ -14,6 +14,7 @@ from core.constants import ALWAYS_IGNORE_DIRS
 
 
 class ListFilesTool(Tool):
+    strict_input_contract = True
     """安全的目录浏览工具，支持分页与过滤"""
     usage_notes = 'LS: List directory contents. Supports pagination (offset/limit). Use path="." for current dir. Hidden files excluded by default. Do NOT use bash ls; use this tool.'
 
