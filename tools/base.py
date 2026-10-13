@@ -87,6 +87,10 @@ class ToolParameter(BaseModel):
 # =============================================================================
 
 class Tool(ABC):
+    # Built-in tools opt in after their public parameter contracts are audited.
+    # Custom/MCP tools retain their own validation until migrated.
+    strict_input_contract: bool = False
+
     """
     工具基类（遵循《通用工具响应协议》）
     
