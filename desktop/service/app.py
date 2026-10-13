@@ -303,6 +303,27 @@ def create_app(
     async def get_session_history(sid: str):
         return app.state.session_service.history(sid)
 
+    @app.get("/api/sessions/{sid}/trace")
+    async def get_session_trace(sid: str):
+        """Expose a safe projection of a trusted session trace, never raw JSONL."""
+        from desktop.service.application.trace_analysis import analyze_trace
+        app.state.session_service._require_known(sid)
+        session = app.state.controller.get_session(sid)
+        agent = getattr(session, "_agent", None) if session is not None else None
+        tracer = getattr(agent, "trace_logger", None)
+        trace_file = getattr(tracer, "_filepath", None)
+        trace_id = getattr(tracer, "session_id", None)
+        empty = {"available": False, "trace_id": None, "truncated": False,
+                 "pricing_configured": False, "runs": []}
+        if trace_file is None or not isinstance(trace_id, str):
+            return empty
+        path = Path(trace_file)
+        if (path.name != f"trace-{trace_id}.jsonl"
+                or path.parent.resolve() != Path(tracer.trace_dir).resolve()
+                or path.is_symlink()):
+            return empty
+        return await asyncio.to_thread(analyze_trace, path, trace_id)
+
     @app.get("/api/sessions/{sid}/tree")
     async def get_session_tree(sid: str):
         return app.state.session_service.tree(sid)
