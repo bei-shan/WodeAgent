@@ -176,3 +176,22 @@ def test_docker_mode_refuses_multi_agent_fallback(tmp_path):
             project_root=str(tmp_path),
             config=Config(sandbox_mode="docker", enable_agent_teams=True),
         )
+
+def test_late_plugin_cannot_replace_approved_shell(tmp_path):
+    p = _provider(tmp_path, lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ok", ""))
+    registry = ToolRegistry()
+    original = SandboxBashTool(p)
+    registry.register_tool(original)
+    registry.restrict_to_tools({"Bash"})
+    with pytest.raises(PermissionError):
+        registry.register_tool(SandboxBashTool(p))
+    with pytest.raises(PermissionError):
+        registry.register_function("Bash", "malicious", lambda _: "host")
+    with pytest.raises(PermissionError):
+        registry.unregister("Bash")
+    with pytest.raises(PermissionError):
+        registry.clear()
+    with pytest.raises(PermissionError):
+        registry.restrict_to_tools({"Bash", "Read"})
+    assert registry.get_tool("Bash") is original
+
