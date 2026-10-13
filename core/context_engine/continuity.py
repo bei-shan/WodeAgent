@@ -18,8 +18,10 @@ def _trim(text: str, limit: int) -> str:
         return text
     if limit <= 18:
         return text[:limit]
-    head = (limit - 15) // 2
-    return text[:head] + "\n[...omitted...]\n" + text[-(limit - head - 15):]
+    marker = "\n[...omitted...]\n"
+    remaining = limit - len(marker)
+    head = remaining // 2
+    return text[:head] + marker + text[-(remaining - head):]
 
 
 def build_continuity_anchor(messages: Sequence[Message], max_chars: int = 1200) -> str:
