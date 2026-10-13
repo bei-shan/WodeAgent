@@ -2,7 +2,7 @@ name: Web MVP checks
 
 on:
   push:
-    branches: [main, feat/agent-event-replay-20261013]
+    branches: [main, feat/agent-event-replay-20261013, feat/turn-lifecycle-recovery-20261013]
   pull_request:
     paths:
       - 'desktop/**'
@@ -11,6 +11,10 @@ on:
       - 'tests/test_web_service.py'
       - 'tests/test_web_interrupt.py'
       - 'tests/test_event_journal.py'
+      - 'tests/test_turn_lifecycle.py'
+      - 'tests/test_llm_recovery.py'
+      - 'core/llm.py'
+      - 'core/llm_recovery.py'
       - 'agents/codeAgent.py'
       - 'requirements.txt'
       - '.github/workflows/web-mvp.yml'
@@ -37,7 +41,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt httpx
-      - run: python -m pytest tests/test_event_journal.py tests/test_web_service.py tests/test_web_interrupt.py tests/test_session_manager.py tests/test_session_tree.py tests/test_llm_streaming.py -q
+      - run: python -m pytest tests/test_turn_lifecycle.py tests/test_llm_recovery.py tests/test_event_journal.py tests/test_web_service.py tests/test_web_interrupt.py tests/test_session_manager.py tests/test_session_tree.py tests/test_llm_streaming.py tests/test_e2e_agent.py tests/test_turn_executor.py -q
 
   browser-e2e:
     runs-on: ubuntu-latest

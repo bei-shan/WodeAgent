@@ -34,6 +34,7 @@ from core.runtime.session_controller import (
     SESSION_EVENT_PERMISSION,
     SESSION_EVENT_ASK_USER,
     SESSION_EVENT_TURN_DONE,
+    SESSION_EVENT_TURN_FINISHED,
     SESSION_EVENT_ERROR,
 )
 from core.events import AgentEvent, EventType
@@ -79,6 +80,7 @@ _STREAM_EVENTS = {
     SESSION_EVENT_PERMISSION,
     SESSION_EVENT_ASK_USER,
     SESSION_EVENT_TURN_DONE,
+    SESSION_EVENT_TURN_FINISHED,
     SESSION_EVENT_ERROR,
     # Subagent streaming events
     EventType.SUBAGENT_STARTED,
@@ -282,6 +284,9 @@ def create_app(
             shutil.rmtree(ws_path)
         from core.session_manager import SessionManager
         disk_deleted = SessionManager().delete_session(sid)
+        # Remove the terminal-state sidecar only after a real session existed.
+        if mem_deleted or disk_deleted:
+            (Path("memory/sessions") / f"{sid}.turn.json").unlink(missing_ok=True)
         if not mem_deleted and not disk_deleted:
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
@@ -344,6 +349,20 @@ def create_app(
     # Messages
     # ═══════════════════════════════════════════════════════════════
 
+    @app.get("/api/sessions/{sid}/turn")
+    async def get_turn_status(sid: str):
+        """Last canonical terminal result, or running/idle state."""
+        from core.runtime.turn_state import load_turn_outcome
+        from core.session_manager import SessionManager
+        ctrl: SessionController = app.state.controller
+        session = ctrl.get_session(sid)
+        if session is None and SessionManager().get_session(sid) is None:
+            raise HTTPException(404, "Session not found")
+        if session is not None and session.busy:
+            return {"status": "running"}
+        outcome = session.last_turn if session else load_turn_outcome(sid)
+        return outcome.to_dict() if outcome is not None else {"status": "idle"}
+
     @app.post("/api/sessions/{sid}/messages")
     async def send_message(sid: str, body: MessageSend):
         """Send a user message — starts an agent turn in a worker thread."""
@@ -353,7 +372,7 @@ def create_app(
             raise HTTPException(404, "Session not found")
         ok = session.send_message(body.content)
         if not ok:
-            raise HTTPException(409, "Agent is busy — wait for turn.completed event")
+            raise HTTPException(409, "Agent is busy — wait for turn.finished event")
         return {"status": "accepted"}
 
     @app.post("/api/sessions/{sid}/interrupt")

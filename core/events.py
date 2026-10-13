@@ -41,6 +41,7 @@ class EventType:
     PERMISSION_REQUESTED = "permission.requested"
     ASK_USER_REQUESTED = "ask_user.requested"
     TURN_COMPLETED = "turn.completed"
+    TURN_FINISHED = "turn.finished"  # canonical completed/failed/cancelled event
 
     # Subagent events (emitted by Task/BackgroundTask/Team workers):
     SUBAGENT_STARTED = "subagent.started"

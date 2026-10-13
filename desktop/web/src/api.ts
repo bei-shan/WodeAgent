@@ -98,6 +98,7 @@ export const sessions = {
   create: (title?: string) => req<SessionInfo>('POST', '/sessions', { title: title || '' }),
   activate: (id: string) => req<{ status: string }>('POST', `/sessions/${id}/activate`),
   history: (id: string) => req<{ messages: Array<{role: 'user' | 'assistant'; content: string}> }>('GET', `/sessions/${id}/history`),
+  turn: (id: string) => req<{status: 'running' | 'idle' | 'completed' | 'failed' | 'cancelled'; response?: string; error_kind?: string; retryable?: boolean}>('GET', `/sessions/${id}/turn`),
   get:    (id: string)    => req<SessionInfo>('GET', `/sessions/${id}`),
   delete: (id: string)    => req<void>('DELETE', `/sessions/${id}`),
   rename: (id: string, title: string) =>

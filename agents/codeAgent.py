@@ -79,6 +79,8 @@ class CodeAgent(Agent):
         )
         self.last_response_raw: Optional[Any] = None
         self.llm_stream_callback = None
+        self.last_turn_status = 'completed'
+        self.last_turn_error_kind = None
         self._interrupt_requested = threading.Event()
         # Structured event sink — UI adapters subscribe here instead of
         # overriding _console().  Default is no-op (headless/testing safe).
@@ -594,22 +596,35 @@ class CodeAgent(Agent):
             self.logger.debug("Engine 启动: %s", input_text)
 
         response_text = ""
+        self._run_limit_hit = False
+        run_failed = False
         try:
             response_text = self._react_loop(
                 pending_input=processed_input,
                 show_raw=show_raw,
                 trace_logger=trace_logger,
             )
+        except Exception:
+            run_failed = True
+            raise
         finally:
+            stopped = self._interrupt_requested.is_set()
+            self.last_turn_status = (
+                "cancelled" if stopped else "failed"
+                if run_failed or self._run_limit_hit else "completed"
+            )
+            self.last_turn_error_kind = "step_limit" if self._run_limit_hit else None
             self._interrupt_requested.clear()
+            # Save the user input and any completed steps even when provider
+            # calls fail or the user cancels the remaining execution.
+            self._auto_save_session()
             trace_logger.log_event(
                 "run_end",
-                {"run_id": run_id, "final": response_text if "response_text" in locals() else ""},
+                {"run_id": run_id, "final": response_text, "status": self.last_turn_status},
                 step=0,
             )
             self.event_sink.emit(AgentEvent(EventType.RUN_FINISHED, {
-                "run_id": run_id,
-                "final": response_text if "response_text" in locals() else "",
+                "run_id": run_id, "final": response_text, "status": self.last_turn_status,
             }))
         if self.console_progress:
             self._console("✅ Agent 已完成")
@@ -618,9 +633,6 @@ class CodeAgent(Agent):
         self.logger.info("history_size=%d, rounds=%d",
                         self.history_manager.get_message_count(),
                         self.history_manager.get_rounds_count())
-
-        # 自动保存当前对话
-        self._auto_save_session()
 
         return response_text
 
@@ -745,6 +757,7 @@ class CodeAgent(Agent):
             trace_logger.log_event("finish", {"final": final_text}, step=step)
             return final_text
 
+        self._run_limit_hit = True
         return "抱歉，我无法在限定步数内完成这个任务。"
 
     # ------------------------------------------------------------------
@@ -858,18 +871,15 @@ class CodeAgent(Agent):
                     if callback:
                         callback(event_type, text, step)
 
-                try:
-                    return self.llm.stream_raw(
-                        messages,
-                        tools=tools_schema,
-                        tool_choice=tool_choice,
-                        on_delta=_on_delta,
-                    )
-                except Exception as exc:
-                    self.logger.warning("LLM streaming failed, falling back to invoke_raw: %s", exc)
-                    return self.llm.invoke_raw(
-                        messages, tools=tools_schema, tool_choice=tool_choice
-                    )
+                # Provider errors must propagate to the Turn state machine.
+                # Silent stream->nonstream fallback can replay partially
+                # emitted tokens and diverge tool calls.
+                return self.llm.stream_raw(
+                    messages,
+                    tools=tools_schema,
+                    tool_choice=tool_choice,
+                    on_delta=_on_delta,
+                )
             intercept = _real_call
             for feat in reversed(self._features):
                 prev = intercept
