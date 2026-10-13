@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import threading
-from contextvars import copy_context
+from core.runtime.config_scope import bind_current_context
 import time
 import uuid
 from pathlib import Path
@@ -140,9 +140,8 @@ class BackgroundTaskRunner:
 
         # Capture a fresh snapshot *per launch*. Background subagents must
         # inherit the initiating Agent's scope, not the worker thread default.
-        context = copy_context()
         thread = threading.Thread(
-            target=lambda: context.run(_run),
+            target=bind_current_context(_run),
             name=f"BgTask[{task_id[:8]}]", daemon=True,
         )
         thread.start()
