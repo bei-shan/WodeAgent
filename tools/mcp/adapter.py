@@ -84,7 +84,17 @@ class MCPToolAdapter(Tool):
             )
 
         try:
+            from core.runtime.cancellation import current_cancel_event
+            cancel_event = current_cancel_event()
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("MCP request cancelled")
             result = self._mcp_client.call_tool_sync(self._remote_name, parameters)
+        except InterruptedError:
+            return to_protocol_error(
+                "MCP tool call interrupted.",
+                parameters, self._remote_name, start_time,
+                error_code=ErrorCode.INTERRUPTED,
+            )
         except TimeoutError as exc:
             message = str(exc) or "MCP tool call timeout"
             return to_protocol_error(
