@@ -42,7 +42,7 @@ export function parseTerminalCommand(raw: string): TerminalCommand | null {
     case "plan":
     case "teams":
       return arg === "on" || arg === "off"
-        ? { type: name, enabled: arg === "on" }
+        ? { type: name as "plan" | "teams", enabled: arg === "on" }
         : { type: "invalid", reason: "Usage: /" + name + " on|off" }
     default: return { type: "invalid", reason: "Unknown command: /" + name + ". Use /help." }
   }
