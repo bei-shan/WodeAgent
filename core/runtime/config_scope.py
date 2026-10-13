@@ -24,3 +24,18 @@ def scoped_config(config: "Config") -> "Iterator[None]":
         yield
     finally:
         _CURRENT_CONFIG.reset(token)
+
+
+def bind_current_context(callback):
+    """Return a callback bound to a *snapshot* of the caller's context.
+
+    Launch it on another thread at most once; every launch needs its own
+    copy_context() because Context cannot be entered concurrently.
+    """
+    from contextvars import copy_context
+    context = copy_context()
+
+    def invoke(*args, **kwargs):
+        return context.run(callback, *args, **kwargs)
+
+    return invoke

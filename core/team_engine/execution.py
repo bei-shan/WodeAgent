@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
+from core.runtime.config_scope import scoped_config
 
 _ROLE_SYSTEM_PROMPTS: Dict[str, str] = {
     "developer": (
@@ -44,6 +45,7 @@ class ExecutionService:
         work_executor: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]],
         read_team_fn: Callable[[str], Dict[str, Any]],
         llm_semaphore: Optional[Any] = None,
+        config: Optional[Any] = None,
     ):
         self._project_root = project_root
         self._llm = llm
@@ -51,8 +53,17 @@ class ExecutionService:
         self._work_executor = work_executor
         self._read_team_fn = read_team_fn
         self._llm_semaphore = llm_semaphore
+        self._config = config
 
     def execute_work_item(self, team_name: str, teammate_name: str, work_item: Dict[str, Any]) -> Dict[str, Any]:
+        # Team workers often run in threads created outside an Agent turn.
+        # Explicitly scope their own config, independent of the creator thread.
+        if self._config is None:
+            return self._execute_work_item(team_name, teammate_name, work_item)
+        with scoped_config(self._config):
+            return self._execute_work_item(team_name, teammate_name, work_item)
+
+    def _execute_work_item(self, team_name: str, teammate_name: str, work_item: Dict[str, Any]) -> Dict[str, Any]:
         if self._work_executor:
             payload = self._work_executor(dict(work_item))
             if isinstance(payload, dict):
@@ -112,7 +123,7 @@ class ExecutionService:
         ]
         tool_usage: Dict[str, int] = {}
         last_tool_msg = ""
-        max_steps = int(os.getenv("TEAM_WORKER_MAX_STEPS", "8"))
+        max_steps = self._config.team_worker_max_steps if self._config is not None else int(os.getenv("TEAM_WORKER_MAX_STEPS", "8"))
         for _ in range(max(1, max_steps)):
             turn = executor.execute_turn(messages, tool_usage=tool_usage)
             messages = turn["messages"]
@@ -155,7 +166,7 @@ class ExecutionService:
         denyset = {str(x) for x in denylist} if isinstance(denylist, list) else set()
         denyset.add("Task")
 
-        filtered = ToolRegistry()
+        filtered = ToolRegistry(config=self._config)
         main_gate = None
         for tool in self._tool_registry.get_all_tools():
             name = tool.name
