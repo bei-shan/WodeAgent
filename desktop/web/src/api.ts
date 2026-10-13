@@ -202,22 +202,23 @@ export function connectStream(
   const connect = () => {
     if (closed) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    ws = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/stream`)
-    ws.onopen = () => {
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/stream`)
+    ws = socket
+    socket.onopen = () => {
       attempts = 0
       onConnect?.()
     }
-    ws.onmessage = (msg) => {
+    socket.onmessage = (msg) => {
       try { onEvent(JSON.parse(msg.data) as AgentEvent) }
       catch { /* ignore malformed frames */ }
     }
-    ws.onclose = () => {
+    socket.onclose = () => {
       if (closed) return
       onDisconnect()
       attempts += 1
       retry = setTimeout(connect, Math.min(10000, 500 * 2 ** Math.min(attempts, 5)))
     }
-    ws.onerror = () => ws?.close()
+    socket.onerror = () => socket.close()
   }
   connect()
 
