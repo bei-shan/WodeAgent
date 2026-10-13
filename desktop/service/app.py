@@ -43,6 +43,7 @@ from core.runtime.session_controller import (
     SESSION_EVENT_ERROR,
 )
 from core.events import AgentEvent, EventType
+from desktop.service.application import ServiceError, SessionService, TurnService
 from desktop.service.schemas import (
     SessionCreate,
     SessionInfo,
@@ -173,11 +174,21 @@ def create_app(
         workspace_base=os.path.join(app.state.data_dir, "sessions")
     )
     app.state.agent_factory = agent_factory
+    app.state.session_service = SessionService(
+        controller=app.state.controller, agent_factory=agent_factory,
+        data_dir=app.state.data_dir,
+    )
+    app.state.turn_service = TurnService(controller=app.state.controller)
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
+    @app.exception_handler(ServiceError)
+    async def _application_error(_request: Request, exc: ServiceError):
+        status = {"not_found": 404, "conflict": 409, "invalid_input": 400}.get(exc.kind, 500)
+        return JSONResponse(status_code=status, content={"detail": str(exc) if status < 500 else "Internal error"})
+
     @app.on_event("startup")
     async def _startup():
         logger.info("Service started — project_root=%s", app.state.project_root)
@@ -250,201 +261,51 @@ def create_app(
 
     @app.post("/api/sessions", response_model=SessionInfo, status_code=201)
     async def create_session(body: SessionCreate):
-        """Create a new agent session."""
-        ctrl: SessionController = app.state.controller
-        sid = ctrl.create_session(app.state.agent_factory)
-        session = ctrl.get_session(sid)
-        title = body.title or "新会话"
-        if session:
-            session.title = title
-        return SessionInfo(id=sid, title=title, busy=False)
+        return app.state.session_service.create(body.title)
 
     @app.get("/api/sessions", response_model=list[SessionInfo])
     async def list_sessions():
-        """List sessions — active (in-memory) + persisted (on-disk)."""
-        ctrl: SessionController = app.state.controller
-        pinned = getattr(app.state, '_pinned', set())
-        active_ids = set(ctrl.list_sessions())
-        result = []
-
-        # Active sessions first
-        for sid in active_ids:
-            session = ctrl.get_session(sid)
-            title = session.title if session and session.title else sid[:8]
-            result.append(SessionInfo(id=sid, title=title,
-                busy=(session.busy if session else False),
-                pinned=(sid in pinned)))
-
-        # Add persisted sessions not currently active (from disk)
-        try:
-            from core.session_manager import SessionManager
-            sm = SessionManager()
-            for s in sm.list_sessions():
-                if s.id not in active_ids:
-                    result.append(SessionInfo(id=s.id,
-                        title=s.title or s.id[:8],
-                        busy=False, pinned=(s.id in pinned)))
-        except Exception:
-            pass
-
-        result.sort(key=lambda s: (not s.pinned, s.id))
-        return result
+        return app.state.session_service.list()
 
     @app.get("/api/sessions/{sid}", response_model=SessionInfo)
     async def get_session(sid: str):
-        """Get session info."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        title = session.title or sid[:8]
-        return SessionInfo(id=sid, title=title, busy=session.busy)
+        return app.state.session_service.get(sid)
 
     @app.post("/api/sessions/{sid}/activate")
     async def activate_session(sid: str):
-        """Activate a persisted session — load into memory for WebSocket use."""
-        ctrl: SessionController = app.state.controller
-        # Already active
-        if ctrl.get_session(sid) is not None:
-            return {"status": "active"}
-        # Check disk
-        snap_path = Path("memory/sessions") / f"{sid}.json"
-        if not snap_path.exists():
-            raise HTTPException(404, "Session not found on disk")
-        # Create new AgentSession
-        new_sid = ctrl.create_session(app.state.agent_factory)
-        session = ctrl.get_session(new_sid)
-        if session is None:
-            raise HTTPException(500, "Failed to create session")
-        # Override its ID to match the persisted one
-        session.session_id = sid
-        from core.session_manager import SessionManager
-        previous = SessionManager().get_session(sid)
-        if previous is not None:
-            session.title = previous.title
-        ctrl._sessions.pop(new_sid, None)
-        ctrl._sessions[sid] = session
-        from core.session_manager import SessionManager
-        SessionManager().delete_session(new_sid)
-        return {"status": "activated", "id": sid}
+        return app.state.session_service.activate(sid)
 
     @app.delete("/api/sessions/{sid}")
     async def delete_session(sid: str):
-        """Delete a session — from memory AND from disk."""
-        import shutil
-        ctrl: SessionController = app.state.controller
-        # Remove from in-memory controller if active
-        mem_deleted = ctrl.delete_session(sid)
-        # Also remove persisted snapshot + workspace
-        snap_path = Path("memory/sessions") / f"{sid}.json"
-        if snap_path.exists():
-            snap_path.unlink()
-        ws_path = Path(app.state.data_dir) / "sessions" / sid
-        if ws_path.exists():
-            shutil.rmtree(ws_path)
-        from core.session_manager import SessionManager
-        disk_deleted = SessionManager().delete_session(sid)
-        # Remove the terminal-state sidecar only after a real session existed.
-        if mem_deleted or disk_deleted:
-            (Path("memory/sessions") / f"{sid}.turn.json").unlink(missing_ok=True)
-        if not mem_deleted and not disk_deleted:
-            raise HTTPException(404, "Session not found")
-        return {"status": "deleted"}
+        return app.state.session_service.delete(sid)
 
     @app.put("/api/sessions/{sid}/rename")
     async def rename_session(sid: str, body: dict):
-        """Rename a session."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        new_title = (body.get("title") or "").strip()
-        if not new_title:
-            raise HTTPException(400, "Title is required")
-        session.title = new_title
-        from core.session_manager import SessionManager
-        SessionManager().rename_session(sid, new_title)
-        return {"status": "renamed", "title": new_title}
-
-    # In-memory pinned sessions set
-    if not hasattr(app.state, "_pinned"):
-        app.state._pinned: set[str] = set()
+        return app.state.session_service.rename(sid, body.get("title") or "")
 
     @app.post("/api/sessions/{sid}/pin")
     async def toggle_pin_session(sid: str):
-        """Toggle pin status for a session."""
-        ctrl: SessionController = app.state.controller
-        if ctrl.get_session(sid) is None:
-            raise HTTPException(404, "Session not found")
-        if sid in app.state._pinned:
-            app.state._pinned.discard(sid)
-            return {"pinned": False}
-        else:
-            app.state._pinned.add(sid)
-            return {"pinned": True}
+        return app.state.session_service.toggle_pin(sid)
 
     @app.get("/api/sessions/{sid}/history")
     async def get_session_history(sid: str):
-        """Load persisted session history (messages from disk snapshot)."""
-        from core.session_store import load_session_snapshot
-        from pathlib import Path
-        snap_path = Path("memory/sessions") / f"{sid}.json"
-        if not snap_path.exists():
-            return {"messages": []}
-        try:
-            snap = load_session_snapshot(str(snap_path))
-        except Exception:
-            return {"messages": []}
-        # Both new tree snapshots and legacy message-list snapshots.
-        entries = snap.get("history_entries") or snap.get("history_messages") or []
-        messages = []
-        for entry in entries:
-            role = entry.get("role", "")
-            content = entry.get("content", "")
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": str(content)[:5000]})
-        return {"messages": messages}
+        return app.state.session_service.history(sid)
 
-    # ═══════════════════════════════════════════════════════════════
-    # Messages
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
+    # Turns
+    # ═══════════════════════════════════════════════════════════
 
     @app.get("/api/sessions/{sid}/turn")
     async def get_turn_status(sid: str):
-        """Last canonical terminal result, or running/idle state."""
-        from core.runtime.turn_state import load_turn_outcome
-        from core.session_manager import SessionManager
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None and SessionManager().get_session(sid) is None:
-            raise HTTPException(404, "Session not found")
-        if session is not None and session.busy:
-            return {"status": "running"}
-        outcome = session.last_turn if session else load_turn_outcome(sid)
-        return outcome.to_dict() if outcome is not None else {"status": "idle"}
+        return app.state.turn_service.status(sid)
 
     @app.post("/api/sessions/{sid}/messages")
     async def send_message(sid: str, body: MessageSend):
-        """Send a user message — starts an agent turn in a worker thread."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        ok = session.send_message(body.content)
-        if not ok:
-            raise HTTPException(409, "Agent is busy — wait for turn.finished event")
-        return {"status": "accepted"}
+        return app.state.turn_service.send(sid, body.content)
 
     @app.post("/api/sessions/{sid}/interrupt")
     async def interrupt(sid: str):
-        """Request the agent to stop (best-effort)."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        if not session.interrupt():
-            raise HTTPException(409, "Agent is not running or does not support cancellation")
-        return {"status": "interrupted"}
+        return app.state.turn_service.interrupt(sid)
 
     @app.post("/api/sessions/{sid}/upload")
     async def upload_file(sid: str, file: UploadFile = File(...)):
@@ -479,35 +340,15 @@ def create_app(
 
     @app.post("/api/sessions/{sid}/permissions/{rid}/resolve")
     async def resolve_permission(sid: str, rid: str, body: PermissionResolve):
-        """Resolve a pending permission request (user clicked Allow/Deny)."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        ok = session.resolve_permission(rid, body.decision)
-        if not ok:
-            raise HTTPException(404, "Permission request not found or already timed out")
-        return {"status": "resolved", "decision": body.decision}
-
-    # ═══════════════════════════════════════════════════════════════
-    # AskUser
-    # ═══════════════════════════════════════════════════════════════
+        return app.state.turn_service.resolve_permission(sid, rid, body.decision)
 
     @app.post("/api/sessions/{sid}/ask-user/{rid}/answer")
     async def answer_ask_user(sid: str, rid: str, body: AskUserAnswer):
-        """Answer a pending AskUser request."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        ok = session.answer_ask_user(rid, body.answer)
-        if not ok:
-            raise HTTPException(404, "AskUser request not found or timed out")
-        return {"status": "answered"}
+        return app.state.turn_service.answer_ask_user(sid, rid, body.answer)
 
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     # Session config
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
 
     @app.get("/api/sessions/{sid}/config", response_model=SessionConfig)
     async def get_session_config(sid: str):
