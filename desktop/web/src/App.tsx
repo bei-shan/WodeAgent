@@ -727,6 +727,7 @@ export default function App() {
           context_overflow: '上下文已超出模型限制，请先压缩对话',
           invalid_request: '模型请求参数无效',
           stream_interrupted: '模型流式输出已中断；未自动重复请求',
+          step_limit: '已达到 Agent 最大执行步数，请缩小任务范围或调整设置',
           agent_error: 'Agent 执行失败，请查看服务端日志',
         }
         setMessages(prev => {
