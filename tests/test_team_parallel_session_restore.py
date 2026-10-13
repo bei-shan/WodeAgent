@@ -7,6 +7,9 @@ def test_restore_requeues_running_work_items(tmp_path):
     manager = TeamManager(project_root=tmp_path)
     manager.create_team("demo", members=[{"name": "lead"}, {"name": "dev1"}])
 
+    # Keep this test deterministic: verify requeue behavior without workers
+    # consuming queued work before restore runs.
+    manager._start_worker = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
     dispatch = manager.fanout_work(
         "demo",
         tasks=[{"owner": "dev1", "title": "impl", "instruction": "do impl"}],
@@ -15,8 +18,6 @@ def test_restore_requeues_running_work_items(tmp_path):
 
     manager.store.update_work_item_status("demo", work_id=work_id, status=WORK_ITEM_STATUS_RUNNING)
 
-    # Keep this test deterministic: verify requeue behavior without starting workers.
-    manager._start_worker = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
     manager.import_state(manager.export_state())
 
     items = manager.store.list_work_items("demo", owner="dev1")

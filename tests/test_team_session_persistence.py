@@ -33,6 +33,8 @@ def test_restore_does_not_spawn_duplicate_workers(tmp_path):
     state = manager.export_state()
     manager.import_state(state)
     manager.import_state(state)
+    manager.resume_workers()
+    manager.resume_workers()
     assert manager.has_worker("demo", "dev")
 
     # TeamManager keeps one worker handle per (team, teammate)

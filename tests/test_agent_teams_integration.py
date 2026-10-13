@@ -55,5 +55,7 @@ def test_restore_after_snapshot_does_not_duplicate_worker(tmp_path):
 
     manager.import_state(snapshot)
     manager.import_state(snapshot)
+    manager.resume_workers()
+    manager.resume_workers()
     assert manager.has_worker("demo", "dev")
     assert len([key for key in manager._workers if key == ("demo", "dev")]) == 1

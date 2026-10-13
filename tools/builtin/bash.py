@@ -220,16 +220,20 @@ class BashTool(Tool):
         timed_out = False
 
         # 安全策略：简单命令用 shell=False（防注入），复杂命令用 shell=True（已过安全检测）
-        use_shell = self._has_shell_operators(command)
+        exec_command = command
+        force_shell = False
+        if os.name == "nt":
+            exec_command, force_shell = self._translate_windows_shell_compat(command)
+        use_shell = force_shell or self._has_shell_operators(exec_command)
         if use_shell:
-            run_args = command
+            run_args = exec_command
         else:
             try:
-                run_args = shlex.split(command)
+                run_args = shlex.split(exec_command)
             except ValueError:
                 # shlex 无法解析的命令（如不匹配的引号），回退到 shell=True
                 use_shell = True
-                run_args = command
+                run_args = exec_command
 
         try:
             result = subprocess.run(
@@ -514,6 +518,15 @@ class BashTool(Tool):
         # 匹配 shell 操作符（不在引号内的）
         # 简化版：检测常见操作符
         return bool(re.search(r'[&|;<>]', re.sub(r'(["\']).*?\1', '', command)))
+
+    @staticmethod
+    def _translate_windows_shell_compat(command: str) -> tuple[str, bool]:
+        """Translate the tiny POSIX surface this tool promises on Windows."""
+        pattern = re.compile(
+            r"(?i)(^|(?:&&|\|\||[;&|])\s*)pwd(?=\s*(?:$|&&|\|\||[;&|]))"
+        )
+        translated = pattern.sub(lambda match: f"{match.group(1)}cd", command)
+        return translated, translated != command
 
     def _check_cd_paths(self, command: str, base_dir: Path) -> Optional[str]:
         """

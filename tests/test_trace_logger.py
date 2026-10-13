@@ -38,7 +38,7 @@ def test_trace_logger_disabled():
     print("✅ Disabled mode test passed\n")
 
 
-def test_trace_logger_enabled():
+def _exercise_trace_logger_enabled() -> Path:
     """测试 TraceLogger 启用模式"""
     print("=" * 60)
     print("Test 2: TraceLogger (enabled)")
@@ -125,10 +125,17 @@ def test_trace_logger_enabled():
     print(f"\n✅ Enabled mode test passed")
     print(f"✅ Trace saved to: {logger._filepath}")
     
+    assert logger._filepath is not None
+    assert logger._filepath.exists()
     return logger._filepath
 
 
-def test_trace_logger_with_error():
+def test_trace_logger_enabled():
+    """测试 TraceLogger 启用模式"""
+    _exercise_trace_logger_enabled()
+
+
+def _exercise_trace_logger_with_error() -> Path:
     """测试 TraceLogger 错误记录"""
     print("\n" + "=" * 60)
     print("Test 3: TraceLogger (with error)")
@@ -157,7 +164,14 @@ def test_trace_logger_with_error():
     print(f"✅ Error test passed")
     print(f"✅ Trace saved to: {logger._filepath}")
     
+    assert logger._filepath is not None
+    assert logger._filepath.exists()
     return logger._filepath
+
+
+def test_trace_logger_with_error():
+    """测试 TraceLogger 错误记录"""
+    _exercise_trace_logger_with_error()
 
 
 def verify_jsonl_file(filepath: Path):
@@ -210,10 +224,10 @@ def main():
         test_trace_logger_disabled()
         
         # 测试 2: 启用模式（完整流程）
-        filepath1 = test_trace_logger_enabled()
+        filepath1 = _exercise_trace_logger_enabled()
         
         # 测试 3: 错误记录
-        filepath2 = test_trace_logger_with_error()
+        filepath2 = _exercise_trace_logger_with_error()
         
         # 验证文件内容
         if filepath1:

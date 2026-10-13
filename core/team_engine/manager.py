@@ -631,11 +631,6 @@ class TeamManager:
             except FileNotFoundError:
                 continue
             self.store.requeue_running_work_items(team_name)
-            for member in cfg.get("members", []):
-                name = str(member.get("name") or "")
-                if not name or name == "lead":
-                    continue
-                self._start_worker(team_name, name)
         # Restore processed message IDs from snapshot.
         snapshot_processed = snapshot.get("processed_messages")
         if isinstance(snapshot_processed, dict):
@@ -669,6 +664,29 @@ class TeamManager:
                         continue
                     restored = self.approval_service.upsert_request(dict(req))
                     self._persist_approval(restored)
+
+    def resume_workers(self, team_name: Optional[str] = None) -> int:
+        """Explicitly start teammate workers after restoring state."""
+        if team_name is None:
+            names = sorted(self.store.list_teams())
+        else:
+            names = [sanitize_name(team_name)]
+
+        started = 0
+        for current_team in names:
+            try:
+                cfg = self.store.read_team(current_team)
+            except FileNotFoundError:
+                continue
+            for member in cfg.get("members", []):
+                name = str(member.get("name") or "")
+                if not name or name == "lead":
+                    continue
+                before = self.has_worker(current_team, name)
+                self._start_worker(current_team, name)
+                if not before and self.has_worker(current_team, name):
+                    started += 1
+        return started
 
     def _read_team_or_raise(self, team_name: str) -> Dict[str, Any]:
         try:

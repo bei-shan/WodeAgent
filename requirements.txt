@@ -5,4 +5,6 @@ anyio>=3.0.0
 python-dotenv>=1.0.0
 rich>=13.0.0
 prompt_toolkit>=3.0.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
 pytest>=7.0.0
