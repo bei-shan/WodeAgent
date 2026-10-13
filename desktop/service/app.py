@@ -43,7 +43,9 @@ from core.runtime.session_controller import (
     SESSION_EVENT_ERROR,
 )
 from core.events import AgentEvent, EventType
-from desktop.service.application import ServiceError, SessionService, TurnService
+from desktop.service.application import (
+    ServiceError, SessionService, TurnService, SessionSettingsService, TeamsService,
+)
 from desktop.service.schemas import (
     SessionCreate,
     SessionInfo,
@@ -179,6 +181,8 @@ def create_app(
         data_dir=app.state.data_dir,
     )
     app.state.turn_service = TurnService(controller=app.state.controller)
+    app.state.settings_service = SessionSettingsService(controller=app.state.controller)
+    app.state.teams_service = TeamsService(controller=app.state.controller)
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state._started_at = time.time()
@@ -352,125 +356,31 @@ def create_app(
 
     @app.get("/api/sessions/{sid}/config", response_model=SessionConfig)
     async def get_session_config(sid: str):
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        if session._agent is None:
-            session._ensure_agent()
-        agent = session._agent
-        model = getattr(agent.llm, 'model', '')
-        provider = getattr(agent.llm, 'provider', '')
-        teams = bool(getattr(agent, 'enable_agent_teams', False))
-        plan = bool(getattr(agent, '_in_plan_mode', False))
-        return SessionConfig(
-            model=model, provider=provider,
-            enable_agent_teams=teams, plan_mode=plan,
-            thinking_level=agent.history_manager.get_thinking_level(),
-        )
+        return app.state.settings_service.get(sid)
 
     @app.put("/api/sessions/{sid}/config")
     async def update_session_config(sid: str, body: SessionConfigUpdate):
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        if session.busy:
-            raise HTTPException(409, "Cannot change configuration during a turn")
-        if session._agent is None:
-            session._ensure_agent()
-        agent = session._agent
-        if body.model_profile is not None:
-            from core.model_profiles import load_model_profiles
-            profiles = load_model_profiles()
-            if body.model_profile == "default" and not profiles:
-                pass  # already using the configured default LLM
-            elif body.model_profile not in profiles:
-                raise HTTPException(400, "Unknown model profile")
-            else:
-                agent.switch_model(model=body.model_profile)
-        if body.enable_agent_teams is not None:
-            agent.enable_agent_teams = bool(body.enable_agent_teams)
-            if hasattr(agent.config, 'enable_agent_teams'):
-                agent.config.enable_agent_teams = agent.enable_agent_teams
-            # Lazy-init team manager when toggled on after agent start.
-            if agent.enable_agent_teams and agent.team_manager is None:
-                try:
-                    from core.team_engine.manager import TeamManager
-                    from core.team_engine.display_mode import resolve_teammate_mode
-                    mode, _ = resolve_teammate_mode(
-                        str(getattr(agent.config, 'teammate_mode', 'auto') or 'auto')
-                    )
-                    agent.team_manager = TeamManager(
-                        store_dir=str(getattr(agent.config, 'agent_teams_store_dir', '.teams') or '.teams'),
-                        task_store_dir=str(getattr(agent.config, 'agent_tasks_store_dir', '.tasks') or '.tasks'),
-                        teammate_mode=mode,
-                    )
-                    from core.tool_bootstrap import register_team_tools
-                    register_team_tools(agent._tool_bootstrap if hasattr(agent, '_tool_bootstrap') else None)
-                except Exception:
-                    pass
-        if body.plan_mode is not None:
-            if body.plan_mode:
-                agent.enter_plan_mode()
-            else:
-                agent.exit_plan_mode("")
-        return {"status": "updated"}
+        return app.state.settings_service.update(
+            sid, model_profile=body.model_profile,
+            enable_agent_teams=body.enable_agent_teams,
+            plan_mode=body.plan_mode,
+        )
 
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     # Agent teams
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
 
     @app.get("/api/sessions/{sid}/teams", response_model=list[TeamInfo])
     async def list_teams(sid: str):
-        """List agent teams and their task board status."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None or session._agent is None:
-            return []
-        agent = session._agent
-        if not getattr(agent, 'enable_agent_teams', False) or agent.team_manager is None:
-            return []
-        try:
-            state = agent.team_manager.export_state()
-        except Exception:
-            return []
-        work_items = state.get("work_items", {})
-        teams_data = state.get("teams", {})
-        result = []
-        for team_name, team_state in teams_data.items():
-            result.append(TeamInfo(
-                name=team_name,
-                queued=team_state.get("queued", 0),
-                running=team_state.get("running", 0),
-                succeeded=team_state.get("succeeded", 0),
-                failed=team_state.get("failed", 0),
-                active=team_state.get("active", 0),
-                idle=team_state.get("idle", 0),
-                approvals_pending=team_state.get("approvals_pending", 0),
-                blocked=team_state.get("blocked", 0),
-            ))
-        return result
+        return app.state.teams_service.list(sid)
 
     @app.post("/api/sessions/{sid}/teams", status_code=201)
     async def create_team(sid: str, body: TeamCreate):
-        """Create an agent team."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None or session._agent is None:
-            raise HTTPException(404, "Session not found")
-        agent = session._agent
-        if not getattr(agent, 'enable_agent_teams', False) or agent.team_manager is None:
-            raise HTTPException(400, "Agent teams not enabled. Toggle enable_agent_teams in session config first.")
-        try:
-            team = agent.team_manager.create_team(body.team_name)
-            return {"status": "created", "team": team.get("name", body.team_name)}
-        except Exception as exc:
-            raise HTTPException(500, str(exc))
+        return app.state.teams_service.create(sid, body.team_name)
 
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
     # WebSocket — event stream
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
 
     @app.websocket("/api/sessions/{sid}/stream")
     async def event_stream(ws: WebSocket, sid: str):
