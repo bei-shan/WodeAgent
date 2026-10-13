@@ -44,3 +44,7 @@ src/index.tsx        启动入口
 设计参见 [TUI v2 分层说明](../docs/design/2026-10-13-tui-v2-layered-architecture.md)。旧 Python TUI 已退役，OpenTUI 是唯一维护的终端界面。参见 [退役说明](../docs/design/2026-10-13-python-tui-retirement.md)。
 
 会话树：`/tree` 展示包含节点 ID 的分支视图，`/fork 1234abcd` 从对应消息分叉；仅空闲会话允许分叉，原分支保留，并立即持久化当前光标。旧的 `/fork` 功能现已由服务端 API 正式支持。
+
+### 会话导入／导出
+
+`/export ./conversation.json` 在终端所在机器上创建**新文件**（如果文件已存在则失败，不会覆盖）；`/import ./conversation.json` 从本机读取受大小限制的文件，并在后端**新建会话**。仅保留用户／助手可见对话、树分支和标签，不包含工具输出、密钥、系统提示词或 Teams 状态；这是可分享对话记录，**不是**可完整恢复工具运行环境的备份。JSON 可能包含私密聊天内容，请只分享给可信对象。

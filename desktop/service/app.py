@@ -14,6 +14,7 @@ Or run directly::
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -48,6 +49,8 @@ from desktop.service.application import (
     ServiceError, SessionService, TurnService, SessionSettingsService, TeamsService,
     WorkspaceService, ConfigCatalogService, SkillCatalogService,
 )
+from desktop.service.application.session_portability import MAX_BYTES
+from desktop.service.application.errors import InvalidInputError, PayloadTooLargeError
 from desktop.service.schemas import (
     SessionCreate,
     SessionInfo,
@@ -275,6 +278,30 @@ def create_app(
     async def create_session(body: SessionCreate):
         return app.state.session_service.create(body.title)
 
+    @app.post("/api/sessions/import", response_model=SessionInfo, status_code=201)
+    async def import_portable_session(request: Request):
+        """Import a bounded, validated portable conversation archive."""
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            raise InvalidInputError("Content-Type must be application/json")
+        body = bytearray()
+        async for part in request.stream():
+            body.extend(part)
+            if len(body) > MAX_BYTES:
+                raise PayloadTooLargeError("Portable session exceeds 1 MiB")
+        try:
+            def unique_keys(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("Duplicate JSON keys are not allowed")
+                    result[key] = value
+                return result
+            payload = json.loads(body.decode("utf-8"), object_pairs_hook=unique_keys)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise InvalidInputError("Invalid portable session JSON") from exc
+        return app.state.session_service.import_portable(payload)
+
     @app.get("/api/sessions", response_model=list[SessionInfo])
     async def list_sessions():
         return app.state.session_service.list()
@@ -302,6 +329,11 @@ def create_app(
     @app.get("/api/sessions/{sid}/history")
     async def get_session_history(sid: str):
         return app.state.session_service.history(sid)
+
+    @app.get("/api/sessions/{sid}/export")
+    async def export_portable_session(sid: str):
+        data = app.state.session_service.export_portable(sid)
+        return JSONResponse(content=data, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/sessions/{sid}/trace")
     async def get_session_trace(sid: str):
