@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
 import { createSessionEventHandler } from './state/sessionEvents'
+import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
 import { PermissionModal, AskUserModal, ToolCard, NavItem, SessionItem } from './components/ConversationWidgets'
 import { SkillsPanel, McpPanel, HooksPanel } from './components/ManagementPanels'
 import type { Message, ToolEntry, PermRequest, AskRequest } from './components/types'
 import AuthGate from './AuthGate'
-import type { SessionInfo, AgentEvent, SkillInfo, McpServerCfg, TeamInfo } from './api'
+import type { SessionInfo, SkillInfo, McpServerCfg, TeamInfo } from './api'
 
 // ═══════════════════════════════════════════════════════════════════════
 // Types
@@ -68,7 +69,6 @@ function AppCore() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
-  const [streamConnected, setStreamConnected] = useState(false)
   const [subagentStatus, setSubagentStatus] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const activeSidRef = useRef<string | null>(null)
@@ -78,7 +78,6 @@ function AppCore() {
   const [showModelPicker, setShowModelPicker] = useState(false)
 
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const disconnectRef = useRef<(() => void) | null>(null)
 
   // ── Init ────────────────────────────────────────────────────────
   const loadSessions = async () => { try { setSessions(await api.sessions.list()) } catch {} }
@@ -87,58 +86,49 @@ function AppCore() {
   useEffect(() => { api.skills.list().then(setSkillsList).catch(() => {}) }, [])
   useEffect(() => { api.mcp.list().then(setMcpServers).catch(() => {}) }, [])
 
-  const connectSession = (sid: string, replayFromStart = false) => {
-    setStreamConnected(false)
-    disconnectRef.current?.()
-    let previouslyConnected = false
-    disconnectRef.current = api.connectStream(
-      sid, handleEvent,
-      () => setStreamConnected(false),
-      () => {
-        if (activeSidRef.current !== sid) return
-        setStreamConnected(true)
-        if (previouslyConnected) {
-          // Recover terminal events that may have been missed offline.
-          api.sessions.get(sid).then(meta => {
-            if (activeSidRef.current !== sid) return
-            setSending(meta.busy)
-            if (!meta.busy) {
-              api.sessions.history(sid).then(data => {
-                if (activeSidRef.current === sid && data.messages.length) {
-                  setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
-                }
-              }).catch(() => {})
-            }
-          }).catch(() => {})
-        }
-        previouslyConnected = true
-      },
-      replayFromStart,
-    )
-  }
+  const handleEvent = createSessionEventHandler({
+    activeSidRef, setSubagentStatus, setMessages, setGeneratedFiles, setTools,
+    setPermReq, setAskReq, setSending, setTeamsList, loadSessions, uid,
+  })
+  const { connected: streamConnected, connect: connectSession, disconnect: disconnectSession } =
+    useSessionStream({
+      activeSidRef,
+      onEvent: handleEvent,
+      onBusy: setSending,
+      onRestore: messages => setMessages(messages.map(m => ({
+        id: uid(), role: m.role, content: m.content,
+      }))),
+    })
+  const selectionVersion = useRef(0)
 
   const selectSession = async (sid: string, fresh = false) => {
+    const version = ++selectionVersion.current
+    disconnectSession()
     activeSidRef.current = sid
+    const isCurrent = () => activeSidRef.current === sid && selectionVersion.current === version
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
     setGeneratedFiles([]); setSubagentStatus('')
     try {
       await api.sessions.activate(sid)
       const data = await api.sessions.history(sid)
-      if (activeSidRef.current === sid) {
+      if (isCurrent()) {
         setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
         connectSession(sid, fresh)
       }
       const meta = await api.sessions.get(sid)
-      if (activeSidRef.current === sid) setSending(meta.busy)
+      if (isCurrent()) setSending(meta.busy)
     } catch (e: any) { alert('打开会话失败：' + e.message) }
     try {
       const cfg = await api.config.get(sid)
-      if (activeSidRef.current === sid) {
+      if (isCurrent()) {
         setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode)
         setThinkingLevel(cfg.thinking_level); setSelectedModel(cfg.model)
       }
     } catch {}
-    try { if (activeSidRef.current === sid) setTeamsList(await api.teams.list(sid)) } catch {}
+    try {
+      const teams = await api.teams.list(sid)
+      if (isCurrent()) setTeamsList(teams)
+    } catch {}
   }
 
   const createSession = async () => {
@@ -149,7 +139,12 @@ function AppCore() {
   const deleteSession = async (sid: string) => {
     const prevSessions = sessions
     setSessions(prev => prev.filter(s => s.id !== sid))
-    if (activeSidRef.current === sid) { activeSidRef.current = null; setActiveSid(null); setStreamConnected(false); disconnectRef.current?.() }
+    if (activeSidRef.current === sid) {
+      ++selectionVersion.current
+      activeSidRef.current = null
+      setActiveSid(null)
+      disconnectSession()
+    }
     try { await api.sessions.delete(sid) } catch (e: any) {
       setSessions(prevSessions)
       if (activeSidRef.current === null) { activeSidRef.current = sid; setActiveSid(sid); connectSession(sid) }
@@ -169,14 +164,7 @@ function AppCore() {
     try { await api.teams.create(activeSid, newTeamName.trim()); setTeamsList(await api.teams.list(activeSid)); setNewTeamName(''); setShowNewTeam(false) } catch (e: any) { alert(e.message) }
   }
 
-  useEffect(() => () => { disconnectRef.current?.() }, [])
-
   // ── Events ──────────────────────────────────────────────────────
-  const handleEvent = createSessionEventHandler({
-    activeSidRef, setSubagentStatus, setMessages, setGeneratedFiles, setTools,
-    setPermReq, setAskReq, setSending, setTeamsList, loadSessions, uid,
-  })
-
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, tools])
 
   // ── Send ────────────────────────────────────────────────────────
