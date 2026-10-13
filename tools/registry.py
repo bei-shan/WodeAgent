@@ -54,6 +54,9 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
+        # When set, deny schema AND execution for all other tools, including
+        # dynamically registered plugins or MCP functions.
+        self._sandbox_allowed_tools: frozenset[str] | None = None
         # Read 元信息缓存（用于乐观锁自动注入）
         # key: path_resolved 或原始 path
         self._read_cache: dict[str, ReadMeta] = {}
@@ -67,6 +70,13 @@ class ToolRegistry:
             recovery_timeout=rt,
         )
 
+
+    def restrict_to_tools(self, allowed: set[str]) -> None:
+        """Guard every tool dispatch; no host fallback in Docker mode."""
+        self._sandbox_allowed_tools = frozenset(allowed)
+
+    def _tool_allowed(self, name: str) -> bool:
+        return self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools
 
     def register_tool(self, tool: Tool):
         """
@@ -120,7 +130,7 @@ class ToolRegistry:
         tools: list[dict[str, Any]] = []
 
         for tool in self._tools.values():
-            if not self._circuit_breaker.is_available(tool.name):
+            if not self._tool_allowed(tool.name) or not self._circuit_breaker.is_available(tool.name):
                 continue
             try:
                 params = tool.get_parameters()
@@ -136,7 +146,7 @@ class ToolRegistry:
             })
 
         for name, info in self._functions.items():
-            if not self._circuit_breaker.is_available(name):
+            if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
                 continue
             tools.append({
                 "type": "function",
@@ -213,10 +223,14 @@ class ToolRegistry:
 
     def get_tool(self, name: str) -> Optional[Tool]:
         """获取Tool对象"""
+        if not self._tool_allowed(name):
+            return None
         return self._tools.get(name)
 
     def get_function(self, name: str) -> Optional[Callable]:
         """获取工具函数"""
+        if not self._tool_allowed(name):
+            return None
         func_info = self._functions.get(name)
         return func_info["func"] if func_info else None
 
@@ -239,6 +253,12 @@ class ToolRegistry:
         else:
             parameters = {"input": input_text}
         
+        # Deny before optimistic-lock injection or any adapter execution.
+        if not self._tool_allowed(name):
+            return self._create_internal_error_response(
+                name, "Tool blocked by Docker sandbox policy.", parameters,
+            )
+
         # =====================================================================
         # 乐观锁自动注入：为 Write/Edit 注入 expected_mtime_ms / expected_size_bytes
         # =====================================================================
@@ -570,17 +590,19 @@ class ToolRegistry:
 
         # Tool对象描述
         for tool in self._tools.values():
-            descriptions.append(f"- {tool.name}: {tool.description}")
+            if self._tool_allowed(tool.name):
+                descriptions.append(f"- {tool.name}: {tool.description}")
 
         # 函数工具描述
         for name, info in self._functions.items():
-            descriptions.append(f"- {name}: {info['description']}")
+            if self._tool_allowed(name):
+                descriptions.append(f"- {name}: {info['description']}")
 
         return "\n".join(descriptions) if descriptions else "暂无可用工具"
 
     def list_tools(self) -> list[str]:
         """列出所有工具名称"""
-        return list(self._tools.keys()) + list(self._functions.keys())
+        return [name for name in [*self._tools, *self._functions] if self._tool_allowed(name)]
 
     def get_disabled_tools(self) -> list[str]:
         """获取当前被熔断禁用的工具列表。"""
@@ -588,7 +610,7 @@ class ToolRegistry:
 
     def get_all_tools(self) -> list[Tool]:
         """获取所有Tool对象"""
-        return list(self._tools.values())
+        return [tool for tool in self._tools.values() if self._tool_allowed(tool.name)]
 
     def clear(self):
         """清空所有工具"""
