@@ -17,6 +17,7 @@ from datetime import datetime
 from ..message import Message, generate_short_id
 from ..config import Config
 from .observation_truncator import truncate_observation
+from .continuity import build_continuity_anchor
 
 logger = logging.getLogger(__name__)
 
@@ -473,47 +474,89 @@ class HistoryManager:
             _emit("history_compression_skipped", info)
             return info if return_info else False
 
-        new_summary = None
-        if self._summary_generator:
-            try:
-                new_summary = self._summary_generator(messages_to_compress)
-            except Exception:
-                new_summary = None
+        # Do not discard completed work when the summarization service is
+        # unavailable, times out, or returns an invalid result. Retain the
+        # original messages so the user can retry with a working model.
+        if self._summary_generator is None:
+            info.update({"reason": "summary_generator_unavailable"})
+            _emit("history_compression_skipped", info)
+            return info if return_info else False
+
+        # Feed the *previous* compressed summaries back into summarization,
+        # then replace them with ONE consolidated summary. Repeated compaction
+        # must not grow an unbounded chain of summary messages.
+        summary_sources = existing_summaries + messages_to_compress
+        try:
+            new_summary = self._summary_generator(summary_sources)
+        except Exception:
+            logger.exception("Summary generation failed; original history retained")
+            new_summary = None
+
+        if not isinstance(new_summary, str) or not new_summary.strip():
+            info.update({"reason": "summary_generation_failed", "summary_generated": False})
+            _emit("history_compression_skipped", info)
+            return info if return_info else False
+
+        new_summary = new_summary.strip()
+
+        # A tiny but durable user-goal anchor survives successive compactions,
+        # even if a later model forgets the original objective. Treat this as
+        # historical user data, never as higher-priority system instructions.
+        prior_goal = next(
+            (m.metadata.get("continuity_goal") for m in existing_summaries
+             if (m.metadata or {}).get("continuity_goal")),
+            None,
+        )
+        user_goal = prior_goal or next(
+            (str(m.content) for m in messages_to_compress if m.role == "user"), ""
+        )
+        anchor_sources = ([Message(content=user_goal, role="user")] if user_goal else [])
+        anchor_sources.extend(messages_to_compress)
+        anchor = build_continuity_anchor(
+            anchor_sources, max_chars=self._config.context_anchor_max_chars,
+        )
+        if anchor:
+            new_summary += "\n\n<task_continuity>\n" + anchor + "\n</task_continuity>"
+
+        if len(new_summary) > self._config.summary_output_max_chars:
+            info.update({"reason": "summary_exceeds_budget", "summary_generated": False})
+            _emit("history_compression_skipped", info)
+            return info if return_info else False
 
         info.update({
-            "summary_generated": new_summary is not None,
-            "summary_len": len(new_summary) if isinstance(new_summary, str) else 0,
-            "summary_text": new_summary if isinstance(new_summary, str) else "",
+            "summary_generated": True,
+            "summary_len": len(new_summary),
+            # Do not inject model-generated text into tracing metadata.
+            "summary_text": "",
+            "messages_to_compress": len(messages_to_compress),
+            "existing_summaries": len(existing_summaries),
         })
-        _emit("history_compression_summary", info)
+        _emit("history_compression_summary", {
+            "summary_generated": True, "summary_len": len(new_summary),
+        })
 
-        # 重建消息列表
-        new_messages: List[Message] = []
-        new_messages.extend(existing_summaries)
-
-        if new_summary is not None:
-            summary_msg = Message(
-                content=new_summary,
-                role="summary",
-                metadata={"generated_at": datetime.now().isoformat()},
-                parent_id=self._cursor_id,
-            )
-            new_messages.append(summary_msg)
-            # 记录 compaction 条目（树模式）
-            first_kept = self._messages[retain_start_idx] if retain_start_idx < len(self._messages) else None
-            comp_entry = {
-                "type": ENTRY_COMPACTION,
-                "id": generate_short_id(),
-                "parentId": self._cursor_id,
-                "timestamp": datetime.now().isoformat(),
-                "summary": new_summary,
-                "firstKeptEntryId": first_kept.message_id if first_kept else None,
-                "tokensBefore": self._total_usage_tokens,
-            }
-            self._entries.append(comp_entry)
-
-        new_messages.extend(self._messages[retain_start_idx:])
-        self._messages = new_messages
+        summary_msg = Message(
+            content=new_summary,
+            role="summary",
+            metadata={
+                "generated_at": datetime.now().isoformat(),
+                "continuity_goal": user_goal[:self._config.context_anchor_max_chars],
+            },
+            parent_id=self._cursor_id,
+        )
+        # One compacted summary followed by complete recent turns. This also
+        # keeps any assistant tool-call / tool-result pairs intact.
+        self._messages = [summary_msg] + self._messages[retain_start_idx:]
+        first_kept = self._messages[1] if len(self._messages) > 1 else None
+        self._entries.append({
+            "type": ENTRY_COMPACTION,
+            "id": generate_short_id(),
+            "parentId": self._cursor_id,
+            "timestamp": datetime.now().isoformat(),
+            "summary": new_summary,
+            "firstKeptEntryId": first_kept.message_id if first_kept else None,
+            "tokensBefore": self._total_usage_tokens,
+        })
 
         # 更新 cursor 到压缩后的最后一条消息
         if self._messages:
