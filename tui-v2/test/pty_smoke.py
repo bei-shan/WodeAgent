@@ -110,7 +110,7 @@ def main():
         time.sleep(0.2)
         # Real keyboards deliver separate bytes; a single write can be parsed
         # as one unrecognized escape/input frame by terminal libraries.
-        for key in b"/help\\r".replace(b"\\\\r", b"\\r"):
+        for key in (47, 104, 101, 108, 112, 13):  # /help + Enter
             os.write(master, bytes([key]))
             time.sleep(0.06)
         if not pump(b"/fork", 5.0):
