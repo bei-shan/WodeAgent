@@ -1,0 +1,28 @@
+name: TUI v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tui-v2/**"
+      - ".github/workflows/tui-v2.yml"
+  pull_request:
+    paths:
+      - "tui-v2/**"
+      - ".github/workflows/tui-v2.yml"
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: tui-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun test
