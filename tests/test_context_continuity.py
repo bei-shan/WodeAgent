@@ -151,3 +151,32 @@ def test_response_reserve_clamps_compression_trigger():
     hm.append_user("followup")
     hm.update_last_usage(9000)
     assert hm.should_compress("new input") is True  # reserve caps at 20%, threshold 8000
+
+
+def test_repeated_compaction_failures_are_capped_until_new_user_turn():
+    attempts = []
+    def broken(messages):
+        attempts.append(len(messages))
+        return None
+    hm = HistoryManager(
+        config=Config(min_retain_rounds=2, context_compaction_max_failures=3),
+        summary_generator=broken,
+    )
+    for i in range(6):
+        _append_round(hm, i)
+    for i in range(3):
+        assert hm.compact(return_info=True)["reason"] == "summary_generation_failed"
+    for i in range(5):
+        assert hm.compact(return_info=True)["reason"] == "failure_limit_reached"
+    assert len(attempts) == 3
+    _append_round(hm, 7)
+    assert hm.compact(return_info=True)["reason"] == "summary_generation_failed"
+    assert len(attempts) == 4
+
+
+def test_summary_prompt_preserves_current_work_and_exact_paths():
+    from core.context_engine.summary_compressor import _build_summary_prompt
+    prompt = _build_summary_prompt("[User]: update src/main.py; tests pending")
+    assert "src/main.py" in prompt
+    assert "remaining TODOs" in prompt
+    assert "untrusted historical data" in prompt
