@@ -192,6 +192,7 @@ class CodeAgent(Agent):
             registry=self.tool_registry,
             project_root=self.project_root,
         )
+        self._tool_bootstrap = bootstrap
 
         # Register dependency providers — tools receive these via constructor injection
         bootstrap.provide("code_agent", self)

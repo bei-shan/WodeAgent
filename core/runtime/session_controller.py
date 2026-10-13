@@ -74,6 +74,7 @@ class AgentSession:
         self._workspace_base = workspace_base
         self._agent: Any = None  # created lazily on first send_message
         self._thread: Optional[threading.Thread] = None
+        self._agent_init_lock = threading.Lock()
         self._busy_lock = threading.Lock()
         self._busy = False
         self.last_turn = load_turn_outcome(session_id)
@@ -117,7 +118,7 @@ class AgentSession:
             self.title = content.strip()[:40]
 
         try:
-            self._ensure_agent()
+            self.ensure_agent()
         except Exception:
             with self._busy_lock:
                 self._busy = False
@@ -169,6 +170,17 @@ class AgentSession:
     @property
     def busy(self) -> bool:
         return self._busy
+
+    def ensure_agent(self) -> Any:
+        """Return the lazy agent; initialize it exactly once across API/worker calls."""
+        with self._agent_init_lock:
+            self._ensure_agent()
+            return self._agent
+
+    @property
+    def agent(self) -> Any:
+        """The active agent if already initialized; does not cause side effects."""
+        return self._agent
 
     # ── Internal ──────────────────────────────────────────────────────
 
