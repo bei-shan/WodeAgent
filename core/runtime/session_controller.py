@@ -21,19 +21,20 @@ a corresponding event, collects the user's answer, and calls
 Key guarantees
 --------------
 - One turn at a time per session (``send_message`` returns False if busy).
-- Thread-safe: queue, events, and pending-dict are all guarded.
+- Thread-safe: event journal, events, and pending-dict are all guarded.
+- WebSocket subscribers replay by sequence without stealing each other's events.
 - No dependency on any web framework — pure stdlib.
 """
 
 from __future__ import annotations
 
 import logging
-import queue
 import threading
 import uuid
 from typing import Any, Callable, Optional
 
 from core.events import AgentEvent, EventSink
+from core.runtime.event_journal import EventJournal
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,8 @@ class AgentSession:
         self._busy_lock = threading.Lock()
         self._busy = False
 
-        # Thread-safe event queue — UI reads from here.
-        self.events: queue.Queue[AgentEvent] = queue.Queue()
+        # Bounded, replayable journal; each WebSocket has an independent cursor.
+        self.events = EventJournal()
 
         # Pending permission / ask-user requests.
         #   {request_id: (threading.Event, dict-for-result)}
@@ -83,6 +84,16 @@ class AgentSession:
         self._pending_ask_user: dict[str, tuple[threading.Event, dict]] = {}
         self._perm_lock = threading.Lock()
         self._ask_lock = threading.Lock()
+        self._pending_permission_events: dict[str, AgentEvent] = {}
+        self._pending_ask_events: dict[str, AgentEvent] = {}
+
+    def pending_prompts(self) -> list[AgentEvent]:
+        """Snapshot prompts still waiting for UI input (for reconnects)."""
+        with self._perm_lock:
+            permissions = list(self._pending_permission_events.values())
+        with self._ask_lock:
+            asks = list(self._pending_ask_events.values())
+        return permissions + asks
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -125,6 +136,7 @@ class AgentSession:
         """
         with self._perm_lock:
             entry = self._pending_permissions.pop(request_id, None)
+            self._pending_permission_events.pop(request_id, None)
         if entry is None:
             return False
         event, result = entry
@@ -136,6 +148,7 @@ class AgentSession:
         """Unblock a pending AskUser request."""
         with self._ask_lock:
             entry = self._pending_ask_user.pop(request_id, None)
+            self._pending_ask_events.pop(request_id, None)
         if entry is None:
             return False
         event, result = entry
@@ -246,11 +259,13 @@ class AgentSession:
                 result.setdefault("decision", "denied")
                 event.set()
             self._pending_permissions.clear()
+            self._pending_permission_events.clear()
         with self._ask_lock:
             for event, result in self._pending_ask_user.values():
                 result.setdefault("answer", "")
                 event.set()
             self._pending_ask_user.clear()
+            self._pending_ask_events.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -301,7 +316,7 @@ class SessionController:
 class _QueueEventSink(EventSink):
     """EventSink that pushes agent events into a thread-safe queue."""
 
-    def __init__(self, q: queue.Queue):
+    def __init__(self, q: EventJournal):
         self._queue = q
 
     def emit(self, event: AgentEvent) -> None:
@@ -322,21 +337,23 @@ class _SessionPermissionBroker:
         done = threading.Event()
         result: dict[str, str] = {}
 
-        with self._session._perm_lock:
-            self._session._pending_permissions[request_id] = (done, result)
-
-        # Push event so the frontend shows a permission dialog.
-        self._session.events.put(AgentEvent(SESSION_EVENT_PERMISSION, {
+        prompt = AgentEvent(SESSION_EVENT_PERMISSION, {
             "request_id": request_id,
             "tool": tool_name,
             "path": resolved_path,
             "action": action,
-        }))
+        })
+        with self._session._perm_lock:
+            self._session._pending_permissions[request_id] = (done, result)
+            self._session._pending_permission_events[request_id] = prompt
+
+        self._session.events.put(prompt)
 
         # Block until frontend responds (or timeout).
         if not done.wait(timeout=self.PERMISSION_TIMEOUT):
             with self._session._perm_lock:
                 self._session._pending_permissions.pop(request_id, None)
+                self._session._pending_permission_events.pop(request_id, None)
             return "denied"
 
         return result.get("decision", "denied")
@@ -356,17 +373,20 @@ class _SessionAskUserFunc:
         done = threading.Event()
         result: dict[str, str] = {}
 
-        with self._session._ask_lock:
-            self._session._pending_ask_user[request_id] = (done, result)
-
-        self._session.events.put(AgentEvent(SESSION_EVENT_ASK_USER, {
+        question = AgentEvent(SESSION_EVENT_ASK_USER, {
             "request_id": request_id,
             "prompt": prompt,
-        }))
+        })
+        with self._session._ask_lock:
+            self._session._pending_ask_user[request_id] = (done, result)
+            self._session._pending_ask_events[request_id] = question
+
+        self._session.events.put(question)
 
         if not done.wait(timeout=self.ASK_TIMEOUT):
             with self._session._ask_lock:
                 self._session._pending_ask_user.pop(request_id, None)
+                self._session._pending_ask_events.pop(request_id, None)
             return ""
 
         return result.get("answer", "")
