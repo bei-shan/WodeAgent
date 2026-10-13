@@ -178,5 +178,10 @@ def get_telemetry() -> Telemetry:
     if backend not in ("langfuse", "otlp"):
         logger.warning("Unknown AGENT_TELEMETRY_BACKEND; tracing disabled")
         return _DISABLED
+    if backend == "langfuse" and not (
+        os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+    ):
+        logger.warning("Langfuse telemetry requires public and secret keys")
+        return _DISABLED
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "") if backend == "otlp" else ""
     return _initialize(backend, endpoint)
