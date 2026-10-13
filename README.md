@@ -96,6 +96,18 @@ Web (desktop/web)          OpenTUI (tui-v2)
 
 设计细节参见 [架构参考方案](docs/design/2026-10-13-reference-agent-architecture.md)、[TS TUI 分层设计](docs/design/2026-10-13-tui-v2-layered-architecture.md) 和 [工作区安全说明](docs/design/2026-10-13-descriptor-anchored-workspaces.md)。`docs/` 内一些较早的设计材料为历史记录，不应视为当前功能承诺。
 
+## 可选 Langfuse / OpenTelemetry 追踪
+
+本地 JSONL/HTML Trace 默认保持独立。远程追踪**默认关闭**，仅导出 Agent turn、模型调用和工具调用的层级、耗时、状态、工具/模型名称和 Token 计数，不导出提示词、文件内容、工具参数/输出或异常堆栈。安装可选依赖：
+
+```bash
+python -m pip install -r requirements-observability.txt
+```
+
+在私有 `.env` 中选择一个后端：`AGENT_TELEMETRY_BACKEND=langfuse`，并设置 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_BASE_URL`；或者设置 `AGENT_TELEMETRY_BACKEND=otlp` 与 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`（HTTP/protobuf traces URL）。两种后端互斥。
+
+详细配置、数据外发边界和测试说明参见 [Langfuse/OpenTelemetry 接入设计](docs/design/2026-10-13-optional-otel-langfuse-tracing.md)。
+
 ## 测试和开发
 
 ```bash

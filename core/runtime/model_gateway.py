@@ -33,6 +33,31 @@ class ModelGateway:
         tool_choice: str, features: Iterable[ModelInterceptor],
         agent: Any, on_delta: Callable[[str, str], None],
     ) -> Any:
+        from core.runtime.telemetry import get_telemetry
+        from core.response_parser import extract_usage
+
+        model_name = getattr(self.provider, "model", None)
+        with get_telemetry().span(
+            "agent.model", kind="generation", model=model_name,
+        ) as observation:
+            result = self._invoke_untraced(
+                messages=messages, tools_schema=tools_schema,
+                tool_choice=tool_choice, features=features,
+                agent=agent, on_delta=on_delta,
+            )
+            # The token counts come from the provider response; prompt and
+            # output content are deliberately never passed to telemetry.
+            try:
+                observation.usage(extract_usage(result))
+            except Exception:
+                pass
+            return result
+
+    def _invoke_untraced(
+        self, *, messages: list[dict], tools_schema: Any,
+        tool_choice: str, features: Iterable[ModelInterceptor],
+        agent: Any, on_delta: Callable[[str, str], None],
+    ) -> Any:
         def invoke_provider() -> Any:
             if self.streaming and hasattr(self.provider, "stream_raw"):
                 # Never replay a partially streamed model call as a nonstream

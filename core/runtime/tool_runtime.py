@@ -48,6 +48,31 @@ class ToolRuntime:
         emit_messages: Callable[[list[str]], None],
         record_timing: Callable[[str, int], None],
     ) -> str:
+        from core.runtime.telemetry import get_telemetry
+        with get_telemetry().span(
+            "agent.tool", kind="tool",
+            attributes={"ridge.tool.name": tool_name},
+        ) as observation:
+            result = self._execute_untraced(
+                tool_name, tool_input, agent=agent, features=features,
+                emit_messages=emit_messages, record_timing=record_timing,
+            )
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict):
+                    status = parsed.get("status")
+                    if status in ("success", "partial", "error"):
+                        observation.attribute("ridge.tool.status", status)
+            except (ValueError, TypeError):
+                pass
+            return result
+
+    def _execute_untraced(
+        self, tool_name: str, tool_input: Any, *,
+        agent: Any, features: Iterable[ToolFeature],
+        emit_messages: Callable[[list[str]], None],
+        record_timing: Callable[[str, int], None],
+    ) -> str:
         parameters = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
         started = time.monotonic()
         # Features may be a generator; all interceptors must see the same order

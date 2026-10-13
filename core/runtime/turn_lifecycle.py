@@ -34,6 +34,16 @@ class AgentTurnLifecycle:
         self.host = host
 
     def run(self, input_text: str, **kwargs) -> str:
+        """Run one turn with one optional trace root per invocation."""
+        from core.runtime.telemetry import get_telemetry
+
+        # Deliberately omit the input, session identifier, paths and output.
+        with get_telemetry().span("agent.turn", kind="agent") as observation:
+            result = self._run(input_text, **kwargs)
+            observation.attribute("ridge.turn.status", getattr(self.host, "last_turn_status", "completed"))
+            return result
+
+    def _run(self, input_text: str, **kwargs) -> str:
         """Run one Agent turn with deterministic completion."""
         host = self.host
         show_raw = kwargs.pop("show_raw", False)
