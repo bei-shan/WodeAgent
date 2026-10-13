@@ -5,6 +5,7 @@
 - **Agent 引擎**：Python 3.12+、ReAct、工具调用、可组合 Feature、模型路由
 - **交互界面**：React/TypeScript Web、TypeScript/OpenTUI 终端（实验性），以及保留的 Python TUI
 - **执行能力**：代码读写、命令执行、MCP、Skills、子代理与 Agent Teams
+- **工具调度**：相邻的安全只读 LS/Glob/Grep 可有限并发；修改类、交互类及未声明安全的工具保持串行，并记录 Trace 批次指标
 - **上下文管理**：会话树、压缩、工具输出截断、Trace 与流式事件
 - **安全选项**：工作区路径边界、工具权限、可选的本地 Web 登录、实验性 Docker 工具隔离
 
