@@ -530,10 +530,10 @@ class CodeAgent(Agent):
                 tool._permission_gate = self._permission_gate
 
     def interrupt(self) -> None:
-        """Request cooperative cancellation, checked between LLM/tool steps.
+        """Cancel future tool steps and signal the active Bash invocation.
 
-        An in-flight provider request or shell process cannot be preempted.
-        The turn exits before the next tool/LLM step after that call returns.
+        Bash can terminate its POSIX child process group cooperatively.
+        Provider/MCP requests and other tools may still require timeout.
         """
         self._interrupt_requested.set()
 
@@ -1131,16 +1131,18 @@ class CodeAgent(Agent):
     def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
         """Execute one tool via the decoupled feature-aware runtime port."""
         from core.runtime.tool_runtime import ToolRuntime
+        from core.runtime.cancellation import scoped_tool_cancellation
         if not hasattr(self, "_last_tool_timing"):
             self._last_tool_timing: dict[str, int] = {}
-        return ToolRuntime(self.tool_registry, self.logger).execute(
-            tool_name,
-            tool_input,
-            agent=self,
-            features=self._features,
-            emit_messages=self._hook_system_messages.extend,
-            record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
-        )
+        with scoped_tool_cancellation(getattr(self, "_interrupt_requested", None)):
+            return ToolRuntime(self.tool_registry, self.logger).execute(
+                tool_name,
+                tool_input,
+                agent=self,
+                features=self._features,
+                emit_messages=self._hook_system_messages.extend,
+                record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
+            )
 
     def set_delegate_mode(self, enabled: bool) -> None:
         self.delegate_mode = bool(enabled)
