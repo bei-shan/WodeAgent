@@ -237,3 +237,32 @@ test('cancelled turn remains cancelled after legacy completion event', async ({ 
   await expect(page.getByText('已停止生成（用户中断）')).toHaveCount(1)
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0)
 })
+
+test('local token login gates the chat before session API calls', async ({ page }) => {
+  const backend = await mockBackend(page)
+  await page.route('**/api/auth/status', route => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ required: true, authenticated: false }),
+  }))
+  await page.route('**/api/auth/login', route => {
+    const ok = route.request().postDataJSON().token === 'secret-for-test'
+    return route.fulfill({
+      status: ok ? 200 : 401, contentType: 'application/json',
+      body: JSON.stringify(ok ? { status: 'ok' } : { detail: 'Invalid login token' }),
+    })
+  })
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: '解锁 WodeAgent' })).toBeVisible()
+  await expect(page.getByPlaceholder('问任何问题')).toHaveCount(0)
+  await page.getByRole('textbox', { name: '本地访问令牌' }).fill('wrong')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page.getByRole('alert')).toBeVisible()
+  await page.getByRole('textbox', { name: '本地访问令牌' }).fill('secret-for-test')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page.getByText('Hi, 我是 MyCodeAgent')).toBeVisible()
+  await expect(page.getByPlaceholder('问任何问题')).toBeVisible()
+  const saved = await page.evaluate(() => {
+    return JSON.stringify(Object.keys(localStorage).map(x => [x, localStorage.getItem(x)]))
+  })
+  expect(saved).not.toContain('secret-for-test')
+})
