@@ -102,7 +102,12 @@ class AgentSession:
         if not self.title:
             self.title = content.strip()[:40]
 
-        self._ensure_agent()
+        try:
+            self._ensure_agent()
+        except Exception:
+            with self._busy_lock:
+                self._busy = False
+            raise
         self._thread = threading.Thread(
             target=self._run_turn,
             args=(content,),
@@ -178,6 +183,11 @@ class AgentSession:
 
         # Install session-scoped event sink → queue.
         agent.event_sink = _QueueEventSink(self.events)
+        # Stream content tokens to the Web event queue, including reasoning
+        # metadata (the UI deliberately displays only content deltas).
+        agent.llm_stream_callback = lambda kind, text, step: self.events.put(
+            AgentEvent("llm.delta", {"kind": kind, "text": text}, step=step)
+        )
 
         # Wire permission broker → blocks on permission.requested events.
         broker = _SessionPermissionBroker(self)
