@@ -1,6 +1,7 @@
 /** Terminal commands. Unknown slash commands must never reach the model. */
 export type TerminalCommand =
-  | { type: "help" | "new" | "sessions" | "models" | "pin" | "stop" }
+  | { type: "help" | "new" | "sessions" | "models" | "pin" | "stop" | "tree" }
+  | { type: "fork"; targetId: string }
   | { type: "use"; index: number }
   | { type: "rename"; title: string }
   | { type: "delete"; confirmed: boolean }
@@ -12,6 +13,7 @@ export const TERMINAL_HELP = [
   "/help · /new · /sessions · /use N",
   "/rename TITLE · /pin · /delete confirm",
   "/models · /model PROFILE · /plan on|off · /teams on|off",
+  "/tree · /fork NODE_ID (8 hex chars)",
   "/stop · Ctrl+N new · Ctrl+C interrupt/exit",
 ].join("\n")
 
@@ -25,6 +27,11 @@ export function parseTerminalCommand(raw: string): TerminalCommand | null {
     case "new": return { type: "new" }
     case "sessions": return { type: "sessions" }
     case "models": return { type: "models" }
+    case "tree": return { type: "tree" }
+    case "fork":
+      return /^[0-9a-f]{8}$/.test(arg)
+        ? { type: "fork", targetId: arg }
+        : { type: "invalid", reason: "Usage: /fork NODE_ID (8 lowercase hex chars)" }
     case "pin": return { type: "pin" }
     case "stop": return { type: "stop" }
     case "use": {
