@@ -51,3 +51,19 @@ until a timeout of up to 10 minutes, even if the UI said "Stopped".
    stream generators, and the broader background execution lifecycle.
 3. Add trace metadata for interruption cause and per-tool elapsed duration,
    with opt-in sanitized OpenTelemetry/Langfuse export later.
+
+## Incidental full-suite concurrency regression
+
+The initial CI on this PR exposed a separate existing race in
+`core/team_engine/task_board_store.py`: an idle worker concurrently updates
+a task JSON file while the main thread reads it, observing a zero-byte
+intermediate file and raising `JSONDecodeError`.
+
+The store now writes JSON into a private same-directory temporary file,
+flushes and fsyncs it, then atomically replaces the destination with
+`os.replace`. Lock-free readers observe the full old snapshot or the full new
+snapshot, not an in-progress write. Failed replacement removes temporary
+files and retains the previously committed JSON snapshot.
+
+`tests/test_task_board_atomic_io.py` checks concurrent readers and writers
+as well as fault injection during replacement.
