@@ -565,108 +565,14 @@ class TeamManager:
         return self.worker_supervisor.has_worker(team_name, teammate_name)
 
     def export_state(self) -> Dict[str, Any]:
-        teams = self.store.list_teams()
-        team_states: Dict[str, Dict[str, Any]] = {}
-        work_counts: Dict[str, Dict[str, Any]] = {}
-        approval_counts: Dict[str, Dict[str, Any]] = {}
-        task_board_counts: Dict[str, Dict[str, Any]] = {}
-        for name in teams:
-            team_state = self.get_status(name)
-            worker_state = self.worker_supervisor.team_state(name)
-            team_state.update(worker_state)
-            team_states[name] = team_state
-            work_counts[name] = self.collect_work(name).get("counts", {})
-            all_reqs = self.list_plan_approvals(name)
-            pending_reqs = [req for req in all_reqs if req.get("status") == "pending"]
-            approval_counts[name] = {
-                "pending": len(pending_reqs),
-                "approved": len([req for req in all_reqs if req.get("status") == "approved"]),
-                "rejected": len([req for req in all_reqs if req.get("status") == "rejected"]),
-                "requests": all_reqs,
-            }
-            board_rows = self.list_board_tasks(name)
-            blocked = 0
-            pending = 0
-            in_progress = 0
-            for row in board_rows:
-                status = str(row.get("status") or "")
-                blocked_by = row.get("blocked_by")
-                if status == "pending":
-                    pending += 1
-                    if isinstance(blocked_by, list) and blocked_by:
-                        blocked += 1
-                elif status == "in_progress":
-                    in_progress += 1
-            task_board_counts[name] = {
-                "total": len(board_rows),
-                "blocked": blocked,
-                "pending": pending,
-                "in_progress": in_progress,
-            }
-        processed_messages: Dict[str, List[str]] = {}
-        for (team, member), msg_ids in self._processed_by_member.items():
-            key = f"{team}|{member}"
-            processed_messages[key] = list(msg_ids)
-
-        inbox_cursors: Dict[str, int] = {}
-        for (team, member), cursor in getattr(self, "_inbox_cursor", {}).items():
-            key = f"{team}|{member}"
-            inbox_cursors[key] = cursor
-
-        return {
-            "teams": team_states,
-            "work_items": work_counts,
-            "approvals": approval_counts,
-            "task_board": task_board_counts,
-            "processed_messages": processed_messages,
-            "inbox_cursors": inbox_cursors,
-        }
+        """Build a stable session snapshot via the checkpoint projection owner."""
+        from .checkpoint import TeamCheckpointService
+        return TeamCheckpointService(self).snapshot()
 
     def import_state(self, state: Optional[Dict[str, Any]]) -> None:
-        snapshot = state or {}
-        names = set(self.store.list_teams())
-        snapshot_teams = snapshot.get("teams")
-        if isinstance(snapshot_teams, dict):
-            names.update(snapshot_teams.keys())
-        for team_name in sorted(names):
-            try:
-                cfg = self.store.read_team(team_name)
-            except FileNotFoundError:
-                continue
-            self.store.requeue_running_work_items(team_name)
-        # Restore processed message IDs from snapshot.
-        snapshot_processed = snapshot.get("processed_messages")
-        if isinstance(snapshot_processed, dict):
-            for key, msg_ids in snapshot_processed.items():
-                if "|" in key and isinstance(msg_ids, list):
-                    team, member = key.split("|", 1)
-                    self._processed_by_member[(team, member)] = set(msg_ids)
-        # Restore inbox cursors from snapshot.
-        snapshot_cursors = snapshot.get("inbox_cursors")
-        if isinstance(snapshot_cursors, dict):
-            if not hasattr(self, "_inbox_cursor"):
-                self._inbox_cursor: Dict[tuple[str, str], int] = {}
-            for key, cursor in snapshot_cursors.items():
-                if "|" in key and isinstance(cursor, int):
-                    team, member = key.split("|", 1)
-                    self._inbox_cursor[(team, member)] = cursor
-        # Restore pending approval requests from snapshot.
-        snapshot_approvals = snapshot.get("approvals")
-        if isinstance(snapshot_approvals, dict):
-            for team, data in snapshot_approvals.items():
-                if not isinstance(data, dict):
-                    continue
-                requests = data.get("requests")
-                if not isinstance(requests, list):
-                    continue
-                for req in requests:
-                    if not isinstance(req, dict):
-                        continue
-                    req_id = str(req.get("request_id") or "").strip()
-                    if not req_id or req_id in self.approval_service._requests:
-                        continue
-                    restored = self.approval_service.upsert_request(dict(req))
-                    self._persist_approval(restored)
+        """Restore persisted state without implicitly starting workers."""
+        from .checkpoint import TeamCheckpointService
+        TeamCheckpointService(self).restore(state)
 
     def resume_workers(self, team_name: Optional[str] = None) -> int:
         """Explicitly start teammate workers after restoring state."""
