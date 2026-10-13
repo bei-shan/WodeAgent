@@ -134,3 +134,13 @@ def test_restart_restores_same_agent_conversation(tmp_path, monkeypatch):
         assert [m["content"] for m in history] == [
             "first", "回答：first", "second", "回答：second",
         ]
+
+def test_documented_factory_entrypoint_and_missing_session_are_safe(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # The documented uvicorn ...:create_app --factory path must work without
+    # initializing an LLM or requiring credentials at server startup.
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/sessions/not-a-session/files").status_code == 404
+        assert client.get("/api/sessions/not-a-session/files/content", params={"path": "README.md"}).status_code == 404
