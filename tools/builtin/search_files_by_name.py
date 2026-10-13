@@ -26,6 +26,9 @@ class SearchFilesByNameTool(Tool):
     # 最大搜索时间（毫秒）
     MAX_DURATION_MS = 2_000
 
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        return True
+
     def __init__(self, name: str = "Glob", project_root: Optional[Path] = None):
         """
         初始化文件搜索工具
