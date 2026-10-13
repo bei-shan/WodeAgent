@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional, Any, Callable, TypedDict
 from .base import Tool, ToolStatus, ErrorCode, ToolParameter
 from .circuit_breaker import CircuitBreaker
 from core.env import load_env
+from core.runtime.config_scope import active_config
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -51,7 +52,8 @@ class ToolRegistry:
     包含乐观锁自动注入机制，自动管理 Read 元信息缓存。
     """
 
-    def __init__(self):
+    def __init__(self, config: "Optional[Config]" = None):
+        self._config = config or active_config() or _config
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
         # When set, deny schema AND execution for all other tools, including
@@ -60,8 +62,8 @@ class ToolRegistry:
         # Read 元信息缓存（用于乐观锁自动注入）
         # key: path_resolved 或原始 path
         self._read_cache: dict[str, ReadMeta] = {}
-        if _config is not None:
-            ft, rt = _config.circuit_failure_threshold, _config.circuit_recovery_timeout
+        if self._config is not None:
+            ft, rt = self._config.circuit_failure_threshold, self._config.circuit_recovery_timeout
         else:
             ft = int(os.getenv("CIRCUIT_FAILURE_THRESHOLD", "3"))
             rt = int(os.getenv("CIRCUIT_RECOVERY_TIMEOUT", "300"))
@@ -70,6 +72,18 @@ class ToolRegistry:
             recovery_timeout=rt,
         )
 
+
+    def configure(self, config: "Config") -> None:
+        """Bind circuit policy to the owning Agent's private config.
+
+        Call before dispatch; clients must not share a mutable ToolRegistry
+        across independently configured Agent sessions.
+        """
+        self._config = config
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=config.circuit_failure_threshold,
+            recovery_timeout=config.circuit_recovery_timeout,
+        )
 
     def restrict_to_tools(self, allowed: set[str]) -> None:
         """Guard every tool dispatch; no host fallback in Docker mode."""
