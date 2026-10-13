@@ -221,6 +221,11 @@ class BashTool(Tool):
 
         # 安全策略：简单命令用 shell=False（防注入），复杂命令用 shell=True（已过安全检测）
         exec_command = command
+        # The safety parser already accepts uppercase CD (Windows parity).
+        # Normalize a leading CD before /bin/sh so the actual execution
+        # matches the checked path on POSIX, too.
+        if os.name != "nt":
+            exec_command = re.sub(r"^(\\s*)CD\\b", r"\\1cd", command, count=1, flags=re.IGNORECASE)
         force_shell = False
         if os.name == "nt":
             exec_command, force_shell = self._translate_windows_shell_compat(command)
