@@ -225,7 +225,7 @@ class BashTool(Tool):
         # Normalize a leading CD before /bin/sh so the actual execution
         # matches the checked path on POSIX, too.
         if os.name != "nt":
-            exec_command = re.sub(r"^(\\s*)CD\\b", r"\\1cd", command, count=1, flags=re.IGNORECASE)
+            exec_command = re.sub(r"^(\s*)CD\b", r"\1cd", command, count=1, flags=re.IGNORECASE)
         force_shell = False
         if os.name == "nt":
             exec_command, force_shell = self._translate_windows_shell_compat(command)
