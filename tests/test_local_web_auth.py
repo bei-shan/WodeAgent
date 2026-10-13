@@ -159,3 +159,10 @@ def test_short_credential_refused_at_app_creation(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_AUTH_TOKEN", "short")
     with pytest.raises(ValueError, match="24"):
         create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+
+def test_short_numeric_hex_prefix_never_aliases_a_list_index(tmp_path):
+    from core.session_manager import SessionManager
+    mgr = SessionManager(sessions_dir=str(tmp_path))
+    sid = mgr.create_session()
+    assert mgr.resolve_identifier("01") is None
+    assert mgr.resolve_identifier("1") == sid
