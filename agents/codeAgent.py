@@ -888,10 +888,11 @@ class CodeAgent(Agent):
         )
 
         parsed_calls = []
-        for call in tool_calls:
+        for call_index, call in enumerate(tool_calls):
             raw_args = call.get("arguments") or {}
             tool_input, parse_err = ensure_json_input(raw_args)
             parsed_calls.append({
+                "index": call_index,
                 "name": call.get("name") or "unknown_tool",
                 "id": call["id"],
                 "input": tool_input,
@@ -925,22 +926,24 @@ class CodeAgent(Agent):
             max_workers=max_workers if policy_allows_parallel else 1,
         )
 
-        def execute(item: dict) -> tuple[str, str | None, str | None]:
+        def execute(item: dict) -> tuple[str, str | None, str | None, int]:
             """Only dispatch is allowed to run inside a worker thread."""
             if item["parse_error"]:
                 result = {
                     "status": "error", "data": {},
                     "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {item['parse_error']}"},
                 }
-                return json.dumps(result, ensure_ascii=False), None, None
+                return json.dumps(result, ensure_ascii=False), None, None, 0
+            dispatch_started = time.monotonic()
             try:
-                return str(self._execute_tool(item["name"], item["input"])), None, None
+                result = str(self._execute_tool(item["name"], item["input"]))
+                return result, None, None, int((time.monotonic() - dispatch_started) * 1000)
             except Exception as exc:
                 result = {
                     "status": "error", "data": {},
                     "error": {"code": "EXECUTION_ERROR", "message": str(exc)},
                 }
-                return json.dumps(result, ensure_ascii=False), str(exc), tb.format_exc()
+                return json.dumps(result, ensure_ascii=False), str(exc), tb.format_exc(), int((time.monotonic() - dispatch_started) * 1000)
 
         for batch in batches:
             interrupted = self._interrupt_requested.is_set()
@@ -961,7 +964,7 @@ class CodeAgent(Agent):
                         continue
                     trace_logger.log_event("tool_call", {
                         "tool": item["name"], "args": item["input"],
-                        "tool_call_id": item["id"],
+                        "tool_call_id": item["id"], "call_index": item["index"],
                     }, step=step)
                     self.event_sink.emit(AgentEvent(EventType.TOOL_STARTED, {
                         "tool": item["name"], "input": item["input"],
@@ -980,12 +983,12 @@ class CodeAgent(Agent):
                     (json.dumps({
                         "status": "error", "data": {},
                         "error": {"code": "INTERRUPTED", "message": "Tool not executed: user interrupted"},
-                    }, ensure_ascii=False), None, None)
+                    }, ensure_ascii=False), None, None, 0)
                     for _ in batch.calls
                 ]
 
             errors = 0
-            for item, (observation, execution_error, error_trace) in zip(batch.calls, outcomes):
+            for item, (observation, execution_error, error_trace, call_duration_ms) in zip(batch.calls, outcomes):
                 tool_name, tool_call_id, tool_input = item["name"], item["id"], item["input"]
                 if item["parse_error"]:
                     errors += 1
@@ -1012,11 +1015,13 @@ class CodeAgent(Agent):
                         payload = json.loads(observation)
                         trace_logger.log_event("tool_result", {
                             "tool": tool_name, "tool_call_id": tool_call_id,
+                            "call_index": item["index"], "duration_ms": call_duration_ms,
                             "result": payload,
                         }, step=step)
                     except (json.JSONDecodeError, TypeError):
                         trace_logger.log_event("tool_result", {
                             "tool": tool_name, "tool_call_id": tool_call_id,
+                            "call_index": item["index"], "duration_ms": call_duration_ms,
                             "result": {"text": observation},
                         }, step=step)
 
