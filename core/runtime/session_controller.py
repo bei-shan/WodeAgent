@@ -308,6 +308,26 @@ class SessionController:
         logger.info("Session created: %s", session_id)
         return session_id
 
+    def attach_session(
+        self, session_id: str, agent_factory: Callable[[], Any], title: str = "",
+    ) -> AgentSession:
+        """Attach an existing persisted session without creating a throwaway ID.
+
+        This is atomic and idempotent for concurrent reconnecting clients.
+        The application service validates persistence before calling this.
+        """
+        if len(session_id) != 12 or any(c not in "0123456789abcdef" for c in session_id):
+            raise ValueError("Invalid session ID")
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = AgentSession(
+                    session_id, agent_factory, workspace_base=self._workspace_base,
+                )
+                session.title = title
+                self._sessions[session_id] = session
+            return session
+
     def get_session(self, session_id: str) -> Optional[AgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
