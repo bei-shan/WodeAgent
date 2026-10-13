@@ -14,3 +14,11 @@ class ConflictError(ServiceError):
 
 class InvalidInputError(ServiceError):
     kind = "invalid_input"
+
+
+class ForbiddenError(ServiceError):
+    kind = "forbidden"
+
+
+class PayloadTooLargeError(ServiceError):
+    kind = "too_large"
