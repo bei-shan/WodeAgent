@@ -68,12 +68,15 @@ class HistoryManager:
         # Token 追踪
         self._last_usage_tokens: int = 0
         self._total_usage_tokens: int = 0
+        self._consecutive_compaction_failures: int = 0
 
     # ═════════════════════════════════════════════════════════════════════
     # 公开接口 — 消息写入
     # ═════════════════════════════════════════════════════════════════════
 
     def append_user(self, content: str, metadata: Optional[dict] = None) -> Message:
+        # A new request may legitimately need a fresh compaction attempt.
+        self._consecutive_compaction_failures = 0
         msg = Message(
             content=content,
             role="user",
@@ -443,6 +446,13 @@ class HistoryManager:
                     pass
 
         info: dict = {"compressed": False}
+        if self._consecutive_compaction_failures >= max(
+            1, self._config.context_compaction_max_failures
+        ):
+            info.update({"reason": "failure_limit_reached"})
+            _emit("history_compression_skipped", info)
+            return info if return_info else False
+
         rounds = self._identify_rounds()
         min_rounds = self._config.min_retain_rounds
 
@@ -504,6 +514,7 @@ class HistoryManager:
             new_summary = None
 
         if not isinstance(new_summary, str) or not new_summary.strip():
+            self._consecutive_compaction_failures += 1
             info.update({"reason": "summary_generation_failed", "summary_generated": False})
             _emit("history_compression_skipped", info)
             return info if return_info else False
@@ -530,6 +541,7 @@ class HistoryManager:
             new_summary += "\n\n<task_continuity>\n" + anchor + "\n</task_continuity>"
 
         if len(new_summary) > self._config.summary_output_max_chars:
+            self._consecutive_compaction_failures += 1
             info.update({"reason": "summary_exceeds_budget", "summary_generated": False})
             _emit("history_compression_skipped", info)
             return info if return_info else False
@@ -557,6 +569,8 @@ class HistoryManager:
         )
         # One compacted summary followed by complete recent turns. This also
         # keeps any assistant tool-call / tool-result pairs intact.
+        self._consecutive_compaction_failures = 0
+        self._last_usage_tokens = 0
         self._messages = [summary_msg] + self._messages[retain_start_idx:]
         first_kept = self._messages[1] if len(self._messages) > 1 else None
         self._entries.append({
