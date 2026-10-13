@@ -80,6 +80,7 @@ class CodeAgent(Agent):
         self.last_response_raw: Optional[Any] = None
         self.llm_stream_callback = None
         self.last_turn_status = 'completed'
+        self.last_turn_error_kind = None
         self._interrupt_requested = threading.Event()
         # Structured event sink — UI adapters subscribe here instead of
         # overriding _console().  Default is no-op (headless/testing safe).
@@ -595,6 +596,7 @@ class CodeAgent(Agent):
             self.logger.debug("Engine 启动: %s", input_text)
 
         response_text = ""
+        self._run_limit_hit = False
         run_failed = False
         try:
             response_text = self._react_loop(
@@ -608,8 +610,10 @@ class CodeAgent(Agent):
         finally:
             stopped = self._interrupt_requested.is_set()
             self.last_turn_status = (
-                "cancelled" if stopped else "failed" if run_failed else "completed"
+                "cancelled" if stopped else "failed"
+                if run_failed or self._run_limit_hit else "completed"
             )
+            self.last_turn_error_kind = "step_limit" if self._run_limit_hit else None
             self._interrupt_requested.clear()
             # Save the user input and any completed steps even when provider
             # calls fail or the user cancels the remaining execution.
@@ -753,6 +757,7 @@ class CodeAgent(Agent):
             trace_logger.log_event("finish", {"final": final_text}, step=step)
             return final_text
 
+        self._run_limit_hit = True
         return "抱歉，我无法在限定步数内完成这个任务。"
 
     # ------------------------------------------------------------------
