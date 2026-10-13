@@ -9,6 +9,8 @@ on:
       - 'core/runtime/**'
       - 'core/events.py'
       - 'tests/test_web_service.py'
+      - 'tests/test_web_interrupt.py'
+      - 'agents/codeAgent.py'
       - 'requirements.txt'
       - '.github/workflows/web-mvp.yml'
 
@@ -34,4 +36,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt httpx
-      - run: python -m pytest tests/test_web_service.py tests/test_session_manager.py tests/test_session_tree.py tests/test_llm_streaming.py -q
+      - run: python -m pytest tests/test_web_service.py tests/test_web_interrupt.py tests/test_session_manager.py tests/test_session_tree.py tests/test_llm_streaming.py -q
