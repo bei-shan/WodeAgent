@@ -105,8 +105,18 @@ def main():
 
         assert pump(b"Ridge", 12.0), "OpenTUI did not render in the PTY"
         assert "GET /api/health" in MockBackend.calls, "TUI did not contact the local Agent API"
-        os.write(master, b"/help\r")
-        assert pump(b"/fork", 5.0), "PTY keyboard or terminal command help not rendered"
+        # Wait until the composer is painted, not just the header.
+        assert pump(b"/help for commands", 4.0), "Composer did not render"
+        time.sleep(0.2)
+        # Real keyboards deliver separate bytes; a single write can be parsed
+        # as one unrecognized escape/input frame by terminal libraries.
+        for key in b"/help\\r".replace(b"\\\\r", b"\\r"):
+            os.write(master, bytes([key]))
+            time.sleep(0.06)
+        if not pump(b"/fork", 5.0):
+            print("PTY tail:", repr(bytes(captured[-5000:])))
+            print("Fixture routes:", MockBackend.calls)
+            raise AssertionError("PTY keyboard or terminal command help not rendered")
 
         os.write(master, b"\x03")  # Ctrl+C; idle UI must quit cleanly.
         try:
