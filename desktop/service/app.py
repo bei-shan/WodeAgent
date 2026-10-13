@@ -571,7 +571,10 @@ def create_app(
         # racing or competing with any other connected WebSocket.
         raw_cursor = ws.query_params.get("after")
         if raw_cursor is None:
-            cursor = session.events.latest_seq
+            # An active turn has not yet been snapshotted to disk. Replay its
+            # in-flight events to a newly opened browser instead of silently
+            # starting at the newest event and losing the partial response.
+            cursor = session.events.active_turn_cursor() if session.busy else session.events.latest_seq
         else:
             try:
                 cursor = int(raw_cursor)
