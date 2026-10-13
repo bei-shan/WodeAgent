@@ -116,7 +116,7 @@ def test_ws_requires_cookie_and_trusted_origin(tmp_path, monkeypatch):
     app, client = build_client(tmp_path, monkeypatch)
     with client:
         with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect("/api/sessions/some-session/stream", headers=ORIGIN):
+            with client.websocket_connect("/api/sessions/some-session/stream", headers={**ORIGIN, "host": "localhost:8000"}):
                 pass
 
         assert login(client).status_code == 200
@@ -125,7 +125,11 @@ def test_ws_requires_cookie_and_trusted_origin(tmp_path, monkeypatch):
         session.events.put(AgentEvent("step.started", {"step": 1}, step=1))
         # TestClient does not reliably propagate its HTTP cookie jar through
         # WebSocketTestSession. A real browser sends this Cookie header.
-        ws_headers = {**ORIGIN, "cookie": f"{COOKIE_NAME}={client.cookies.get(COOKIE_NAME)}"}
+        ws_headers = {
+            **ORIGIN,
+            "host": "localhost:8000",
+            "cookie": f"{COOKIE_NAME}={client.cookies.get(COOKIE_NAME)}",
+        }
 
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(
