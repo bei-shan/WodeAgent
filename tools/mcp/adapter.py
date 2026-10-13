@@ -10,6 +10,7 @@ import re
 
 from tools.base import Tool, ToolParameter, ErrorCode
 from tools.mcp.protocol import to_protocol_result, to_protocol_error, to_protocol_invalid_param
+from tools.mcp.schema_validation import MCPInputSchemaError, compile_mcp_input_schema, validate_mcp_input
 
 
 class MCPToolAdapter(Tool):
@@ -31,7 +32,13 @@ class MCPToolAdapter(Tool):
         )
         self._mcp_client = mcp_client
         self._remote_name = remote_name
-        self._schema = schema or {}
+        self._schema = schema if schema is not None else {"type": "object", "properties": {}}
+        self._schema_error: MCPInputSchemaError | None = None
+        try:
+            self._validator = compile_mcp_input_schema(self._schema)
+        except MCPInputSchemaError as exc:
+            self._validator = None
+            self._schema_error = exc
 
     def get_parameters(self) -> list[ToolParameter]:
         schema = self._schema if isinstance(self._schema, dict) else {}
@@ -118,24 +125,20 @@ class MCPToolAdapter(Tool):
                 error_code=ErrorCode.MCP_PARSE_ERROR,
             )
 
+    def get_input_schema(self) -> dict[str, Any]:
+        """Authoritative JSON Schema for both model and runtime boundaries."""
+        if self._schema_error is not None:
+            raise self._schema_error
+        # Copy so consumers cannot mutate the cached validated schema.
+        from copy import deepcopy
+        return deepcopy(self._schema)
+
     def _validate_params(self, parameters: dict[str, Any]) -> str:
-        schema = self._schema if isinstance(self._schema, dict) else {}
-        properties = schema.get("properties")
-        required = schema.get("required") or []
-        if not isinstance(properties, dict):
-            return ""
-        missing = [name for name in required if name not in parameters]
-        additional = schema.get("additionalProperties", True)
-        allow_unknown = additional is not False
-        unknown = []
-        if not allow_unknown:
-            unknown = [name for name in parameters.keys() if name not in properties]
-        parts = []
-        if missing:
-            parts.append(f"missing required params: {', '.join(missing)}")
-        if unknown:
-            parts.append(f"unknown params: {', '.join(unknown)}")
-        return "; ".join(parts)
+        if self._validator is None:
+            return "MCP input schema is unavailable or invalid."
+        if not isinstance(parameters, dict):
+            return "MCP arguments must be an object."
+        return validate_mcp_input(self._validator, parameters) or ""
 
 
 def register_mcp_tools(tool_registry, mcp_client, namespace: str | None = None) -> list[dict[str, object | None]]:
