@@ -140,12 +140,13 @@ class SessionConfig(BaseModel):
     provider: str = ""
     enable_agent_teams: bool = False
     plan_mode: bool = False
-    thinking_level: str = "medium"  # low | medium | high
+    thinking_level: str = "off"  # off | on (session metadata only)
 
 
 class SessionConfigUpdate(BaseModel):
     enable_agent_teams: bool | None = None
     plan_mode: bool | None = None
+    model_profile: str | None = None
 
 
 # ── Teams ─────────────────────────────────────────────────────────────
