@@ -51,6 +51,7 @@ from desktop.service.application import (
 from desktop.service.schemas import (
     SessionCreate,
     SessionInfo,
+    SessionFork,
     MessageSend,
     PermissionResolve,
     AskUserAnswer,
@@ -301,6 +302,14 @@ def create_app(
     @app.get("/api/sessions/{sid}/history")
     async def get_session_history(sid: str):
         return app.state.session_service.history(sid)
+
+    @app.get("/api/sessions/{sid}/tree")
+    async def get_session_tree(sid: str):
+        return app.state.session_service.tree(sid)
+
+    @app.post("/api/sessions/{sid}/fork")
+    async def fork_session_tree(sid: str, body: SessionFork):
+        return app.state.session_service.fork(sid, body.target_id)
 
     # ═══════════════════════════════════════════════════════════
     # Turns

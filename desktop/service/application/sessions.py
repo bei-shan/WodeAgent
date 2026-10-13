@@ -14,7 +14,8 @@ from typing import Any, Callable
 
 from core.runtime.session_controller import SessionController
 from core.session_manager import SessionManager
-from .errors import InvalidInputError, NotFoundError
+from core.context_engine.history_manager import HistoryManager
+from .errors import InvalidInputError, NotFoundError, ConflictError, ServiceError
 
 logger = logging.getLogger(__name__)
 _SESSION_ID = re.compile(r"[0-9a-f]{12}\Z")
@@ -132,6 +133,34 @@ class SessionService:
         self._pinned.add(sid)
         return {"pinned": True}
 
+    def tree(self, sid: str) -> dict:
+        session = self._require_known(sid)
+        if session is None:
+            self.activate(sid)
+            session = self.controller.get_session(sid)
+        if session is None:
+            raise NotFoundError("Session not found")
+        try:
+            return session.session_tree()
+        except RuntimeError as exc:
+            raise ConflictError("Finish or interrupt the current turn first") from exc
+
+    def fork(self, sid: str, target_id: str) -> dict:
+        session = self._require_known(sid)
+        if not re.fullmatch(r"[0-9a-f]{8}", target_id or ""):
+            raise InvalidInputError("Expected a full 8-character message node ID")
+        if session is None:
+            self.activate(sid)
+            session = self.controller.get_session(sid)
+        if session is None:
+            raise NotFoundError("Session not found")
+        try:
+            return session.fork_history(target_id)
+        except ValueError as exc:
+            raise NotFoundError("Message node not found") from exc
+        except RuntimeError as exc:
+            raise ConflictError("Finish or interrupt the current turn first") from exc
+
     def history(self, sid: str) -> dict:
         # Historical API returns an empty list for absent snapshots.
         if not self._valid_id(sid) or self.catalog.get_session(sid) is None:
@@ -140,6 +169,12 @@ class SessionService:
         if not isinstance(snap, dict):
             return {"messages": []}
         entries = snap.get("history_entries") or snap.get("history_messages") or []
+        if snap.get("history_entries"):
+            # Durable history follows the selected fork, not all sibling paths.
+            history = HistoryManager()
+            history.load_entries(snap["history_entries"])
+            history.restore_tree_state(snap.get("cursor_id"), snap.get("labels"))
+            entries = [item.to_dict() for item in history.get_current_branch()]
         messages: list[dict[str, str]] = []
         if isinstance(entries, list):
             for entry in entries:
