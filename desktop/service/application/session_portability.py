@@ -169,7 +169,8 @@ def export_snapshot(snapshot: dict, title: str) -> dict:
 
     visible_ids = {
         eid for eid, node in normalized
-        if node["type"] == "message" and node["role"] in _ROLES
+        if node["type"] == "message" and isinstance(node["role"], str)
+        and node["role"] in _ROLES
     }
     visible: list[dict] = []
     emitted: set[str] = set()

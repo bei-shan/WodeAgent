@@ -11,7 +11,7 @@ from core.session_manager import SessionManager
 from core.session_store import build_session_snapshot
 from desktop.service.app import create_app
 from desktop.service.application.session_portability import FORMAT, MAX_BYTES, VERSION
-from tests.test_web_service import FakeAgent
+from tests.test_session_tree_api import TreeAgent
 
 
 def sample_archive():
@@ -30,7 +30,7 @@ def sample_archive():
 def app_for(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
-    return create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    return create_app(agent_factory=TreeAgent, project_root=str(tmp_path))
 
 
 def test_export_never_leaks_internal_fields_and_import_creates_new_id(tmp_path, monkeypatch):
