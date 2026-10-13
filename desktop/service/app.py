@@ -593,6 +593,22 @@ def create_app(
                 frame["seq"] = seq
             await ws.send_json(frame)
 
+        # A process restart resets the in-memory journal. An old browser
+        # can reconnect with a cursor greater than the new journal's latest.
+        # Explicitly rebase that cursor or it would wait indefinitely.
+        if cursor > session.events.latest_seq:
+            cursor = session.events.latest_seq
+            await ws.send_json({
+                "type": "stream.reset",
+                "payload": {
+                    "reason": "cursor_ahead",
+                    "oldest_seq": cursor + 1,
+                    "latest_seq": cursor,
+                    "resume_from": cursor,
+                },
+                "step": 0,
+            })
+
         # Permission and AskUser are blocking prompts; a browser refresh
         # must not strand a worker waiting for an invisible dialog.
         if raw_cursor is None:
@@ -616,6 +632,7 @@ def create_app(
                             "reason": "cursor_expired",
                             "oldest_seq": batch.oldest_seq,
                             "latest_seq": batch.latest_seq,
+                            "resume_from": batch.oldest_seq - 1,
                         },
                         "step": 0,
                     })
