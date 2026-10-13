@@ -187,3 +187,23 @@ test('new session reconnects with cursor and ignores duplicate frames', async ({
   })
   await expect(page.getByText('甲乙', { exact: true })).toBeVisible()
 })
+
+test('journal reset rebases cursor before the next reconnect', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await page.evaluate(() => {
+    (window as any).__emitAgent({
+      type: 'step.started', seq: 9, step: 1, payload: { step: 1 },
+    })
+    ;(window as any).__emitAgent({
+      type: 'stream.reset', step: 0,
+      payload: { reason: 'cursor_ahead', oldest_seq: 1, latest_seq: 0, resume_from: 0 },
+    })
+    ;(window as any).__dropSocket()
+  })
+  await expect(page.getByText('实时连接正常')).toBeVisible({ timeout: 10000 })
+  const current = await page.evaluate(() => (window as any).__mockSockets.at(-1).url as string)
+  expect(current).toContain('after=0')
+})
