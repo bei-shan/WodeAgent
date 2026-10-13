@@ -147,7 +147,7 @@ test('model picker changes backend config and file browser previews content', as
   await expect(page.getByRole('heading', { name: '工作区文件' })).toBeVisible()
   await page.getByRole('button', { name: /hello.py/ }).click()
   await expect(page.getByText('print("hello world")', { exact: false })).toBeVisible()
-  await expect(page.getByRole('link', { name: '下载' })).toHaveAttribute('href', /files\/download/)
+  await expect(page.getByRole('link', { name: '下载', exact: true })).toHaveAttribute('href', /files\/download/)
 })
 
 test('a lost socket reconnects without discarding the session', async ({ page }) => {
