@@ -15,6 +15,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
 class MultiEditTool(Tool):
+    strict_input_contract = True
     """多次编辑工具，支持对同一文件多处独立修改的原子性批量编辑"""
     usage_notes = 'MultiEdit: Apply multiple independent edits to ONE file atomically. All old_strings match against ORIGINAL file content (not after previous edits). Edits must not overlap. Use instead of calling Edit multiple times on the same file.'
 

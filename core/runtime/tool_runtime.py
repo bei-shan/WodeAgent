@@ -11,6 +11,8 @@ import logging
 import time
 from typing import Any, Callable, Iterable, Protocol
 
+from core.runtime.tool_contracts import error_envelope
+
 
 class ToolDispatcher(Protocol):
     def execute_tool(self, name: str, parameters: dict[str, Any]) -> Any: ...
@@ -59,15 +61,11 @@ class ToolRuntime:
                     "Tool %s blocked by %s: %s",
                     tool_name, feature.name, pre_result.get("reason", "unknown"),
                 )
-                payload = {
-                    "status": "error",
-                    "data": {},
-                    "error": {
-                        "code": pre_result.get("error_code", "HOOK_BLOCKED"),
-                        "message": pre_result.get("reason", "Blocked"),
-                    },
-                    "stats": {"time_ms": 0},
-                }
+                payload = error_envelope(
+                    str(pre_result.get("error_code", "HOOK_BLOCKED")),
+                    str(pre_result.get("reason", "Blocked")),
+                    parameters,
+                )
                 return json.dumps(payload, ensure_ascii=False)
             if pre_result and pre_result.get("system_messages"):
                 emit_messages(pre_result["system_messages"])

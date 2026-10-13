@@ -23,6 +23,7 @@ class MatchItem(TypedDict):
 
 
 class GrepTool(Tool):
+    strict_input_contract = True
     """搜索文件内容（优先使用 ripgrep，缺失则回退到 Python 实现）"""
     usage_notes = 'Grep: Search file contents with regex. Use include param to filter files (e.g. *.py). Results sorted by mtime desc. Do NOT use bash grep; use this tool.'
 
@@ -34,6 +35,9 @@ class GrepTool(Tool):
 
     # 搜索超时时间（秒）
     TIMEOUT_SEC = 2.0
+
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        return True
 
     def __init__(self, name: str = "Grep", project_root: Optional[Path] = None):
         """

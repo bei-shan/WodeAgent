@@ -39,6 +39,8 @@ class Config(BaseModel):
     # ===== Agent =====
     agent_interactive: bool = True
     max_steps: int = 50  # ReAct loop max steps
+    tool_parallel_reads_enabled: bool = True
+    tool_max_concurrency: int = 4
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
     sandbox_mode: str = "local_trusted"  # "local_trusted" or "docker"
@@ -157,6 +159,8 @@ class Config(BaseModel):
             # Agent
             agent_interactive=env_bool("AGENT_INTERACTIVE", True),
             max_steps=env_int("MAX_STEPS", 50),
+            tool_parallel_reads_enabled=env_bool("TOOL_PARALLEL_READS_ENABLED", True),
+            tool_max_concurrency=max(1, min(8, env_int("TOOL_MAX_CONCURRENCY", 4))),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),

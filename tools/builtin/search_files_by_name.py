@@ -14,6 +14,7 @@ from core.constants import ALWAYS_IGNORE_DIRS
 
 
 class SearchFilesByNameTool(Tool):
+    strict_input_contract = True
     """使用 glob 模式搜索文件（安全、可控、可复现）"""
     usage_notes = 'Glob: Find files by pattern. Pattern is relative to path. Use ** to recurse, * for wildcard. Max 200 results, 2s timeout. Do NOT use bash find; use this tool.'
 
@@ -25,6 +26,9 @@ class SearchFilesByNameTool(Tool):
 
     # 最大搜索时间（毫秒）
     MAX_DURATION_MS = 2_000
+
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        return True
 
     def __init__(self, name: str = "Glob", project_root: Optional[Path] = None):
         """
