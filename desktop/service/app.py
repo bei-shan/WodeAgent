@@ -46,7 +46,7 @@ from core.runtime.session_controller import (
 from core.events import AgentEvent, EventType
 from desktop.service.application import (
     ServiceError, SessionService, TurnService, SessionSettingsService, TeamsService,
-    WorkspaceService,
+    WorkspaceService, ConfigCatalogService,
 )
 from desktop.service.schemas import (
     SessionCreate,
@@ -190,6 +190,7 @@ def create_app(
     )
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
+    app.state.config_catalog = ConfigCatalogService(app.state.project_root)
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
@@ -746,151 +747,54 @@ def create_app(
         return {"valid": len(errors) == 0, "errors": errors}
 
     # ── Enable/disable state ───────────────────────────────────────
-    _state_path = Path(app.state.project_root) / "skill_state.json"
-
-    def _read_state() -> dict:
-        if not _state_path.exists():
-            return {}
-        try:
-            import json
-            return json.loads(_state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def _write_state(data: dict) -> None:
-        import json
-        _state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     @app.get("/api/skills/{name}/enabled")
     async def get_skill_enabled(name: str):
-        state = _read_state()
-        disabled = state.get("disabled_skills", {}).get(name, False)
-        return {"name": name, "enabled": not disabled}
+        return app.state.config_catalog.enabled("skill", name)
 
     @app.put("/api/skills/{name}/enabled")
     async def toggle_skill_enabled(name: str):
-        state = _read_state()
-        disabled = state.setdefault("disabled_skills", {})
-        currently = disabled.get(name, False)
-        if currently:
-            del disabled[name]
-        else:
-            disabled[name] = True
-        _write_state(state)
-        return {"name": name, "enabled": currently}  # toggled
+        return app.state.config_catalog.toggle_enabled("skill", name)
 
     @app.put("/api/mcp/servers/{name}/enabled")
     async def toggle_mcp_enabled(name: str):
-        state = _read_state()
-        disabled = state.setdefault("disabled_mcp", {})
-        currently = disabled.get(name, False)
-        if currently:
-            del disabled[name]
-        else:
-            disabled[name] = True
-        _write_state(state)
-        return {"name": name, "enabled": currently}
+        return app.state.config_catalog.toggle_enabled("mcp", name)
 
     @app.get("/api/mcp/servers/{name}/enabled")
     async def get_mcp_enabled(name: str):
-        state = _read_state()
-        disabled = state.get("disabled_mcp", {}).get(name, False)
-        return {"name": name, "enabled": not disabled}
+        return app.state.config_catalog.enabled("mcp", name)
 
     # ═══════════════════════════════════════════════════════════════
     # MCP servers — user-configurable MCP server management
     # ═══════════════════════════════════════════════════════════════
 
-    _mcp_config_path = Path(app.state.project_root) / "mcp_servers.json"
-
-    def _read_mcp_config() -> dict:
-        if not _mcp_config_path.exists():
-            return {"mcpServers": {}}
-        try:
-            import json
-            return json.loads(_mcp_config_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {"mcpServers": {}}
-
-    def _write_mcp_config(data: dict) -> None:
-        import json
-        _mcp_config_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
     @app.get("/api/mcp/servers", response_model=list[McpServerConfig])
     async def list_mcp_servers():
-        """List configured MCP servers."""
-        data = _read_mcp_config()
-        servers = data.get("mcpServers", {})
-        return [
-            McpServerConfig(
-                name=name,
-                command=cfg.get("command", ""),
-                args=cfg.get("args", []),
-            )
-            for name, cfg in servers.items()
-        ]
+        return app.state.config_catalog.list_mcp()
 
     @app.post("/api/mcp/servers", status_code=201)
     async def add_mcp_server(body: McpServerCreate):
-        """Add a new MCP server configuration."""
-        data = _read_mcp_config()
-        servers = data.setdefault("mcpServers", {})
-        if body.name in servers:
-            raise HTTPException(409, f"MCP server '{body.name}' already exists")
-        servers[body.name] = {
-            "command": body.command,
-            "args": body.args,
-        }
-        _write_mcp_config(data)
-        return {"status": "created", "name": body.name}
+        return app.state.config_catalog.create_mcp(body.name, body.command, body.args)
 
     @app.put("/api/mcp/servers/{name}")
     async def update_mcp_server(name: str, body: McpServerUpdate):
-        """Update an existing MCP server configuration."""
-        data = _read_mcp_config()
-        servers = data.get("mcpServers", {})
-        if name not in servers:
-            raise HTTPException(404, f"MCP server '{name}' not found")
-        if body.command is not None:
-            servers[name]["command"] = body.command
-        if body.args is not None:
-            servers[name]["args"] = body.args
-        _write_mcp_config(data)
-        return {"status": "updated", "name": name}
+        return app.state.config_catalog.update_mcp(name, body.command, body.args)
 
     @app.delete("/api/mcp/servers/{name}")
     async def remove_mcp_server(name: str):
-        """Remove an MCP server configuration."""
-        data = _read_mcp_config()
-        servers = data.get("mcpServers", {})
-        if name not in servers:
-            raise HTTPException(404, f"MCP server '{name}' not found")
-        del servers[name]
-        _write_mcp_config(data)
-        return {"status": "deleted", "name": name}
+        return app.state.config_catalog.delete_mcp(name)
 
     # ═══════════════════════════════════════════════════════════════
     # Hooks — lifecycle hook management
     # ═══════════════════════════════════════════════════════════════
 
-    _hooks_path = Path(app.state.project_root) / ".mycode" / "hooks.json"
-
     @app.get("/api/hooks")
     async def get_hooks():
-        if not _hooks_path.exists():
-            return {"hooks": {}}
-        import json
-        return json.loads(_hooks_path.read_text(encoding="utf-8"))
+        return app.state.config_catalog.get_hooks()
 
     @app.put("/api/hooks")
     async def save_hooks(body: dict):
-        _hooks_path.parent.mkdir(parents=True, exist_ok=True)
-        import json
-        _hooks_path.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        return {"status": "saved"}
+        return app.state.config_catalog.save_hooks(body)
 
     return app
 
