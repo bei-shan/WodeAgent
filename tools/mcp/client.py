@@ -13,6 +13,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 import anyio
+from core.runtime.cancellation import current_cancel_event
 
 logger = logging.getLogger(__name__)
 
@@ -276,8 +277,38 @@ class MCPClient:
     def connect_sync(self) -> ClientSession:
         return self._run_sync(self.connect())
 
+    async def _call_tool_cancellable(
+        self, name: str, arguments: dict[str, Any], cancel_event: threading.Event,
+    ) -> Any:
+        """Cancel the in-flight MCP coroutine when this Agent turn is stopped.
+
+        Cancelling a client request is not a guarantee the remote server has
+        rolled back side effects already started. Timeout still belongs to
+        the underlying _call_with_retry implementation.
+        """
+        if cancel_event.is_set():
+            raise InterruptedError("MCP request cancelled")
+        task = asyncio.create_task(self.call_tool(name, arguments))
+        try:
+            while not task.done():
+                if cancel_event.is_set():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=2.0)
+                    except BaseException:
+                        pass
+                    raise InterruptedError("MCP request cancelled")
+                await asyncio.wait({task}, timeout=0.05)
+            return await task
+        finally:
+            if not task.done():
+                task.cancel()
+
     def call_tool_sync(self, name: str, arguments: dict[str, Any]) -> Any:
-        return self._run_sync(self.call_tool(name, arguments))
+        cancellation = current_cancel_event()
+        if cancellation is None:
+            return self._run_sync(self.call_tool(name, arguments))
+        return self._run_sync(self._call_tool_cancellable(name, arguments, cancellation))
 
     def list_tools_sync(self) -> Any:
         return self._run_sync(self.list_tools())
