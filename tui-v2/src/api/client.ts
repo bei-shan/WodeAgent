@@ -14,6 +14,20 @@ export type SessionTree = {
   cursor_id: string | null
   labels: Record<string, string>
 }
+export type PortableMessage = {
+  id: string
+  parent_id: string | null
+  role: "user" | "assistant"
+  content: string
+}
+export type PortableSession = {
+  format: "ridgecode.portable-session"
+  version: 1
+  title: string
+  cursor_id: string | null
+  messages: PortableMessage[]
+  labels: Record<string, string>
+}
 export type SavedHistory = { messages: Array<{ role: string; content: string }> }
 export type TurnOutcome = { status: TurnStatus; response?: string; error_kind?: string; retryable?: boolean }
 
@@ -88,6 +102,12 @@ export class AgentClient {
       "POST", "/api/sessions/" + encodeURIComponent(id) + "/fork",
       { target_id: targetId },
     )
+  }
+  exportPortableSession(id: string) {
+    return this.request<PortableSession>("GET", "/api/sessions/" + encodeURIComponent(id) + "/export")
+  }
+  importPortableSession(payload: unknown) {
+    return this.request<SessionInfo>("POST", "/api/sessions/import", payload as object)
   }
   history(id: string) { return this.request<SavedHistory>("GET", "/api/sessions/" + encodeURIComponent(id) + "/history") }
   turn(id: string) { return this.request<TurnOutcome>("GET", "/api/sessions/" + encodeURIComponent(id) + "/turn") }

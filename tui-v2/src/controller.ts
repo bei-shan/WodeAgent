@@ -1,6 +1,7 @@
 import { AgentClient } from "./api/client"
 import { parseTerminalCommand, TERMINAL_HELP, type TerminalCommand } from "./commands"
 import { formatSessionTree } from "./tree"
+import { loadArchiveFile, saveArchiveFile } from "./localArchive"
 import { connectStream, type ConnectionState } from "./api/stream"
 import type { AgentEvent, SessionInfo } from "./protocol"
 import { emptyView, projectEvent, withHistory, type SessionView } from "./state/reducer"
@@ -153,6 +154,27 @@ export class TuiController {
       return
     }
     if (!id) { this.note("Create or select a session first."); return }
+    if (cmd.type === "import") {
+      if (this.view.busy) { this.note("Finish the current turn before importing."); return }
+      const archive = await loadArchiveFile(cmd.path)
+      const created = await this.api.importPortableSession(archive)
+      if (this.disposed) return
+      await this.refreshSessions()
+      await this.selectSession(created.id)
+      if (this.view.sessionId === created.id) {
+        this.note("Imported portable conversation: " + created.title)
+      }
+      return
+    }
+    if (cmd.type === "export") {
+      if (this.view.busy) { this.note("Finish the current turn before exporting."); return }
+      const epoch = this.epoch
+      const archive = await this.api.exportPortableSession(id)
+      if (this.disposed || epoch !== this.epoch || this.view.sessionId !== id) return
+      await saveArchiveFile(cmd.path, archive)
+      this.note("Exported portable conversation to " + cmd.path)
+      return
+    }
     if (cmd.type === "tree") {
       if (this.view.busy) { this.note("Wait for the current turn to finish."); return }
       this.note(formatSessionTree(await this.api.tree(id)))
