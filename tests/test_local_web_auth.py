@@ -166,3 +166,29 @@ def test_short_numeric_hex_prefix_never_aliases_a_list_index(tmp_path):
     sid = mgr.create_session()
     assert mgr.resolve_identifier("01") is None
     assert mgr.resolve_identifier("1") == sid
+
+
+
+def test_terminal_bearer_websocket_and_rest_share_credentials(tmp_path, monkeypatch):
+    """Bun TUI sends Authorization headers; no browser cookie/Origin is required."""
+    app, client = build_client(tmp_path, monkeypatch)
+    bearer = {"host": "localhost:8000", "authorization": "Bearer " + TOKEN}
+    with client:
+        sid = client.post("/api/sessions", json={}, headers=bearer).json()["id"]
+        assert client.get("/api/sessions", headers=bearer).status_code == 200
+        session = app.state.controller.get_session(sid)
+        session.events.put(AgentEvent("step.started", {"step": 1}, step=1))
+        with client.websocket_connect(
+            f"/api/sessions/{sid}/stream?after=0",
+            headers=bearer,
+        ) as ws:
+            event = ws.receive_json()
+            assert event["type"] == "step.started"
+            assert event["seq"] == 1
+
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                f"/api/sessions/{sid}/stream?after=0",
+                headers={**bearer, "authorization": "Bearer wrong"},
+            ):
+                pass
