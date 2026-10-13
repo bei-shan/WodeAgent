@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional
 
 from core.events import AgentEvent, EventSink
 from core.runtime.event_journal import EventJournal
+from core.runtime.turn_state import TurnOutcome, TurnStatus, failure_outcome, persist_turn_outcome, load_turn_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 SESSION_EVENT_PERMISSION = "permission.requested"
 SESSION_EVENT_ASK_USER = "ask_user.requested"
 SESSION_EVENT_TURN_DONE = "turn.completed"
+SESSION_EVENT_TURN_FINISHED = "turn.finished"
 SESSION_EVENT_ERROR = "error"
 
 
@@ -74,6 +76,7 @@ class AgentSession:
         self._thread: Optional[threading.Thread] = None
         self._busy_lock = threading.Lock()
         self._busy = False
+        self.last_turn = load_turn_outcome(session_id)
 
         # Bounded, replayable journal; each WebSocket has an independent cursor.
         self.events = EventJournal()
@@ -231,20 +234,30 @@ class AgentSession:
         logger.info("Agent created for session %s", self.session_id[:8])
 
     def _run_turn(self, content: str) -> None:
-        """Execute one agent turn (runs in worker thread)."""
+        """Execute exactly one turn; publish one canonical terminal outcome."""
         try:
             response = self._agent.run(content)
-            self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, {
-                "response": response,
-            }))
+            status = getattr(self._agent, "last_turn_status", "completed")
+            if status not in {"completed", "failed", "cancelled"}:
+                status = "completed"
+            outcome = TurnOutcome(TurnStatus(status), response=response)
         except Exception as exc:
             logger.exception("Agent turn failed in session %s", self.session_id[:8])
-            self.events.put(AgentEvent(SESSION_EVENT_ERROR, {
-                "message": str(exc),
-            }))
+            outcome = failure_outcome(exc)
         finally:
+            # Terminal event must be emitted after the busy flag is cleared:
+            # a user can safely send another message on turn.finished.
             with self._busy_lock:
                 self._busy = False
+        self.last_turn = outcome
+        try:
+            persist_turn_outcome(self.session_id, outcome)
+        except Exception:
+            logger.exception("Unable to persist turn outcome for %s", self.session_id[:8])
+        self.events.put(AgentEvent(SESSION_EVENT_TURN_FINISHED, outcome.to_dict()))
+        # Legacy consumers still recognize turn.completed; carry the same
+        # canonical status so they cannot confuse cancellation with success.
+        self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
 
     def close(self) -> None:
         """Release agent resources (MCP clients, worktree, trace logger)."""
