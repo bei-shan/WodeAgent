@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
+import TracePanel from './components/TracePanel'
 import { createSessionEventHandler } from './state/sessionEvents'
 import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
@@ -65,7 +66,7 @@ function AppCore() {
   const [newTeamName, setNewTeamName] = useState('')
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'|'hooks'>('sessions')
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'|'hooks'|'trace'>('sessions')
   const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
@@ -243,6 +244,7 @@ function AppCore() {
     { key: 'skills' as const, icon: Icons.skill, label: '技能' },
     { key: 'mcp' as const, icon: Icons.settings, label: 'MCP' },
     { key: 'hooks' as const, icon: Icons.clock, label: 'Hooks' },
+    { key: 'trace' as const, icon: Icons.brain, label: 'Trace' },
   ]
 
   return (
@@ -418,6 +420,7 @@ function AppCore() {
         {/* ── Hooks management panel ── */}
         {sidebarTab === 'hooks' && <HooksPanel />}
         {sidebarTab === 'files' && <FileBrowser sessionId={activeSid} />}
+        {sidebarTab === 'trace' && <TracePanel sessionId={activeSid} />}
 
         {/* ── Chat / empty state ── */}
         {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (

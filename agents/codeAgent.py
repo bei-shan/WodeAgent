@@ -651,13 +651,26 @@ class CodeAgent(Agent):
                 if callback:
                     callback(kind, text, step)
 
-            raw_response = ModelGateway(
-                self.llm, streaming=bool(getattr(self.config, "llm_streaming", True)),
-            ).invoke(
-                messages=messages, tools_schema=tools_schema,
-                tool_choice=tool_choice, features=self._features,
-                agent=self, on_delta=_on_delta,
-            )
+            # Local latency metadata only; the private TraceLogger still owns
+            # the richer model_output audit, while the Web projection never
+            # sends message contents or tool schemas to the browser.
+            started_model = time.monotonic()
+            try:
+                raw_response = ModelGateway(
+                    self.llm, streaming=bool(getattr(self.config, "llm_streaming", True)),
+                ).invoke(
+                    messages=messages, tools_schema=tools_schema,
+                    tool_choice=tool_choice, features=self._features,
+                    agent=self, on_delta=_on_delta,
+                )
+            except Exception:
+                trace_logger.log_event("model_call", {
+                    "model": getattr(self.llm, "model", "unknown"),
+                    "status": "error",
+                    "duration_ms": int((time.monotonic() - started_model) * 1000),
+                }, step=step)
+                raise
+            model_elapsed_ms = int((time.monotonic() - started_model) * 1000)
             if show_raw:
                 self.last_response_raw = (
                     raw_response.model_dump()
@@ -668,6 +681,12 @@ class CodeAgent(Agent):
             response_text = extract_content(raw_response) or ""
             reasoning_content = extract_reasoning_content(raw_response)
             usage = extract_usage(raw_response)
+            trace_logger.log_event("model_call", {
+                "model": getattr(self.llm, "model", "unknown"),
+                "status": "success",
+                "duration_ms": model_elapsed_ms,
+                "usage": usage,
+            }, step=step)
             if usage and usage.get("total_tokens") is not None:
                 self.history_manager.update_last_usage(usage["total_tokens"])
                 # Budget tracking
