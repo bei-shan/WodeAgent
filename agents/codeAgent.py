@@ -861,8 +861,14 @@ class CodeAgent(Agent):
     def _execute_step_tools(
         self, tool_calls, response_text, reasoning_content, trace_logger, step: int,
     ) -> None:
-        """执行当前 step 的所有 tool_calls，写入 assistant + tool 消息到历史。"""
-        # ensure each tool_call has an id (OpenAI strict requirement)
+        """Execute ordered tool batches; only explicitly safe reads may overlap.
+
+        Events, traces and history remain on the owning Agent thread. Unsafe
+        calls are barriers, even if the model returned several calls at once.
+        """
+        from core.features import BUILTIN_FEATURES
+        from core.runtime.tool_scheduler import plan_tool_batches, run_tool_batch
+
         for call in tool_calls:
             if not call.get("id"):
                 call["id"] = f"call_{uuid.uuid4().hex}"
@@ -877,95 +883,176 @@ class CodeAgent(Agent):
             reasoning_content=reasoning_content,
         )
         self._log_message_write(
-            trace_logger,
-            "assistant",
-            assistant_content,
-            {"action_type": "tool_call", "tool_calls": tool_calls},
-            step,
+            trace_logger, "assistant", assistant_content,
+            {"action_type": "tool_call", "tool_calls": tool_calls}, step,
         )
 
+        parsed_calls = []
         for call in tool_calls:
-            if self._interrupt_requested.is_set():
-                break
-            tool_name = call.get("name") or "unknown_tool"
-            tool_call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
             raw_args = call.get("arguments") or {}
             tool_input, parse_err = ensure_json_input(raw_args)
-            if parse_err:
-                error_result = {
-                    "status": "error",
-                    "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {parse_err}"},
-                    "data": {},
+            parsed_calls.append({
+                "name": call.get("name") or "unknown_tool",
+                "id": call["id"],
+                "input": tool_input,
+                "parse_error": parse_err,
+            })
+
+        config = getattr(self, "config", None)
+        enabled = bool(getattr(config, "tool_parallel_reads_enabled", False))
+        max_workers = max(1, min(8, int(getattr(config, "tool_max_concurrency", 4))))
+        hook_manager = getattr(self, "_hook_manager", None)
+        hooks_active = bool(hook_manager and hook_manager.has_any_hooks)
+        # Plugin features may add mutable interceptors. Keep every tool serial
+        # unless the entire feature list consists of built-in implementations.
+        builtins_only = all(type(feature) in BUILTIN_FEATURES for feature in getattr(self, "_features", ()))
+        policy_allows_parallel = (
+            enabled and not hooks_active and builtins_only
+            and not getattr(self, "delegate_mode", False)
+            and not getattr(config, "budget_enforce", False)
+        )
+
+        def safe_for_parallel(item: dict) -> bool:
+            if not policy_allows_parallel or item["parse_error"]:
+                return False
+            get_tool = getattr(self.tool_registry, "get_tool", None)
+            tool = get_tool(item["name"]) if callable(get_tool) else None
+            classifier = getattr(tool, "is_concurrency_safe", None)
+            return bool(classifier(item["input"])) if callable(classifier) else False
+
+        batches = plan_tool_batches(
+            parsed_calls, safe_for_parallel,
+            max_workers=max_workers if policy_allows_parallel else 1,
+        )
+
+        def execute(item: dict) -> tuple[str, str | None, str | None]:
+            """Only dispatch is allowed to run inside a worker thread."""
+            if item["parse_error"]:
+                result = {
+                    "status": "error", "data": {},
+                    "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {item['parse_error']}"},
                 }
-                observation = json.dumps(error_result, ensure_ascii=False)
-                trace_logger.log_event(
-                    "error",
-                    {
-                        "stage": "tool_call_parse",
-                        "error_code": "INVALID_PARAM",
-                        "message": str(parse_err),
-                        "tool": tool_name,
-                        "tool_call_id": tool_call_id,
-                    },
-                    step=step,
-                )
+                return json.dumps(result, ensure_ascii=False), None, None
+            try:
+                return str(self._execute_tool(item["name"], item["input"])), None, None
+            except Exception as exc:
+                result = {
+                    "status": "error", "data": {},
+                    "error": {"code": "EXECUTION_ERROR", "message": str(exc)},
+                }
+                return json.dumps(result, ensure_ascii=False), str(exc), tb.format_exc()
+
+        for batch in batches:
+            interrupted = self._interrupt_requested.is_set()
+            mode = "parallel" if batch.concurrent and not interrupted else "serial"
+            trace_logger.log_event("tool_batch_started", {
+                "mode": mode, "count": len(batch.calls),
+                "tools": [item["name"] for item in batch.calls],
+                "max_workers": min(max_workers, len(batch.calls)) if mode == "parallel" else 1,
+                "interrupted": interrupted,
+            }, step=step)
+            start = time.monotonic()
+
+            if not interrupted:
+                # Emit all starts before launching a concurrent batch. The UI
+                # then sees the actual overlap instead of fake serial starts.
+                for item in batch.calls:
+                    if item["parse_error"]:
+                        continue
+                    trace_logger.log_event("tool_call", {
+                        "tool": item["name"], "args": item["input"],
+                        "tool_call_id": item["id"],
+                    }, step=step)
+                    self.event_sink.emit(AgentEvent(EventType.TOOL_STARTED, {
+                        "tool": item["name"], "input": item["input"],
+                        "tool_call_id": item["id"],
+                    }, step=step))
+                    if self.console_verbose:
+                        self._console(f"\\n🎬 Action: {item['name']}[{item['input']}]\\n")
+                    elif self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug("Action: %s %s", item["name"], item["input"])
+
+                outcomes = run_tool_batch(batch, execute, max_workers=max_workers)
             else:
-                trace_logger.log_event("tool_call", {"tool": tool_name, "args": tool_input, "tool_call_id": tool_call_id}, step=step)
-                self.event_sink.emit(AgentEvent(EventType.TOOL_STARTED, {
-                    "tool": tool_name,
-                    "input": tool_input,
-                    "tool_call_id": tool_call_id,
-                }, step=step))
-                if self.console_verbose:
-                    self._console(f"\n🎬 Action: {tool_name}[{tool_input}]\n")
-                elif self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug("Action: %s %s", tool_name, tool_input)
-                try:
-                    observation = self._execute_tool(tool_name, tool_input)
+                # Complete all announced tool_call IDs, even on interruption:
+                # leaving unmatched IDs would make the next model call invalid.
+                outcomes = [
+                    (json.dumps({
+                        "status": "error", "data": {},
+                        "error": {"code": "INTERRUPTED", "message": "Tool not executed: user interrupted"},
+                    }, ensure_ascii=False), None, None)
+                    for _ in batch.calls
+                ]
+
+            errors = 0
+            for item, (observation, execution_error, error_trace) in zip(batch.calls, outcomes):
+                tool_name, tool_call_id, tool_input = item["name"], item["id"], item["input"]
+                if item["parse_error"]:
+                    errors += 1
+                    trace_logger.log_event("error", {
+                        "stage": "tool_call_parse", "error_code": "INVALID_PARAM",
+                        "message": str(item["parse_error"]),
+                        "tool": tool_name, "tool_call_id": tool_call_id,
+                    }, step=step)
+                elif interrupted:
+                    errors += 1
+                    trace_logger.log_event("error", {
+                        "stage": "tool_execution", "error_code": "INTERRUPTED",
+                        "tool": tool_name, "tool_call_id": tool_call_id,
+                    }, step=step)
+                elif execution_error is not None:
+                    errors += 1
+                    trace_logger.log_event("error", {
+                        "stage": "tool_execution", "error_code": "EXECUTION_ERROR",
+                        "message": execution_error, "tool": tool_name,
+                        "tool_call_id": tool_call_id, "traceback": error_trace,
+                    }, step=step)
+                else:
                     try:
-                        result_obj = json.loads(observation)
-                        trace_logger.log_event("tool_result", {"tool": tool_name, "result": result_obj}, step=step)
-                    except json.JSONDecodeError:
-                        trace_logger.log_event("tool_result", {"tool": tool_name, "result": {"text": observation}}, step=step)
-                except Exception as e:
-                    error_result = {"status": "error", "error": {"code": "EXECUTION_ERROR", "message": str(e)}, "data": {}}
-                    observation = json.dumps(error_result, ensure_ascii=False)
-                    trace_logger.log_event("error", {"stage": "tool_execution", "error_code": "EXECUTION_ERROR", "message": str(e), "tool": tool_name, "traceback": tb.format_exc()}, step=step)
+                        payload = json.loads(observation)
+                        trace_logger.log_event("tool_result", {
+                            "tool": tool_name, "tool_call_id": tool_call_id,
+                            "result": payload,
+                        }, step=step)
+                    except (json.JSONDecodeError, TypeError):
+                        trace_logger.log_event("tool_result", {
+                            "tool": tool_name, "tool_call_id": tool_call_id,
+                            "result": {"text": observation},
+                        }, step=step)
 
-                # Emit structured event for UI — success or failure.
-                try:
-                    obs_obj = json.loads(observation)
-                    status = obs_obj.get("status", "success")
-                except (json.JSONDecodeError, TypeError):
-                    status = "success"
-                self.event_sink.emit(AgentEvent(EventType.TOOL_COMPLETED, {
-                    "tool": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "status": status,
-                    "output": observation,
-                    "input": tool_input,
-                }, step=step))
+                if not item["parse_error"] and not interrupted:
+                    try:
+                        status = json.loads(observation).get("status", "success")
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        status = "success"
+                    if status == "error":
+                        errors += 1 if execution_error is None else 0
+                    self.event_sink.emit(AgentEvent(EventType.TOOL_COMPLETED, {
+                        "tool": tool_name, "tool_call_id": tool_call_id,
+                        "status": status, "output": observation, "input": tool_input,
+                    }, step=step))
 
-            self.history_manager.append_tool(
-                tool_name=tool_name,
-                raw_result=observation,
-                metadata={"step": step, "tool_call_id": tool_call_id},
-                project_root=self.project_root,
-            )
-            self._log_message_write(
-                trace_logger,
-                "tool",
-                observation,
-                {"tool_name": tool_name, "tool_call_id": tool_call_id},
-                step,
-            )
+                self.history_manager.append_tool(
+                    tool_name=tool_name, raw_result=observation,
+                    metadata={"step": step, "tool_call_id": tool_call_id},
+                    project_root=self.project_root,
+                )
+                self._log_message_write(
+                    trace_logger, "tool", observation,
+                    {"tool_name": tool_name, "tool_call_id": tool_call_id}, step,
+                )
+                if self.console_verbose:
+                    display_obs = observation[:300] + "..." if len(observation) > 300 else observation
+                    self._console(f"\\n👀 Observation: {display_obs}\\n")
+                elif self.logger.isEnabledFor(logging.DEBUG):
+                    display_obs = observation[:300] + "..." if len(observation) > 300 else observation
+                    self.logger.debug("Observation: %s", display_obs)
 
-            if self.console_verbose:
-                display_obs = observation[:300] + "..." if len(observation) > 300 else observation
-                self._console(f"\n👀 Observation: {display_obs}\n")
-            elif self.logger.isEnabledFor(logging.DEBUG):
-                display_obs = observation[:300] + "..." if len(observation) > 300 else observation
-                self.logger.debug("Observation: %s", display_obs)
+            trace_logger.log_event("tool_batch_completed", {
+                "mode": mode, "count": len(batch.calls), "errors": errors,
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "interrupted": interrupted,
+            }, step=step)
 
     # =========================================================================
     # 辅助方法
