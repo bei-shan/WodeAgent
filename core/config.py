@@ -56,6 +56,7 @@ class Config(BaseModel):
     summary_output_max_chars: int = 10000
     context_anchor_max_chars: int = 1200
     context_response_reserve_tokens: int = 4096
+    context_compaction_max_failures: int = 3
     tool_message_format: str = "strict"
 
     # ===== Tool Output Truncation =====
@@ -164,6 +165,7 @@ class Config(BaseModel):
             summary_output_max_chars=env_int("SUMMARY_OUTPUT_MAX_CHARS", 10000),
             context_anchor_max_chars=env_int("CONTEXT_ANCHOR_MAX_CHARS", 1200),
             context_response_reserve_tokens=env_int("CONTEXT_RESPONSE_RESERVE_TOKENS", 4096),
+            context_compaction_max_failures=env_int("CONTEXT_COMPACTION_MAX_FAILURES", 3),
             tool_message_format=env_str("TOOL_MESSAGE_FORMAT", "strict"),
             # Tool Output Truncation
             tool_output_max_lines=env_int("TOOL_OUTPUT_MAX_LINES", 2000),
