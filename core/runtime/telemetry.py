@@ -9,9 +9,7 @@ import atexit
 import logging
 import os
 import re
-import sys
-import threading
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any, Iterator
 
@@ -26,7 +24,6 @@ _ALLOWED = frozenset({
     "gen_ai.usage.total_tokens",
 })
 _IDENT = re.compile(r"[^a-zA-Z0-9_:.\-]")
-_EMPTY = object()
 
 
 def _clean(value: Any) -> str | int | bool | None:
@@ -119,7 +116,9 @@ class Telemetry:
         except BaseException:
             observation.attribute("ridge.error.type", "execution_error")
             try:
-                cm.__exit__(*sys.exc_info())
+                # Never pass exception details into the SDK's context manager:
+                # OTel otherwise auto-records the exception message/stack.
+                cm.__exit__(None, None, None)
             except Exception:
                 logger.warning("Telemetry span close failed", exc_info=False)
             raise
