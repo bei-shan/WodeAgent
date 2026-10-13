@@ -206,10 +206,13 @@ def main():
         assert archived["messages"][0]["content"] == "PTY-portable-root"
 
         type_command("/import " + archive_arg)
-        if not pump(b"Imported portable conversation", 5.0):
+        # OpenTUI paints changed cells across multiple ANSI frames, so a
+        # notice may not appear as one contiguous byte string. The selected
+        # new session prefix in the status bar is a stable visible assertion.
+        if not pump(b"facef", 5.0):
             print("PTY tail:", repr(bytes(captured[-3000:])))
             print("Fixture routes:", MockBackend.calls)
-            raise AssertionError("Import did not switch TUI to a new session")
+            raise AssertionError("Import did not display the newly selected session")
         assert "POST /api/sessions/import" in MockBackend.calls
         assert MockBackend.imported_payload == archived
         assert "POST /api/sessions/facefeed5678/activate" in MockBackend.calls
