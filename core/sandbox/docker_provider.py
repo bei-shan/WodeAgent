@@ -83,6 +83,11 @@ class DockerCommandProvider:
             raise ValueError("Working directory is not a directory")
 
         name = f"wodeagent-{secrets.token_hex(10)}"
+        # Never inherit root identity into the container, even if the host
+        # launches the service as root. Non-root projects should use the
+        # workspace owner's UID/GID; root hosts fall back to nobody.
+        uid = os.getuid() or 65534
+        gid = os.getgid() or 65534
         # The Docker daemon executes the command *inside* the container, not
         # in the caller's host shell. It has no network, capabilities, root
         # identity, inherited env, Docker socket or writable root filesystem.
@@ -96,7 +101,7 @@ class DockerCommandProvider:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
             "--mount", f"type=bind,source={self.workspace},target=/workspace",
             "--workdir", "/workspace" + ("/" + relative.as_posix() if relative != Path(".") else ""),
-            "--user", f"{os.getuid()}:{os.getgid()}",
+            "--user", f"{uid}:{gid}",
             "--env", "HOME=/tmp",
             "--entrypoint", "/bin/sh",
             self.image, "-lc", command,
