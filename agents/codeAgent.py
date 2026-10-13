@@ -737,71 +737,12 @@ class CodeAgent(Agent):
             self.context_builder.set_runtime_system_blocks(blocks)
 
     def _maybe_compress_history(self, pending_input: str, trace_logger, step: int) -> None:
-        """检查并在需要时压缩历史。"""
-        if not self.history_manager.should_compress(pending_input):
-            return
-
-        estimated_tokens = self.history_manager.estimate_context_tokens(pending_input)
-        threshold = int(self.config.context_window * self.config.compression_threshold)
-        trace_logger.log_event("history_compression_triggered", {
-            "estimated_tokens": estimated_tokens,
-            "threshold": threshold,
-            "total_usage_tokens": self.history_manager.get_total_usage_tokens(),
-            "message_count": self.history_manager.get_message_count(),
-        }, step=step)
-
-        if self.console_verbose:
-            self._console("\n📦 触发历史压缩...")
-        elif self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("触发历史压缩")
-
-        rounds_before = self.history_manager.get_rounds_count()
-        messages_before = self.history_manager.get_message_count()
-
-        compress_info = self.history_manager.compact(
-            on_event=lambda ev, payload: trace_logger.log_event(ev, payload, step=step),
-            return_info=True,
-        )
-        compressed = bool(compress_info.get("compressed"))
-
-        if compressed:
-            rounds_after = self.history_manager.get_rounds_count()
-            messages_after = self.history_manager.get_message_count()
-
-            trace_logger.log_event("history_compression_completed", {
-                "rounds_before": rounds_before,
-                "rounds_after": rounds_after,
-                "messages_compressed": messages_before - messages_after,
-                "summary_generated": compress_info.get("summary_generated", False),
-                "details": compress_info,
-            }, step=step)
-
-            compressed_history = self.history_manager.to_messages()
-            final_context = self.context_builder.build_messages(compressed_history)
-            trace_logger.log_event(
-                "history_compression_final_context",
-                {"message_count": len(final_context), "messages": final_context},
-                step=step,
-            )
-
-            if self.console_verbose:
-                self._console(f"✅ 压缩完成，当前轮次数: {rounds_after}")
-                self._print_context_preview(final_context)
-            elif self.logger.isEnabledFor(logging.DEBUG):
-                self.logger.debug("压缩完成，当前轮次数: %d", rounds_after)
-                self._print_context_preview(final_context)
+        from core.runtime.context_runtime import ContextRuntime
+        ContextRuntime(self).maybe_compress_history(pending_input, trace_logger, step)
 
     def _build_step_messages(self, trace_logger, step: int):
-        """构建当前 step 的 messages 列表，返回 (messages, base_messages)。"""
-        history_messages = self.history_manager.to_messages()
-        messages = self._build_messages(history_messages)
-        base_messages = messages
-        trace_logger.log_event(
-            "context_build",
-            {"message_count": len(messages), "history_count": len(history_messages)},
-            step=step,
-        )
-        return messages, base_messages
+        from core.runtime.context_runtime import ContextRuntime
+        return ContextRuntime(self).build_step_messages(trace_logger, step)
 
     def _invoke_llm_with_retry(
         self,
