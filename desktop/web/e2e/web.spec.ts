@@ -207,3 +207,33 @@ test('journal reset rebases cursor before the next reconnect', async ({ page }) 
   const current = await page.evaluate(() => (window as any).__mockSockets.at(-1).url as string)
   expect(current).toContain('after=0')
 })
+
+test('failed turn is reported as failure, not a successful answer', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByPlaceholder('问任何问题').fill('运行一个失败的请求')
+  await page.getByPlaceholder('问任何问题').press('Enter')
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'llm.delta', { kind: 'content', text: '部分输出' })
+  await expect(page.getByText('部分输出')).toBeVisible()
+  await emit(page, 'run.finished', { status: 'failed', final: '' })
+  // The inner agent run finishing must not prematurely complete the turn.
+  await expect(page.getByRole('button', { name: '停止生成' })).toBeVisible()
+  await emit(page, 'turn.finished', {
+    status: 'failed', error_kind: 'rate_limited', retryable: true, response: '',
+  })
+  await expect(page.getByText('执行失败：模型服务限流，重试次数已用尽')).toBeVisible()
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0)
+})
+
+test('cancelled turn remains cancelled after legacy completion event', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByPlaceholder('问任何问题').fill('停止一个复杂任务')
+  await page.getByPlaceholder('问任何问题').press('Enter')
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'turn.finished', { status: 'cancelled', response: '已停止生成（用户中断）' })
+  await emit(page, 'turn.completed', { status: 'cancelled', response: '已停止生成（用户中断）' })
+  await expect(page.getByText('已停止生成（用户中断）')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0)
+})
