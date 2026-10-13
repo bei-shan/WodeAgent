@@ -73,7 +73,7 @@ class TeamCheckpointService:
             processed_messages[key] = list(msg_ids)
 
         inbox_cursors: Dict[str, int] = {}
-        for (team, member), cursor in getattr(self, "_inbox_cursor", {}).items():
+        for (team, member), cursor in getattr(owner, "_inbox_cursor", {}).items():
             key = f"{team}|{member}"
             inbox_cursors[key] = cursor
 
