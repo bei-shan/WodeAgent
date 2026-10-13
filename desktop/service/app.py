@@ -326,7 +326,8 @@ def create_app(
             snap = load_session_snapshot(str(snap_path))
         except Exception:
             return {"messages": []}
-        entries = snap.get("history_entries") or []
+        # Both new tree snapshots and legacy message-list snapshots.
+        entries = snap.get("history_entries") or snap.get("history_messages") or []
         messages = []
         for entry in entries:
             role = entry.get("role", "")
