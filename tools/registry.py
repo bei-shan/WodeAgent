@@ -381,6 +381,7 @@ class ToolRegistry:
         # 不是工具本身故障，不应触发熔断
         _CIRCUIT_SAFE_ERRORS = {
             ErrorCode.INVALID_PARAM, ErrorCode.MCP_PARAM_ERROR,
+            ErrorCode.INTERRUPTED,
             ErrorCode.ACCESS_DENIED, ErrorCode.NOT_FOUND, ErrorCode.CONFLICT,
             ErrorCode.IS_DIRECTORY, ErrorCode.BINARY_FILE,
             ErrorCode.ASK_USER_UNAVAILABLE,

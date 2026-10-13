@@ -7,13 +7,14 @@
 import os
 import re
 import shlex
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
+from core.runtime.cancellation import current_cancel_event
+from core.runtime.process_execution import run_process
 
 load_env()
 
@@ -242,26 +243,21 @@ class BashTool(Tool):
                 run_args = exec_command
 
         try:
-            result = subprocess.run(
-                run_args,
-                shell=use_shell,
-                cwd=str(target_dir),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
+            result = run_process(
+                run_args, shell=use_shell, cwd=str(target_dir), env=env,
+                timeout=timeout_sec, cancel_event=current_cancel_event(),
             )
             stdout = result.stdout
             stderr = result.stderr
             exit_code = result.returncode
-        except subprocess.TimeoutExpired as e:
-            timed_out = True
-            stdout = e.stdout or ""
-            stderr = e.stderr or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
+            timed_out = result.timed_out
+            if result.interrupted:
+                return self.create_error_response(
+                    error_code=ErrorCode.INTERRUPTED,
+                    message="Command interrupted by user.",
+                    params_input=params_input,
+                    time_ms=int((time.monotonic() - start_time) * 1000),
+                )
         except PermissionError:
             time_ms = int((time.monotonic() - start_time) * 1000)
             return self.create_error_response(
