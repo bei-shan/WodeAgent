@@ -74,6 +74,11 @@ class TestConnectMode(unittest.TestCase):
     def tearDown(self):
         clear_pending_servers()
 
+    def _temp_project(self) -> str:
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        return workspace.name
+
     @patch("tools.mcp.loader._background_connect")
     @patch("tools.mcp.loader.load_mcp_servers")
     @patch("tools.mcp.loader.connect_mode")
@@ -88,7 +93,7 @@ class TestConnectMode(unittest.TestCase):
         mock_bg.side_effect = lambda *a, **kw: None  # no-op
 
         reg = _make_fake_registry()
-        clients, tools_meta = register_mcp_servers(reg, "/fake/project")
+        clients, tools_meta = register_mcp_servers(reg, self._temp_project())
 
         # tools_meta is empty initially in manual mode
         self.assertEqual(tools_meta, [])
@@ -115,7 +120,7 @@ class TestConnectMode(unittest.TestCase):
         ]
 
         reg = _make_fake_registry()
-        clients, tools_meta = register_mcp_servers(reg, "/fake/project")
+        clients, tools_meta = register_mcp_servers(reg, self._temp_project())
 
         self.assertEqual(len(tools_meta), 1)
         self.assertEqual(tools_meta[0]["name"], "fetch_fetch")
@@ -131,7 +136,7 @@ class TestConnectMode(unittest.TestCase):
         }
 
         reg = _make_fake_registry()
-        clients, tools_meta = register_mcp_servers(reg, "/fake/project")
+        clients, tools_meta = register_mcp_servers(reg, self._temp_project())
 
         self.assertEqual(tools_meta, [])
         self.assertEqual(clients, [])
@@ -142,7 +147,7 @@ class TestConnectMode(unittest.TestCase):
         mock_load.return_value = {}
 
         reg = _make_fake_registry()
-        clients, tools_meta = register_mcp_servers(reg, "/fake/project")
+        clients, tools_meta = register_mcp_servers(reg, self._temp_project())
 
         self.assertEqual(tools_meta, [])
         self.assertEqual(clients, [])

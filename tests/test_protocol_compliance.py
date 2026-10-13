@@ -211,9 +211,11 @@ class TestProtocolCompliance(unittest.TestCase):
             
             parsed = self._validate_and_assert("Grep", response, tool_type="grep")
             
-            # 无匹配也是 success
-            self.assertEqual(parsed["status"], "success")
+            # A complete ripgrep search is success; successful Python
+            # fallback is partial by the documented tool protocol.
             self.assertEqual(parsed["data"]["matches"], [])
+            self.assertEqual(parsed["status"],
+                             "partial" if parsed["data"].get("fallback_used") else "success")
     
     def test_grep_error_invalid_regex(self):
         """Grep: 正则语法错误响应协议合规"""

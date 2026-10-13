@@ -1,5 +1,6 @@
 import re
 import time
+import threading
 
 from core.team_engine.manager import TeamManager
 from core.team_engine.turn_executor import TurnExecutor
@@ -14,6 +15,24 @@ class SleepLLM:
         if match:
             time.sleep(float(match.group(1)))
         return {"choices": [{"message": {"content": "done"}}]}
+
+
+class TrackingSleepLLM(SleepLLM):
+    """Track overlapping provider calls without a CI wall-clock cutoff."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def invoke_raw(self, messages, tools=None, tool_choice=None):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            return super().invoke_raw(messages, tools=tools, tool_choice=tool_choice)
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 class TaskCallingLLM:
@@ -75,12 +94,12 @@ def test_worker_uses_turn_executor_not_ack_only(tmp_path, monkeypatch):
 
 
 def test_two_workers_run_tasks_in_parallel(tmp_path):
-    manager = TeamManager(project_root=tmp_path, llm=SleepLLM(), tool_registry=ToolRegistry())
+    llm = TrackingSleepLLM()
+    manager = TeamManager(project_root=tmp_path, llm=llm, tool_registry=ToolRegistry())
     manager.create_team("demo", members=[{"name": "lead"}])
     manager.spawn_teammate("demo", "dev1")
     manager.spawn_teammate("demo", "dev2")
 
-    start = time.time()
     manager.fanout_work(
         "demo",
         tasks=[
@@ -89,10 +108,11 @@ def test_two_workers_run_tasks_in_parallel(tmp_path):
         ],
     )
     collected = _wait_collect(manager, "demo", expect=2, timeout_s=4.0)
-    elapsed = time.time() - start
 
     assert collected["counts"]["succeeded"] >= 2
-    assert elapsed < 0.55
+    # Assert real overlapping provider execution rather than assuming a
+    # fixed sub-550ms runtime on shared GitHub Actions workers.
+    assert llm.max_active >= 2
 
 
 def test_create_team_with_members_autostarts_workers(tmp_path):

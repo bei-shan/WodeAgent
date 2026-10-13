@@ -119,7 +119,7 @@ class WriteTool(Tool):
             # 1. 拒绝绝对路径（安全限制：只允许相对路径）
             if input_path.is_absolute():
                 return self.create_error_response(
-                    error_code=ErrorCode.INVALID_PARAM,
+                    error_code=ErrorCode.ACCESS_DENIED,
                     message="Absolute path not allowed. Use relative path.",
                     params_input=params_input,
                 )

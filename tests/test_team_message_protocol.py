@@ -79,6 +79,9 @@ def test_shutdown_request_sets_request_id(tmp_path):
 
 def test_message_status_survives_manager_recreate(tmp_path):
     manager = TeamManager(project_root=tmp_path)
+    # This checks durable status persistence, not worker delivery. An
+    # auto-started worker can race the test's explicit acknowledgement.
+    manager._start_worker = lambda *_args, **_kwargs: None
     try:
         manager.create_team("demo", members=[{"name": "lead"}, {"name": "dev1"}])
         sent = manager.send_message("demo", "lead", "dev1", "Ping", summary="ping")
