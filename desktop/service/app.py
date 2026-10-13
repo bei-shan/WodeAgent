@@ -284,6 +284,9 @@ def create_app(
             shutil.rmtree(ws_path)
         from core.session_manager import SessionManager
         disk_deleted = SessionManager().delete_session(sid)
+        # Remove the terminal-state sidecar only after a real session existed.
+        if mem_deleted or disk_deleted:
+            (Path("memory/sessions") / f"{sid}.turn.json").unlink(missing_ok=True)
         if not mem_deleted and not disk_deleted:
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
