@@ -397,7 +397,8 @@ class HistoryManager:
 
     def estimate_context_tokens(self, pending_input: str) -> int:
         total_chars = len(pending_input or "")
-        for msg in self._messages:
+        messages = self._context_branch_messages() if self._has_forks() else self._messages
+        for msg in messages:
             content = msg.content or ""
             total_chars += len(str(content))
             meta = msg.metadata or {}
@@ -419,8 +420,141 @@ class HistoryManager:
     # 压缩
     # ═════════════════════════════════════════════════════════════════════
 
+    # ── Branch-local, non-destructive compaction ──────────────────────
+
+    def _has_forks(self) -> bool:
+        return any(entry.get("type") == ENTRY_LEAF for entry in self._entries)
+
+    def _selected_compaction(self, branch: List[Message]) -> Optional[Dict[str, Any]]:
+        ids = {msg.message_id for msg in branch}
+        for entry in reversed(self._entries):
+            if (
+                entry.get("type") == ENTRY_COMPACTION
+                and entry.get("branchScoped") is True
+                and entry.get("parentId") in ids
+                and entry.get("firstKeptEntryId") in ids
+            ):
+                return entry
+        return None
+
+    def _context_branch_messages(self) -> List[Message]:
+        """Selected branch with its newest applicable summary overlay.
+
+        Overlays are scoped to a cursor ancestry, so a fork from an earlier
+        point cannot inherit a summary of an abandoned future path.
+        """
+        branch = self.get_current_branch()
+        overlay = self._selected_compaction(branch)
+        if overlay is None:
+            return branch
+        first_kept = overlay["firstKeptEntryId"]
+        index = next(
+            (idx for idx, msg in enumerate(branch) if msg.message_id == first_kept), 0
+        )
+        summary = Message(
+            content=str(overlay.get("summary") or ""),
+            role="summary",
+            metadata={"branch_summary": True},
+        )
+        return [summary] + branch[index:]
+
+    def _compact_selected_branch(self, emit, return_info: bool):
+        """Summarize only the current branch, without erasing tree siblings."""
+        info = {"compressed": False, "branch_scoped": True}
+        if self._consecutive_compaction_failures >= max(
+            1, self._config.context_compaction_max_failures
+        ):
+            info["reason"] = "failure_limit_reached"
+            emit("history_compression_skipped", info)
+            return info if return_info else False
+
+        current = self._context_branch_messages()
+        rounds = self._identify_rounds(current)
+        if len(rounds) <= self._config.min_retain_rounds:
+            info.update({"reason": "rounds_not_enough", "rounds_count": len(rounds)})
+            emit("history_compression_plan", info)
+            emit("history_compression_skipped", info)
+            return info if return_info else False
+
+        first_keep = rounds[-self._config.min_retain_rounds][0] if self._config.min_retain_rounds > 0 else len(current)
+        # Never build a summary consisting of a sibling that was not on the
+        # chosen path. Past overlays are represented as summary messages here.
+        prefix = current[:first_keep]
+        kept = current[first_keep:]
+        sources = [m for m in prefix if m.role in {"user", "assistant", "summary", "tool"}]
+        summaries = [m for m in sources if m.role == "summary"]
+        inputs = [m for m in sources if m.role != "summary"]
+        info.update({
+            "rounds_count": len(rounds),
+            "messages_before": len(current),
+            "messages_to_compress": len(inputs),
+            "existing_summaries": len(summaries),
+        })
+        emit("history_compression_plan", info)
+        emit("history_compression_messages", info)
+        if not sources or not kept or self._summary_generator is None:
+            info["reason"] = "summary_generator_unavailable" if self._summary_generator is None else "no_messages_to_compress"
+            emit("history_compression_skipped", info)
+            return info if return_info else False
+        try:
+            generated = self._summary_generator(sources)
+        except Exception:
+            logger.exception("Branch compaction summary generator failed")
+            generated = None
+        if not isinstance(generated, str) or not generated.strip():
+            self._consecutive_compaction_failures += 1
+            info["reason"] = "summary_generation_failed"
+            emit("history_compression_skipped", info)
+            return info if return_info else False
+        text = generated.strip()
+        goal = next((str(m.content) for m in sources if m.role == "user"), "")
+        anchor = build_continuity_anchor(
+            ([Message(content=goal, role="user")] if goal else []) + inputs,
+            max_chars=self._config.context_anchor_max_chars,
+        )
+        if anchor:
+            text += "\n\n<task_continuity>\n" + anchor + "\n</task_continuity>"
+        if len(text) > self._config.summary_output_max_chars:
+            self._consecutive_compaction_failures += 1
+            info["reason"] = "summary_exceeds_budget"
+            emit("history_compression_skipped", info)
+            return info if return_info else False
+
+        # Keep all original messages and edges for tree navigation; this
+        # overlay affects only the current model-context projection.
+        self._entries.append({
+            "type": ENTRY_COMPACTION,
+            "id": generate_short_id(),
+            "parentId": self._cursor_id,
+            "timestamp": datetime.now().isoformat(),
+            "summary": text,
+            "firstKeptEntryId": kept[0].message_id,
+            "branchScoped": True,
+        })
+        self._consecutive_compaction_failures = 0
+        self._last_usage_tokens = 0
+        info.update({
+            "compressed": True, "summary_generated": True,
+            "summary_len": len(text), "messages_after": len(kept) + 1,
+        })
+        emit("history_compression_summary", {
+            "summary_generated": True, "summary_len": len(text),
+        })
+        emit("history_compression_rebuilt", {
+            "messages_after": len(kept) + 1,
+        })
+        projected = self.to_messages_branch()
+        emit("history_compression_context", {
+            "messages": projected, "message_count": len(projected),
+        })
+        return info if return_info else True
+
     def should_compress(self, pending_input: str) -> bool:
-        if len(self._messages) < 3:
+        if self._has_forks():
+            messages = self._context_branch_messages()
+            if len(messages) < 3:
+                return False
+        elif len(self._messages) < 3:
             return False
         usage_estimated = self._last_usage_tokens + len(pending_input or "") // 3
         estimated_total = max(self.estimate_context_tokens(pending_input), usage_estimated)
@@ -439,13 +573,16 @@ class HistoryManager:
         return estimated_total >= max(1, threshold)
 
     def compact(self, on_event=None, return_info: bool = False):
-        """执行历史压缩。树模式下保留 compaction 条目而非删除消息。"""
+        """执行历史压缩。分支下仅压缩当前路径并保留其他节点。"""
         def _emit(event: str, payload: dict):
             if on_event:
                 try:
                     on_event(event, payload)
                 except Exception:
                     pass
+
+        if self._has_forks():
+            return self._compact_selected_branch(_emit, return_info)
 
         info: dict = {"compressed": False}
         if self._consecutive_compaction_failures >= max(
@@ -608,10 +745,11 @@ class HistoryManager:
 
         return info if return_info else True
 
-    def _identify_rounds(self) -> List[Tuple[int, int]]:
+    def _identify_rounds(self, messages: Optional[List[Message]] = None) -> List[Tuple[int, int]]:
+        messages = self._messages if messages is None else messages
         rounds: List[Tuple[int, int]] = []
         current_start: Optional[int] = None
-        for idx, msg in enumerate(self._messages):
+        for idx, msg in enumerate(messages):
             if msg.role == "user":
                 if current_start is not None:
                     rounds.append((current_start, idx - 1))
@@ -619,7 +757,7 @@ class HistoryManager:
             elif msg.role == "summary":
                 continue
         if current_start is not None:
-            rounds.append((current_start, len(self._messages) - 1))
+            rounds.append((current_start, len(messages) - 1))
         return rounds
 
     # ═════════════════════════════════════════════════════════════════════
@@ -729,9 +867,8 @@ class HistoryManager:
         return self._messages_to_openai(self._messages)
 
     def to_messages_branch(self) -> List[Dict[str, Any]]:
-        """将当前分支的消息转为 OpenAI messages 格式（树感知版本）。"""
-        branch = self.get_current_branch()
-        return self._messages_to_openai(branch)
+        """Current branch, respecting branch-specific compaction boundaries."""
+        return self._messages_to_openai(self._context_branch_messages())
 
     def to_messages_all(self) -> List[Dict[str, Any]]:
         """将所有消息转换为 OpenAI messages 格式。"""
