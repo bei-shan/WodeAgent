@@ -1362,45 +1362,18 @@ class CodeAgent(Agent):
         return TeamRuntimeView.format(events, runtime_state, max_lines)
 
     def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
-        # PreToolUse interception — unified Feature pipeline
-        # (DelegateModeFeature → block non-whitelisted; HookFeature → shell hooks)
-        normalized_input = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
-        t_start = time.monotonic()
+        """Execute one tool via the decoupled feature-aware runtime port."""
+        from core.runtime.tool_runtime import ToolRuntime
         if not hasattr(self, "_last_tool_timing"):
             self._last_tool_timing: dict[str, int] = {}
-        for feat in self._features:
-            pre_result = feat.pre_tool_use(self, tool_name, normalized_input)
-            if pre_result and pre_result.get("blocked"):
-                self.logger.info(
-                    "Tool %s blocked by %s: %s",
-                    tool_name, feat.name, pre_result.get("reason", "unknown")
-                )
-                payload = {
-                    "status": "error",
-                    "data": {},
-                    "error": {
-                        "code": pre_result.get("error_code", "HOOK_BLOCKED"),
-                        "message": pre_result.get("reason", "Blocked"),
-                    },
-                    "stats": {"time_ms": 0},
-                }
-                return json.dumps(payload, ensure_ascii=False)
-            if pre_result and pre_result.get("system_messages"):
-                self._hook_system_messages.extend(pre_result["system_messages"])
-            if pre_result and pre_result.get("updated_input"):
-                normalized_input = {**normalized_input, **pre_result["updated_input"]}
-
-        res = self.tool_registry.execute_tool(tool_name, normalized_input)
-        elapsed_ms = int((time.monotonic() - t_start) * 1000)
-        self._last_tool_timing[tool_name] = elapsed_ms
-
-        # PostToolUse interception (features)
-        for feat in self._features:
-            post_msgs = feat.post_tool_use(self, tool_name, normalized_input, str(res))
-            if post_msgs:
-                self._hook_system_messages.extend(post_msgs)
-
-        return str(res)
+        return ToolRuntime(self.tool_registry, self.logger).execute(
+            tool_name,
+            tool_input,
+            agent=self,
+            features=self._features,
+            emit_messages=self._hook_system_messages.extend,
+            record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
+        )
 
     def set_delegate_mode(self, enabled: bool) -> None:
         self.delegate_mode = bool(enabled)
