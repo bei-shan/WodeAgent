@@ -92,16 +92,16 @@ function App() {
           <Show when={view().notice}>
             <box height={1}><text fg="#f3bb6e">{view().notice}</text></box>
           </Show>
-          <Show when={view().pending}>
+          <Show when={view().pending} keyed>
             {(pending) => (
               <box border borderColor="#c19a58" padding={1} flexDirection="column">
                 <text fg="#ffd58a">
-                  {pending().kind === "permission"
-                    ? "Permission required · " + pending().tool + " · " + pending().path
-                    : "Agent asks · " + pending().question}
+                  {pending.kind === "permission"
+                    ? "Permission required · " + pending.tool + " · " + pending.path
+                    : "Agent asks · " + pending.question}
                 </text>
                 <text fg="#bac7da">
-                  {pending().kind === "permission" ? "Type y to allow or n to deny" : "Type your answer below"}
+                  {pending.kind === "permission" ? "Type y to allow or n to deny" : "Type your answer below"}
                 </text>
               </box>
             )}
@@ -112,7 +112,7 @@ function App() {
               value={draft()}
               placeholder={view().pending ? "Respond to request…" : "Ask the agent…  /new creates a session"}
               onInput={(value) => setDraft(value)}
-              onSubmit={submit}
+              onSubmit={() => submit(draft())}
               width="100%"
             />
             <text fg="#70819c">Enter send · Ctrl+N new · Ctrl+C interrupt / exit</text>

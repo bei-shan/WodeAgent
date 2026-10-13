@@ -85,7 +85,7 @@ export function projectEvent(current: SessionView, event: AgentEvent): SessionVi
     case "tool.started": {
       const id = stringField(p, "tool_call_id") || "tool-" + (view.lastSeq ?? view.tools.length)
       return { ...view, tools: [...view.tools, {
-        id, name: stringField(p, "tool"), status: "running", input: p.input,
+        id, name: stringField(p, "tool"), status: "running" as const, input: p.input,
       }].slice(-100) }
     }
     case "tool.completed": {
