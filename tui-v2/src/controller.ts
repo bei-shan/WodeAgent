@@ -90,6 +90,7 @@ export class TuiController {
           this.update({ ...this.view, connection })
         },
         newSession ? 0 : null,
+        this.api.authToken,
       )
     } catch (cause) {
       if (epoch === this.epoch && !this.disposed) this.error(cause)

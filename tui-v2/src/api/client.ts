@@ -6,16 +6,25 @@ export type TurnOutcome = { status: TurnStatus; response?: string; error_kind?: 
 /** Adapter for the existing Python/FastAPI application. No terminal dependencies. */
 export class AgentClient {
   readonly baseUrl: string
-  constructor(baseUrl = "http://127.0.0.1:8000") {
+  readonly authToken: string | undefined
+  constructor(baseUrl = "http://127.0.0.1:8000", authToken?: string) {
     const base = new URL(baseUrl)
     if (!["http:", "https:"].includes(base.protocol)) throw new Error("Server URL must use http(s)")
     this.baseUrl = base.origin
+    this.authToken = authToken || undefined
+    if (this.authToken && base.protocol === "http:" &&
+        !["localhost", "127.0.0.1", "[::1]"].includes(base.hostname)) {
+      throw new Error("Bearer authentication requires HTTPS or a loopback server")
+    }
   }
 
   private async request<T>(method: string, path: string, body?: object): Promise<T> {
     const result = await fetch(this.baseUrl + path, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(this.authToken ? { Authorization: "Bearer " + this.authToken } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     })
     if (!result.ok) {
