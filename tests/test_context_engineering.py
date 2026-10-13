@@ -213,7 +213,7 @@ class TestCodeAgentToolCalls:
     def test_compact_preserves_min_rounds(self):
         """压缩时保留最少轮次"""
         config = Config(min_retain_rounds=2)
-        hm = HistoryManager(config=config)
+        hm = HistoryManager(config=config, summary_generator=lambda msgs: "archived task results")
         
         # 创建 5 轮对话
         for i in range(5):
