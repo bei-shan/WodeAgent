@@ -99,10 +99,11 @@ class TestHistoryManager(unittest.TestCase):
         hm = HistoryManager(config=config)
         for i in range(3):
             self._append_round(hm, i)
-        result = hm.compact()
-        self.assertTrue(result)
-        summaries = [m for m in hm.get_messages() if m.role == "summary"]
-        self.assertEqual(len(summaries), 0)
+        before = hm.serialize_messages()
+        info = hm.compact(return_info=True)
+        self.assertFalse(info["compressed"])
+        self.assertEqual(info["reason"], "summary_generator_unavailable")
+        self.assertEqual(hm.serialize_messages(), before)
 
     def test_compact_preserves_existing_summaries(self):
         config = Config(min_retain_rounds=1)
@@ -112,9 +113,8 @@ class TestHistoryManager(unittest.TestCase):
             self._append_round(hm, i)
         hm.compact()
         summaries = [m for m in hm.get_messages() if m.role == "summary"]
-        self.assertGreaterEqual(len(summaries), 2)
-        contents = [m.content for m in summaries]
-        self.assertIn("old summary", contents)
+        self.assertEqual(len(summaries), 1)
+        self.assertIn("new summary", summaries[0].content)
 
     def test_compact_emits_events(self):
         config = Config(min_retain_rounds=1)
