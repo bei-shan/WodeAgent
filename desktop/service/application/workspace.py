@@ -1,170 +1,220 @@
-"""Session-scoped file operations, independent from FastAPI and presentation.
+"""Descriptor-anchored per-session file operations (no FastAPI dependencies).
 
-The session workspace is the only readable/writable root. All paths are
-resolved and validated before access; symlinks outside the workspace are
-rejected, and a file upload never overwrites an existing path.
+All untrusted path components are walked with O_NOFOLLOW using directory file
+descriptors. A renamed directory or symlink inserted between checks cannot
+redirect any operation outside the session's already opened directory.
 """
 from __future__ import annotations
 
 import os
 import re
+import stat
+from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterator
 
 from core.runtime.session_controller import SessionController
-from .errors import (
-    ForbiddenError, InvalidInputError, NotFoundError, PayloadTooLargeError,
-)
+from .errors import ForbiddenError, InvalidInputError, NotFoundError, PayloadTooLargeError
 
 _SESSION_ID = re.compile(r"[0-9a-f]{12}\Z")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 _CHUNK_SIZE = 64 * 1024
 
+# A safe local filesystem transport must fail closed rather than fall back to
+# resolve-then-open when the host lacks descriptor-relative secure traversal.
+_SECURE_OPEN = hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+_FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+
 
 class WorkspaceService:
-    """File use cases scoped to one active AgentSession.
-
-    HTTP adapters own their status codes and response streaming. The service
-    returns framework-neutral dictionaries or an already-open file handle.
-    """
+    """Session-scoped workspace operations; the filesystem is not trusted."""
 
     def __init__(self, controller: SessionController, data_dir: str | Path):
         self.controller = controller
         self.workspace_base = Path(data_dir) / "sessions"
 
-    def root(self, sid: str) -> Path:
-        if not _SESSION_ID.fullmatch(sid):
+    def _validate_session(self, sid: str) -> None:
+        if not _SESSION_ID.fullmatch(sid) or self.controller.get_session(sid) is None:
             raise NotFoundError("Session not found")
-        session = self.controller.get_session(sid)
-        if session is None:
-            raise NotFoundError("Session not found")
-        if session.workspace_dir:
-            # This location is assigned by the trusted Agent runtime.
-            return Path(session.workspace_dir).resolve()
-        base = self.workspace_base.resolve()
-        candidate = base / sid
-        candidate.mkdir(parents=True, exist_ok=True)
-        root = candidate.resolve()
-        try:
-            root.relative_to(base)
-        except ValueError as exc:
-            raise ForbiddenError("Session workspace is outside the workspace base") from exc
-        return root
 
-    def _target(self, sid: str, path: str) -> tuple[Path, Path]:
-        root = self.root(sid)
+    @staticmethod
+    def _parts(path: str) -> tuple[str, ...]:
+        # Backslashes are separators on Windows; reject them on POSIX too.
+        if not isinstance(path, str) or "\x00" in path or "\\" in path:
+            raise ForbiddenError("Invalid workspace path")
+        if path.startswith("/"):
+            raise ForbiddenError("Path is outside session root")
+        parts = tuple(component for component in path.split("/") if component and component != ".")
+        if any(part == ".." for part in parts):
+            raise ForbiddenError("Path is outside session root")
+        return parts
+
+    @contextmanager
+    def _root_fd(self, sid: str) -> Iterator[int]:
+        self._validate_session(sid)
+        if not _SECURE_OPEN:
+            raise ForbiddenError("Secure workspace access is unsupported on this host")
+        # data_dir is server-configured; the session component itself is
+        # untrusted and must be opened relative to an anchored base descriptor.
+        self.workspace_base.mkdir(parents=True, exist_ok=True)
         try:
-            target = (root / path).resolve()
-            target.relative_to(root)
-        except (ValueError, RuntimeError, OSError) as exc:
-            raise ForbiddenError("Path is outside session root or invalid") from exc
-        return root, target
+            parent_fd = os.open(self.workspace_base, _DIR_FLAGS)
+        except OSError as exc:
+            raise ForbiddenError("Cannot access workspace base") from exc
+        try:
+            try:
+                os.mkdir(sid, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            try:
+                fd = os.open(sid, _DIR_FLAGS, dir_fd=parent_fd)
+            except OSError as exc:
+                raise ForbiddenError("Unsafe session workspace") from exc
+            try:
+                yield fd
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent_fd)
+
+    @contextmanager
+    def _directory(self, sid: str, path: str) -> Iterator[int]:
+        parts = self._parts(path)
+        with self._root_fd(sid) as root_fd:
+            current = os.dup(root_fd)
+            try:
+                for component in parts:
+                    try:
+                        child = os.open(component, _DIR_FLAGS, dir_fd=current)
+                    except FileNotFoundError as exc:
+                        raise NotFoundError(f"Path not found: {path}") from exc
+                    except OSError as exc:
+                        raise ForbiddenError("Unsafe directory path") from exc
+                    os.close(current)
+                    current = child
+                yield current
+            finally:
+                os.close(current)
+
+    @contextmanager
+    def _open_file(self, sid: str, path: str) -> Iterator[tuple[str, BinaryIO]]:
+        parts = self._parts(path)
+        if not parts:
+            raise InvalidInputError("Path is a directory, not a file")
+        with self._directory(sid, "/".join(parts[:-1])) as directory_fd:
+            try:
+                fd = os.open(parts[-1], _FILE_FLAGS, dir_fd=directory_fd)
+            except FileNotFoundError as exc:
+                raise NotFoundError(f"File not found: {path}") from exc
+            except OSError as exc:
+                raise ForbiddenError("Unsafe file path") from exc
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise InvalidInputError("Path is a directory, not a file")
+                with os.fdopen(fd, "rb", closefd=False) as handle:
+                    yield parts[-1], handle
+            finally:
+                os.close(fd)
 
     def list(self, sid: str, path: str = ".", limit: int = 200) -> dict:
         if not 1 <= limit <= 500:
             raise InvalidInputError("Invalid directory listing limit")
-        root, target = self._target(sid, path)
-        if not target.exists():
-            raise NotFoundError(f"Path not found: {path}")
-        if not target.is_dir():
-            raise InvalidInputError("Path is not a directory")
-        try:
-            items = sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-        except PermissionError as exc:
-            raise ForbiddenError("Permission denied") from exc
-        entries: list[dict[str, str]] = []
-        for item in items[:limit]:
+        with self._directory(sid, path) as fd:
             try:
-                resolved = item.resolve()
-                resolved.relative_to(root)
-                # Never advertise an entry whose link leads outside this session.
-                if item.is_symlink():
-                    continue
-                rel = str(item.relative_to(root)).replace("\\", "/")
-                entries.append({
-                    "name": item.name, "path": rel,
-                    "type": "directory" if item.is_dir() else "file",
-                })
-            except (ValueError, OSError, RuntimeError):
-                continue
-        return {"path": path, "entries": entries, "truncated": len(items) > limit}
+                names = os.listdir(fd)
+                items = []
+                for name in names:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    # Deliberately suppress symlinks and special device files.
+                    if stat.S_ISDIR(info.st_mode):
+                        kind = "directory"
+                    elif stat.S_ISREG(info.st_mode):
+                        kind = "file"
+                    else:
+                        continue
+                    items.append((name, kind))
+            except PermissionError as exc:
+                raise ForbiddenError("Permission denied") from exc
+            items.sort(key=lambda item: (item[1] == "file", item[0].lower()))
+            prefix = "/".join(self._parts(path))
+            entries = [
+                {"name": name, "path": f"{prefix}/{name}" if prefix else name, "type": kind}
+                for name, kind in items[:limit]
+            ]
+            return {"path": path, "entries": entries, "truncated": len(items) > limit}
 
     def content(self, sid: str, path: str, start_line: int = 1, limit: int = 500) -> dict:
         if start_line < 1 or not 1 <= limit <= 2000:
             raise InvalidInputError("Invalid line range")
-        _, target = self._target(sid, path)
-        if not target.exists():
-            raise NotFoundError(f"File not found: {path}")
-        if target.is_dir():
-            raise InvalidInputError("Path is a directory, not a file")
-        try:
-            if target.stat().st_size > MAX_PREVIEW_BYTES:
+        with self._open_file(sid, path) as (_, handle):
+            if os.fstat(handle.fileno()).st_size > MAX_PREVIEW_BYTES:
                 raise PayloadTooLargeError("File too large to preview")
-            # Read only the preview-sized file; binary/invalid UTF-8 fails closed.
-            with target.open("r", encoding="utf-8") as stream:
-                text = stream.read(MAX_PREVIEW_BYTES + 1)
-            if len(text) > MAX_PREVIEW_BYTES or "\x00" in text:
-                raise InvalidInputError("File appears to be binary or too large")
+            data = handle.read(MAX_PREVIEW_BYTES + 1)
+        if len(data) > MAX_PREVIEW_BYTES:
+            raise PayloadTooLargeError("File too large to preview")
+        try:
+            text = data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise InvalidInputError("File appears to be binary") from exc
-        except PermissionError as exc:
-            raise ForbiddenError("Permission denied") from exc
+        if "\x00" in text:
+            raise InvalidInputError("File appears to be binary")
         lines = text.splitlines()
         start_idx = start_line - 1
         end_idx = min(start_idx + limit, len(lines))
-        selected = lines[start_idx:end_idx]
         numbered = "\n".join(
-            f"{i + 1}\t{line}" for i, line in enumerate(selected, start=start_idx)
+            f"{i + 1}\t{line}" for i, line in enumerate(lines[start_idx:end_idx], start=start_idx)
         )
         return {"path": path, "content": numbered, "truncated": end_idx < len(lines)}
 
     def download(self, sid: str, path: str) -> tuple[str, BinaryIO]:
-        """Open and return file stream for the adapter to close after sending."""
-        _, target = self._target(sid, path)
-        if not target.is_file():
-            raise NotFoundError(f"File not found: {path}")
-        # Prevent a final-component symlink swap after resolution on POSIX.
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            fd = os.open(target, flags)
-            return target.name, os.fdopen(fd, "rb")
-        except PermissionError as exc:
-            raise ForbiddenError("Permission denied") from exc
-        except OSError as exc:
-            raise ForbiddenError("Unable to open file securely") from exc
+        # Transfer ownership of the handle to the HTTP streaming adapter.
+        parts = self._parts(path)
+        if not parts:
+            raise InvalidInputError("Path is a directory, not a file")
+        with self._directory(sid, "/".join(parts[:-1])) as directory_fd:
+            try:
+                fd = os.open(parts[-1], _FILE_FLAGS, dir_fd=directory_fd)
+            except FileNotFoundError as exc:
+                raise NotFoundError(f"File not found: {path}") from exc
+            except OSError as exc:
+                raise ForbiddenError("Unsafe file path") from exc
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                os.close(fd)
+                raise InvalidInputError("Path is a directory, not a file")
+            return parts[-1], os.fdopen(fd, "rb")
 
     def upload(self, sid: str, filename: str, source: BinaryIO) -> dict:
-        root = self.root(sid)
-        # Normalize both separator styles to defeat Windows-style traversal.
         name = Path((filename or "upload").replace("\\", "/")).name
         if not name or name in {".", ".."} or "\x00" in name or len(name.encode("utf-8")) > 240:
             raise InvalidInputError("Invalid upload filename")
         stem, suffix = Path(name).stem, Path(name).suffix
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-        for index in range(1000):
-            target = root / (name if index == 0 else f"{stem}_{index}{suffix}")
+        with self._root_fd(sid) as root_fd:
+            for index in range(1000):
+                candidate = name if index == 0 else f"{stem}_{index}{suffix}"
+                try:
+                    fd = os.open(candidate, flags, 0o600, dir_fd=root_fd)
+                    break
+                except FileExistsError:
+                    continue
+                except PermissionError as exc:
+                    raise ForbiddenError("Permission denied") from exc
+            else:
+                raise InvalidInputError("Too many duplicate upload filenames")
+            size = 0
             try:
-                fd = os.open(target, flags, 0o600)
-                break
-            except FileExistsError:
-                continue
-            except PermissionError as exc:
-                raise ForbiddenError("Permission denied") from exc
-        else:
-            raise InvalidInputError("Too many duplicate upload filenames")
-        size = 0
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                while True:
-                    chunk = source.read(_CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > MAX_UPLOAD_BYTES:
-                        raise PayloadTooLargeError("Upload exceeds 25 MiB limit")
-                    stream.write(chunk)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
-        return {"path": target.name, "name": name, "size": size}
+                with os.fdopen(fd, "wb") as stream:
+                    while True:
+                        chunk = source.read(_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > MAX_UPLOAD_BYTES:
+                            raise PayloadTooLargeError("Upload exceeds 25 MiB limit")
+                        stream.write(chunk)
+            except BaseException:
+                os.unlink(candidate, dir_fd=root_fd)
+                raise
+            return {"path": candidate, "name": name, "size": size}

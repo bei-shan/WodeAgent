@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from desktop.service.app import create_app
 from desktop.service.application import WorkspaceService
-from desktop.service.application.errors import PayloadTooLargeError
+from desktop.service.application.errors import PayloadTooLargeError, ForbiddenError
 from tests.test_web_service import FakeAgent
 
 
@@ -139,3 +139,55 @@ def test_service_has_no_frontend_or_fastapi_dependencies():
     assert "from starlette" not in service
     assert "def _session_root(" not in app
     assert "(root / path).resolve()" not in app
+
+
+def test_nested_descriptor_paths_and_directory_symlink_swap(client, tmp_path, monkeypatch):
+    """A replaced intermediate directory must not redirect a read."""
+    import os
+    app, http = client
+    sid = http.post("/api/sessions", json={}).json()["id"]
+    service = app.state.workspace_service
+    root = tmp_path / ".mycodeagent" / "sessions" / sid
+    nested = root / "child"
+    nested.mkdir(parents=True)
+    (nested / "payload.txt").write_text("safe")
+    external = tmp_path / "outside"
+    external.mkdir()
+    (external / "payload.txt").write_text("EXTERNAL SECRET")
+    assert service.content(sid, "child/payload.txt")["content"] == "1\tsafe"
+    assert http.get(
+        f"/api/sessions/{sid}/files/download",
+        params={"path": "child/payload.txt"},
+    ).content == b"safe"
+
+    real_open = os.open
+    swapped = False
+    def changing_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == "child" and "dir_fd" in kwargs and not swapped:
+            swapped = True
+            nested.rename(root / "child-original")
+            nested.symlink_to(external, target_is_directory=True)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", changing_open)
+    try:
+        with pytest.raises(ForbiddenError):
+            service.content(sid, "child/payload.txt")
+    finally:
+        monkeypatch.setattr(os, "open", real_open)
+    assert swapped and (external / "payload.txt").read_text() == "EXTERNAL SECRET"
+
+
+def test_session_root_symlink_rejected_and_upload_not_escaped(client, tmp_path):
+    app, http = client
+    sid = http.post("/api/sessions", json={}).json()["id"]
+    root = tmp_path / ".mycodeagent" / "sessions" / sid
+    app.state.workspace_service.list(sid)  # Materialize the session root first.
+    other = tmp_path / "other"
+    other.mkdir()
+    root.rename(root.with_name(root.name + "-saved"))
+    root.symlink_to(other, target_is_directory=True)
+    with pytest.raises(ForbiddenError):
+        app.state.workspace_service.upload(sid, "test.txt", BytesIO(b"hello"))
+    assert not (other / "test.txt").exists()
