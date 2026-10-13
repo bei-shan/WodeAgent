@@ -244,16 +244,15 @@ class AgentSession:
         except Exception as exc:
             logger.exception("Agent turn failed in session %s", self.session_id[:8])
             outcome = failure_outcome(exc)
-        finally:
-            # Terminal event must be emitted after the busy flag is cleared:
-            # a user can safely send another message on turn.finished.
-            with self._busy_lock:
-                self._busy = False
         self.last_turn = outcome
         try:
             persist_turn_outcome(self.session_id, outcome)
         except Exception:
             logger.exception("Unable to persist turn outcome for %s", self.session_id[:8])
+        # Publish terminal events only once persistence and state are ready.
+        # The worker becomes available before the event reaches the client.
+        with self._busy_lock:
+            self._busy = False
         self.events.put(AgentEvent(SESSION_EVENT_TURN_FINISHED, outcome.to_dict()))
         # Legacy consumers still recognize turn.completed; carry the same
         # canonical status so they cannot confuse cancellation with success.
