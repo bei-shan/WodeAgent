@@ -971,7 +971,7 @@ class CodeAgent(Agent):
                         "tool_call_id": item["id"],
                     }, step=step))
                     if self.console_verbose:
-                        self._console(f"\\n🎬 Action: {item['name']}[{item['input']}]\\n")
+                        self._console(f"\n🎬 Action: {item['name']}[{item['input']}]\n")
                     elif self.logger.isEnabledFor(logging.DEBUG):
                         self.logger.debug("Action: %s %s", item["name"], item["input"])
 
@@ -1048,7 +1048,7 @@ class CodeAgent(Agent):
                 )
                 if self.console_verbose:
                     display_obs = observation[:300] + "..." if len(observation) > 300 else observation
-                    self._console(f"\\n👀 Observation: {display_obs}\\n")
+                    self._console(f"\n👀 Observation: {display_obs}\n")
                 elif self.logger.isEnabledFor(logging.DEBUG):
                     display_obs = observation[:300] + "..." if len(observation) > 300 else observation
                     self.logger.debug("Observation: %s", display_obs)
