@@ -30,7 +30,7 @@ load_env()
 from core.context_engine.history_manager import HistoryManager
 from core.context_engine.input_preprocessor import preprocess_input
 from core.context_engine.summary_compressor import create_summary_generator
-from core.session_store import build_session_snapshot, save_session_snapshot, load_session_snapshot
+from core.session_store import save_session_snapshot, load_session_snapshot
 from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
@@ -1005,42 +1005,9 @@ class CodeAgent(Agent):
         return self._session_id
 
     def _build_snapshot(self) -> dict:
-        """Build a session snapshot dict for the current state."""
-        system_messages = self._get_system_messages_for_run()
-        history_messages = self.history_manager.serialize_messages()
-        tool_schema = self._get_openai_tools_for_current_mode()
-        teams_snapshot = self.team_manager.export_state() if self.team_manager else {}
-        worktree_state = None
-        if self._active_worktree:
-            worktree_state = {
-                "name": self._active_worktree.get("name"),
-                "path": self._active_worktree.get("path"),
-                "branch": self._active_worktree.get("branch"),
-            }
-        return build_session_snapshot(
-            system_messages=system_messages,
-            history_messages=history_messages,
-            tool_schema=tool_schema,
-            project_root=self.project_root,
-            cwd=".",
-            code_law_text=self.context_builder._load_code_law(),
-            skills_prompt=self._skills_prompt,
-            mcp_tools_prompt=self._mcp_tools_prompt,
-            read_cache=self.tool_registry.export_read_cache(),
-            tool_output_dir="tool-output",
-            schema_version=2,
-            teams_snapshot=teams_snapshot,
-            parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
-            team_store_dir=self.team_store_dir,
-            task_store_dir=self.task_store_dir,
-            worktree_state=worktree_state,
-            # ── v2 tree fields ──
-            cursor_id=self.history_manager.get_cursor_id(),
-            history_entries=self.history_manager.serialize_entries(),
-            labels=self.history_manager._labels,
-            current_model=self.history_manager.get_current_model(),
-            thinking_level=self.history_manager.get_thinking_level(),
-        )
+        """Build the v2 session envelope through its dedicated assembler."""
+        from core.runtime.session_snapshot import SessionSnapshotBuilder
+        return SessionSnapshotBuilder(self).capture()
 
     def _auto_save_session(self) -> None:
         """Automatically persist the current session."""
@@ -1113,42 +1080,8 @@ class CodeAgent(Agent):
         return self._session_manager.resolve_identifier(identifier)
 
     def save_session(self, path: str) -> None:
-        """保存会话快照（含 system messages）。(legacy — uses auto-save now)"""
-        system_messages = self._get_system_messages_for_run()
-        history_messages = self.history_manager.serialize_messages()
-        tool_schema = self._get_openai_tools_for_current_mode()
-        teams_snapshot = self.team_manager.export_state() if self.team_manager else {}
-        worktree_state = None
-        if self._active_worktree:
-            worktree_state = {
-                "name": self._active_worktree.get("name"),
-                "path": self._active_worktree.get("path"),
-                "branch": self._active_worktree.get("branch"),
-            }
-        snapshot = build_session_snapshot(
-            system_messages=system_messages,
-            history_messages=history_messages,
-            tool_schema=tool_schema,
-            project_root=self.project_root,
-            cwd=".",
-            code_law_text=self.context_builder._load_code_law(),
-            skills_prompt=self._skills_prompt,
-            mcp_tools_prompt=self._mcp_tools_prompt,
-            read_cache=self.tool_registry.export_read_cache(),
-            tool_output_dir="tool-output",
-            schema_version=2,
-            teams_snapshot=teams_snapshot,
-            parallel_work_index=(teams_snapshot.get("work_items", {}) if isinstance(teams_snapshot, dict) else {}),
-            team_store_dir=self.team_store_dir,
-            task_store_dir=self.task_store_dir,
-            worktree_state=worktree_state,
-            cursor_id=self.history_manager.get_cursor_id(),
-            history_entries=self.history_manager.serialize_entries(),
-            labels=self.history_manager._labels,
-            current_model=self.history_manager.get_current_model(),
-            thinking_level=self.history_manager.get_thinking_level(),
-        )
-        save_session_snapshot(path, snapshot)
+        """Legacy path-based save uses the same v2 snapshot as auto-save."""
+        save_session_snapshot(path, self._build_snapshot())
 
     def load_session(self, path: str) -> None:
         """从快照恢复会话（scheme B）。"""
