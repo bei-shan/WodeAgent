@@ -72,3 +72,18 @@ def validate_tool_input(parameters: dict[str, Any], definitions: Iterable[Any]) 
         if not _valid_type(value, expected):
             return f"Parameter '{spec.name}' expects {expected}, got {_type_name(value)}."
     return None
+
+def error_envelope(code: str, message: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """A protocol-compliant tool error shared by hooks, parse and dispatch.
+
+    Callers can serialize this payload directly; never include a traceback
+    or raw tool output in the human-facing error message by default.
+    """
+    return {
+        "status": "error",
+        "data": {},
+        "text": message,
+        "error": {"code": code, "message": message},
+        "stats": {"time_ms": 0},
+        "context": {"cwd": ".", "params_input": parameters},
+    }
