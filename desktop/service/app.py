@@ -20,10 +20,11 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from desktop.service.local_auth import (
     LocalWebAuth, LocalAuthMiddleware, allow_websocket,
     COOKIE_NAME, COOKIE_TTL,
@@ -45,6 +46,7 @@ from core.runtime.session_controller import (
 from core.events import AgentEvent, EventType
 from desktop.service.application import (
     ServiceError, SessionService, TurnService, SessionSettingsService, TeamsService,
+    WorkspaceService,
 )
 from desktop.service.schemas import (
     SessionCreate,
@@ -183,6 +185,9 @@ def create_app(
     app.state.turn_service = TurnService(controller=app.state.controller)
     app.state.settings_service = SessionSettingsService(controller=app.state.controller)
     app.state.teams_service = TeamsService(controller=app.state.controller)
+    app.state.workspace_service = WorkspaceService(
+        controller=app.state.controller, data_dir=app.state.data_dir,
+    )
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state._started_at = time.time()
@@ -190,7 +195,7 @@ def create_app(
     # ── Lifespan ──────────────────────────────────────────────────
     @app.exception_handler(ServiceError)
     async def _application_error(_request: Request, exc: ServiceError):
-        status = {"not_found": 404, "conflict": 409, "invalid_input": 400}.get(exc.kind, 500)
+        status = {"not_found": 404, "conflict": 409, "invalid_input": 400, "forbidden": 403, "too_large": 413}.get(exc.kind, 500)
         return JSONResponse(status_code=status, content={"detail": str(exc) if status < 500 else "Internal error"})
 
     @app.on_event("startup")
@@ -313,30 +318,10 @@ def create_app(
 
     @app.post("/api/sessions/{sid}/upload")
     async def upload_file(sid: str, file: UploadFile = File(...)):
-        """Upload a file to the session workspace. Returns the saved path."""
-        import shutil
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        # Use session workspace — ensure agent is initialized first
-        from pathlib import Path as Pt
-        ws = Pt(app.state.data_dir) / "sessions" / sid
-        ws.mkdir(parents=True, exist_ok=True)
-        # Sanitize filename
-        safe_name = Pt(file.filename or "upload").name
-        dest = ws / safe_name
-        # Avoid overwriting: add counter if exists
-        if dest.exists():
-            stem, ext = Pt(safe_name).stem, Pt(safe_name).suffix
-            i = 1
-            while dest.exists():
-                dest = ws / f"{stem}_{i}{ext}"
-                i += 1
-        with open(dest, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        rel_path = dest.name  # always relative to this session's workspace
-        return {"path": rel_path, "name": safe_name, "size": dest.stat().st_size}
+        """Stream an upload into the session workspace (max 25 MiB)."""
+        return await asyncio.to_thread(
+            app.state.workspace_service.upload, sid, file.filename or "upload", file.file,
+        )
 
     # ═══════════════════════════════════════════════════════════════
     # Permissions
@@ -490,118 +475,43 @@ def create_app(
     # Files — session-scoped (each session may be in a worktree)
     # ═══════════════════════════════════════════════════════════════
 
-    def _session_root(sid: str) -> Path:
-        """Get the workspace root for a session."""
-        ctrl: SessionController = app.state.controller
-        session = ctrl.get_session(sid)
-        if session is not None and session.workspace_dir:
-            return Path(session.workspace_dir).resolve()
-        # Never expose the project root for a missing or uninitialized session.
-        if session is None:
-            raise HTTPException(404, "Session not found")
-        ws = Path(app.state.data_dir) / "sessions" / sid
-        ws.mkdir(parents=True, exist_ok=True)
-        return ws.resolve()
-
     @app.get("/api/sessions/{sid}/files", response_model=FileTreeResponse)
     async def file_tree(
         sid: str,
-        path: str = Query(".", description="Directory path relative to project root"),
+        path: str = Query(".", description="Directory path relative to session root"),
         limit: int = Query(200, ge=1, le=500),
     ):
-        """List files and directories in a session's workspace."""
-        root = _session_root(sid)
-        target = (root / path).resolve()
-        # Security: ensure target is inside root.
-        try:
-            target.relative_to(root)
-        except ValueError:
-            raise HTTPException(403, "Path is outside session root")
-
-        if not target.exists():
-            raise HTTPException(404, f"Path not found: {path}")
-        if not target.is_dir():
-            raise HTTPException(400, "Path is not a directory")
-
-        entries: list[FileEntry] = []
-        try:
-            items = sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-        except PermissionError:
-            raise HTTPException(403, "Permission denied")
-
-        for item in items[:limit]:
-            try:
-                rel = str(item.relative_to(root)).replace("\\", "/")
-            except ValueError:
-                continue
-            entries.append(FileEntry(
-                name=item.name,
-                path=rel,
-                type="directory" if item.is_dir() else "file",
-            ))
-
-        return FileTreeResponse(
-            path=path,
-            entries=entries,
-            truncated=len(list(target.iterdir())) > limit,
-        )
+        return await asyncio.to_thread(app.state.workspace_service.list, sid, path, limit)
 
     @app.get("/api/sessions/{sid}/files/content", response_model=FileContentResponse)
     async def file_content(
         sid: str,
-        path: str = Query(..., description="File path relative to project root"),
+        path: str = Query(..., description="File path relative to session root"),
         start_line: int = Query(1, ge=1),
         limit: int = Query(500, ge=1, le=2000),
     ):
-        """Read file content from a session's workspace."""
-        root = _session_root(sid)
-        target = (root / path).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError:
-            raise HTTPException(403, "Path is outside session root")
-
-        if not target.exists():
-            raise HTTPException(404, f"File not found: {path}")
-        if target.is_dir():
-            raise HTTPException(400, "Path is a directory, not a file")
-
-        # Quick binary check.
-        try:
-            text = target.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raise HTTPException(400, "File appears to be binary")
-
-        lines = text.splitlines()
-        total = len(lines)
-        start_idx = start_line - 1
-        end_idx = min(start_idx + limit, total)
-        selected = lines[start_idx:end_idx]
-
-        # Format with line numbers.
-        numbered = "\n".join(
-            f"{i + 1}\t{line}" for i, line in enumerate(selected, start=start_idx)
-        )
-
-        return FileContentResponse(
-            path=path,
-            content=numbered,
-            truncated=(end_idx < total),
+        return await asyncio.to_thread(
+            app.state.workspace_service.content, sid, path, start_line, limit,
         )
 
     @app.get("/api/sessions/{sid}/files/download")
     async def file_download(sid: str, path: str = Query(...)):
-        """Download a file from the session workspace as attachment."""
-        from fastapi.responses import FileResponse
-        root = _session_root(sid)
-        target = (root / path).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError:
-            raise HTTPException(403, "Path is outside session root")
-        if not target.exists() or not target.is_file():
-            raise HTTPException(404, f"File not found: {path}")
-        return FileResponse(str(target), filename=target.name, media_type="application/octet-stream")
+        filename, handle = await asyncio.to_thread(
+            app.state.workspace_service.download, sid, path,
+        )
+
+        def chunks():
+            try:
+                while data := handle.read(65536):
+                    yield data
+            finally:
+                handle.close()
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        )
 
     # ═══════════════════════════════════════════════════════════════
     # Info — models, tools, MCP
