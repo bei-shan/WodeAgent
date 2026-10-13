@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal, Optional, Iterator, Dict
 from openai import OpenAI
 
 from .exceptions import HelloAgentsException
+from .llm_recovery import ModelInvocationError, classify_model_error, retry_delay
 
 logger = logging.getLogger(__name__)
 
@@ -512,9 +513,10 @@ class HelloAgentsLLM:
                 response = self._client.chat.completions.create(**request_kwargs)
                 return response.choices[0].message.content
             except Exception as e:
-                if attempt >= self.max_retries:
-                    raise HelloAgentsException(f"LLM调用失败: {str(e)}")
-                wait_s = self.retry_backoff * (2 ** attempt)
+                policy = classify_model_error(e)
+                if not policy.retryable or attempt >= self.max_retries:
+                    raise ModelInvocationError(policy.kind, retryable=policy.retryable) from e
+                wait_s = retry_delay(attempt, self.retry_backoff)
                 logger.warning(
                     "LLM调用失败，%.1fs后重试（%d/%d）: %s",
                     wait_s,
@@ -571,6 +573,7 @@ class HelloAgentsLLM:
         """
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            stream_started = False
             try:
                 request_kwargs = {
                     "model": self.model,
@@ -607,6 +610,7 @@ class HelloAgentsLLM:
 
                 chunks = []
                 for chunk in response:
+                    stream_started = True
                     chunks.append(chunk)
                     delta = self._get_stream_delta(chunk)
                     if not delta:
@@ -623,9 +627,15 @@ class HelloAgentsLLM:
                 return self._merge_streaming_chunks(chunks)
             except Exception as exc:
                 last_error = exc
-                if attempt >= self.max_retries:
-                    raise HelloAgentsException(f"LLM调用失败: {str(exc)}")
-                wait_s = self.retry_backoff * (2 ** attempt)
+                policy = classify_model_error(exc)
+                # Do not retry a half-consumed stream: callers may already
+                # have rendered tokens, and repeating a provider request
+                # could produce different tool calls or duplicated output.
+                if stream_started:
+                    raise ModelInvocationError("stream_interrupted", retryable=False) from exc
+                if not policy.retryable or attempt >= self.max_retries:
+                    raise ModelInvocationError(policy.kind, retryable=policy.retryable) from exc
+                wait_s = retry_delay(attempt, self.retry_backoff)
                 logger.warning(
                     "LLM流式调用失败，%.1fs后重试（%d/%d）: %s",
                     wait_s,
