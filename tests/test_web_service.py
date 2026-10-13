@@ -107,3 +107,30 @@ def test_config_model_and_runtime_event(tmp_path, monkeypatch):
             received = [ws.receive_json()["type"] for _ in range(3)]
             assert "llm.delta" in received
             assert "assistant.final" in received
+
+def test_restart_restores_same_agent_conversation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MYCODEAGENT_DATA_DIR", str(tmp_path / "data"))
+    app1 = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    with TestClient(app1) as client:
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        client.post(f"/api/sessions/{sid}/messages", json={"content": "first"})
+        deadline = time.monotonic() + 3
+        while client.get(f"/api/sessions/{sid}").json()["busy"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    # A new Web process activates the same disk session and resumes history.
+    app2 = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    with TestClient(app2) as client:
+        sessions = client.get("/api/sessions").json()
+        assert any(s["id"] == sid for s in sessions)
+        assert client.post(f"/api/sessions/{sid}/activate").status_code == 200
+        assert client.get(f"/api/sessions/{sid}/config").status_code == 200
+        client.post(f"/api/sessions/{sid}/messages", json={"content": "second"})
+        deadline = time.monotonic() + 3
+        while client.get(f"/api/sessions/{sid}").json()["busy"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        history = client.get(f"/api/sessions/{sid}/history").json()["messages"]
+        assert [m["content"] for m in history] == [
+            "first", "回答：first", "second", "回答：second",
+        ]
