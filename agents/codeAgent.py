@@ -754,6 +754,7 @@ class CodeAgent(Agent):
         """
         from core.features import BUILTIN_FEATURES
         from core.runtime.tool_scheduler import plan_tool_batches, run_tool_batch
+        from core.runtime.tool_contracts import error_envelope
 
         for call in tool_calls:
             if not call.get("id"):
@@ -815,20 +816,17 @@ class CodeAgent(Agent):
         def execute(item: dict) -> tuple[str, str | None, str | None, int]:
             """Only dispatch is allowed to run inside a worker thread."""
             if item["parse_error"]:
-                result = {
-                    "status": "error", "data": {},
-                    "error": {"code": "INVALID_PARAM", "message": f"Tool arguments parse error: {item['parse_error']}"},
-                }
+                result = error_envelope(
+                    "INVALID_PARAM", f"Tool arguments parse error: {item['parse_error']}",
+                    item["input"] if isinstance(item["input"], dict) else {},
+                )
                 return json.dumps(result, ensure_ascii=False), None, None, 0
             dispatch_started = time.monotonic()
             try:
                 result = str(self._execute_tool(item["name"], item["input"]))
                 return result, None, None, int((time.monotonic() - dispatch_started) * 1000)
             except Exception as exc:
-                result = {
-                    "status": "error", "data": {},
-                    "error": {"code": "EXECUTION_ERROR", "message": str(exc)},
-                }
+                result = error_envelope("EXECUTION_ERROR", str(exc), item["input"])
                 return json.dumps(result, ensure_ascii=False), str(exc), tb.format_exc(), int((time.monotonic() - dispatch_started) * 1000)
 
         for batch in batches:
@@ -866,10 +864,9 @@ class CodeAgent(Agent):
                 # Complete all announced tool_call IDs, even on interruption:
                 # leaving unmatched IDs would make the next model call invalid.
                 outcomes = [
-                    (json.dumps({
-                        "status": "error", "data": {},
-                        "error": {"code": "INTERRUPTED", "message": "Tool not executed: user interrupted"},
-                    }, ensure_ascii=False), None, None, 0)
+                    (json.dumps(error_envelope(
+                        "INTERRUPTED", "Tool not executed: user interrupted", item["input"],
+                    ), ensure_ascii=False), None, None, 0)
                     for _ in batch.calls
                 ]
 
