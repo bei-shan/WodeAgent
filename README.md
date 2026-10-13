@@ -218,7 +218,11 @@ npm run dev
 
 目前可使用会话与历史恢复、聊天内容流式更新、工具调用卡片、工作区文件浏览/上传/预览/下载、权限确认、Agent Teams、Skill/MCP/Hooks 管理和模型 Profile 切换。模型 Profile 需预先在 `.env` 配置。
 
-**限制：**只支持可信本机环境，没有登录/Token 鉴权，**不要用 `--host 0.0.0.0` 暴露公网**。深度思考的真实模型推理参数尚未接通，Web 开关保持禁用；桌面打包壳尚未制作。
+**可选本地登录（单用户）：**运行 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成随机令牌，将结果写入私有 `.env` 的 `WEB_AUTH_TOKEN`。重启后端后，Web 首次打开会显示登录页。HTTP 使用 HttpOnly 会话 Cookie 与 Origin 校验，WebSocket 也会验证 Cookie/Origin。未配置时仍保持无登录的本地开发模式。详见 [本地鉴权说明](docs/design/2026-10-13-local-web-auth-phase1.md)。
+
+**实验性 Docker 工具隔离：**可以按 [Docker 沙箱说明](docs/design/2026-10-13-docker-sandbox-phase1.md) 设置 `AGENT_SANDBOX_MODE=docker`。默认 `local_trusted` 的 Bash 与文件工具仍在宿主机执行。
+
+**限制：**仅针对可信本机、单用户，不具备多用户资源级 RBAC；**不要使用 `--host 0.0.0.0` 暴露公网**。深度思考的真实模型推理参数尚未接通，Web 开关保持禁用；桌面打包壳尚未制作。
 
 验收命令：
 
