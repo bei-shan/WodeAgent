@@ -21,8 +21,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from desktop.service.local_auth import (
+    LocalWebAuth, LocalAuthMiddleware, allow_websocket,
+    COOKIE_NAME, COOKIE_TTL,
+)
 
 # Ensure project root on path.
 _proj = Path(__file__).resolve().parents[2]
@@ -146,6 +151,19 @@ def create_app(
         allow_headers=["*"],
     )
 
+    # Read the private .env even when a custom agent factory was injected.
+    # Environment variables always take precedence over dotenv defaults.
+    from core.env import load_env
+    load_env()
+
+    # Optional local-only login protection. Defaults off for compatibility;
+    # only a securely configured, high-entropy operator token enables it.
+    configured_auth_token = os.getenv("WEB_AUTH_TOKEN", "").strip()
+    auth = LocalWebAuth(configured_auth_token) if configured_auth_token else None
+    if auth is not None:
+        app.add_middleware(LocalAuthMiddleware, auth=auth)
+    app.state.local_auth = auth
+
     # ── Shared state ──────────────────────────────────────────────
     import os as _os
     app.state.data_dir = _os.path.abspath(
@@ -170,6 +188,48 @@ def create_app(
         for sid in ctrl.list_sessions():
             ctrl.delete_session(sid)
         logger.info("Service shut down")
+
+    # ═══════════════════════════════════════════════════════════════
+    # Single-user local authentication
+    # ═══════════════════════════════════════════════════════════════
+
+    @app.get("/api/auth/status")
+    async def local_auth_status(request: Request):
+        current = app.state.local_auth
+        return {
+            "required": current is not None,
+            "authenticated": current is None or current.authenticated(
+                request.headers, request.cookies
+            ),
+        }
+
+    @app.post("/api/auth/login")
+    async def local_auth_login(request: Request, body: dict):
+        current = app.state.local_auth
+        if current is None:
+            return {"status": "not_required"}
+        if not current.valid_origin(request.headers.get("origin")):
+            raise HTTPException(403, "Untrusted request origin")
+        address = request.client.host if request.client else "unknown"
+        if not current.allow_login_attempt(address):
+            raise HTTPException(429, "Too many login attempts")
+        token = body.get("token")
+        if not isinstance(token, str) or not current.check_token(token):
+            raise HTTPException(401, "Invalid login token")
+        response = JSONResponse({"status": "ok"})
+        response.set_cookie(
+            COOKIE_NAME, current.issue_cookie(),
+            max_age=COOKIE_TTL, httponly=True, samesite="strict",
+            secure=request.url.scheme == "https", path="/",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/api/auth/logout")
+    async def local_auth_logout():
+        response = JSONResponse({"status": "logged_out"})
+        response.delete_cookie(COOKIE_NAME, path="/", samesite="strict")
+        return response
 
     # ═══════════════════════════════════════════════════════════════
     # Health
@@ -574,6 +634,9 @@ def create_app(
     @app.websocket("/api/sessions/{sid}/stream")
     async def event_stream(ws: WebSocket, sid: str):
         """Stream agent events to the frontend in real time."""
+        if not allow_websocket(ws, app.state.local_auth):
+            await ws.close(code=1008)
+            return
         await ws.accept()
 
         ctrl: SessionController = app.state.controller

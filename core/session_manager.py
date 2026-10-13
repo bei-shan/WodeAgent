@@ -153,7 +153,10 @@ class SessionManager:
                 return s.id
 
         # Numeric index (1-based).
-        if identifier.isdigit():
+        # Canonical numeric list indexes do not contain leading zeros.
+        # Otherwise a hex-ID prefix such as "01" could accidentally select
+        # list item 1 instead of respecting the 4-char minimum prefix rule.
+        if identifier.isdecimal() and (identifier == "0" or not identifier.startswith("0")):
             idx = int(identifier) - 1
             if 0 <= idx < len(sessions):
                 return sessions[idx].id

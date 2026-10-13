@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
+import AuthGate from './AuthGate'
 import type { SessionInfo, AgentEvent, SkillInfo, McpServerCfg, TeamInfo } from './api'
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -529,7 +530,7 @@ function HooksPanel() {
 // Main App
 // ═══════════════════════════════════════════════════════════════════════
 
-export default function App() {
+function AppCore() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [activeSid, setActiveSid] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -1230,4 +1231,8 @@ export default function App() {
       {askReq && activeSid && <AskUserModal req={askReq} sid={activeSid} onDone={() => setAskReq(null)} />}
     </div>
   )
+}
+
+export default function App() {
+  return <AuthGate><AppCore /></AuthGate>
 }
