@@ -564,42 +564,74 @@ def create_app(
             await ws.close()
             return
 
-        # Bridge sync queue → async WebSocket.
-        loop = asyncio.get_running_loop()
-        # Read concurrently: otherwise a disconnected socket can keep draining
-        # the session's single-consumer event queue indefinitely.
+        # No cursor: join live at the current watermark. Existing sessions
+        # load their durable conversation from /history; active permission
+        # prompts are separately restored below.
+        # With ?after=N: replay N+1..latest, then follow new events without
+        # racing or competing with any other connected WebSocket.
+        raw_cursor = ws.query_params.get("after")
+        if raw_cursor is None:
+            cursor = session.events.latest_seq
+        else:
+            try:
+                cursor = int(raw_cursor)
+                if cursor < 0:
+                    raise ValueError("negative sequence")
+            except ValueError:
+                await ws.close(code=1008, reason="Invalid event cursor")
+                return
+
+        async def send_event(event: AgentEvent, seq: int | None = None) -> None:
+            if event.type not in _STREAM_EVENTS:
+                return
+            frame = {
+                "type": event.type,
+                "payload": _sanitize_payload(event.payload),
+                "step": event.step,
+            }
+            if seq is not None:
+                frame["seq"] = seq
+            await ws.send_json(frame)
+
+        # Permission and AskUser are blocking prompts; a browser refresh
+        # must not strand a worker waiting for an invisible dialog.
+        if raw_cursor is None:
+            for pending in session.pending_prompts():
+                await send_event(pending)
+
         disconnected = asyncio.create_task(ws.receive_text())
         try:
-            while True:
+            while not disconnected.done():
+                # Condition wait runs in a worker, never blocks FastAPI's loop.
+                batch = await asyncio.to_thread(session.events.wait_after, cursor, 0.5, 128)
                 if disconnected.done():
                     break
-                try:
-                    event: AgentEvent = await loop.run_in_executor(
-                        None, session.events.get, True, 1.0  # block=True, timeout=1s
-                    )
-                except Exception:
-                    # queue.Empty after 1s — just loop to check disconnect
-                    continue
-
-                if event is None:
-                    continue
-
-                # Forward relevant events to frontend.
-                if event.type in _STREAM_EVENTS:
+                if batch.gap:
+                    # A slow/offline client missed the ring-buffer window.
+                    # Tell it to reload durable history instead of pretending
+                    # every token/event was delivered.
                     await ws.send_json({
-                        "type": event.type,
-                        "payload": _sanitize_payload(event.payload),
-                        "step": event.step,
+                        "type": "stream.reset",
+                        "payload": {
+                            "reason": "cursor_expired",
+                            "oldest_seq": batch.oldest_seq,
+                            "latest_seq": batch.latest_seq,
+                        },
+                        "step": 0,
                     })
+                    cursor = batch.oldest_seq - 1
+                for item in batch.events:
+                    await send_event(item.event, item.seq)
+                    cursor = item.seq
 
         except WebSocketDisconnect:
-            pass  # client closed — clean exit
+            pass
         except Exception:
             logger.exception("WebSocket error for session %s", sid[:8])
         finally:
             disconnected.cancel()
             await asyncio.gather(disconnected, return_exceptions=True)
-            # Session stays alive and the browser may reconnect.
+            # Agent runs and journal entries outlive individual sockets.
 
     # ═══════════════════════════════════════════════════════════════
     # Files — session-scoped (each session may be in a worktree)
