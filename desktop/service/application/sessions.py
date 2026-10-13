@@ -15,6 +15,7 @@ from typing import Any, Callable
 from core.runtime.session_controller import SessionController
 from core.session_manager import SessionManager
 from core.context_engine.history_manager import HistoryManager
+from .session_portability import export_snapshot, to_internal_snapshot, validate_archive
 from .errors import InvalidInputError, NotFoundError, ConflictError, ServiceError
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,32 @@ class SessionService:
             return {"pinned": False}
         self._pinned.add(sid)
         return {"pinned": True}
+
+    def export_portable(self, sid: str) -> dict:
+        live = self._require_known(sid)
+        if live is not None and live.busy:
+            raise ConflictError("Stop the running turn before exporting")
+        info = self.catalog.get_session(sid)
+        if info is None:
+            raise NotFoundError("Session snapshot not found")
+        snapshot = self.catalog.load_session(sid)
+        if snapshot is None:
+            raise NotFoundError("Session snapshot not found")
+        # Never expose the raw snapshot: it contains system prompts, cache,
+        # tool traces and Team state that do not belong in a portable archive.
+        return export_snapshot(snapshot, info.title)
+
+    def import_portable(self, payload: dict) -> dict:
+        archive = validate_archive(payload)
+        clean_snapshot = to_internal_snapshot(archive)
+        # A new server-assigned ID prevents overwriting any existing session.
+        sid = self.catalog.create_session(archive["title"])
+        try:
+            self.catalog.save_session(sid, clean_snapshot)
+        except Exception:
+            self.catalog.delete_session(sid)
+            raise
+        return {"id": sid, "title": archive["title"], "busy": False}
 
     def tree(self, sid: str) -> dict:
         session = self._require_known(sid)

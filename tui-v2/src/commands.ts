@@ -2,6 +2,7 @@
 export type TerminalCommand =
   | { type: "help" | "new" | "sessions" | "models" | "pin" | "stop" | "tree" }
   | { type: "fork"; targetId: string }
+  | { type: "export" | "import"; path: string }
   | { type: "use"; index: number }
   | { type: "rename"; title: string }
   | { type: "delete"; confirmed: boolean }
@@ -14,6 +15,7 @@ export const TERMINAL_HELP = [
   "/rename TITLE · /pin · /delete confirm",
   "/models · /model PROFILE · /plan on|off · /teams on|off",
   "/tree · /fork NODE_ID (8 hex chars)",
+  "/export FILE · /import FILE (portable conversation only)",
   "/stop · Ctrl+N new · Ctrl+C interrupt/exit",
 ].join("\n")
 
@@ -32,6 +34,11 @@ export function parseTerminalCommand(raw: string): TerminalCommand | null {
       return /^[0-9a-f]{8}$/.test(arg)
         ? { type: "fork", targetId: arg }
         : { type: "invalid", reason: "Usage: /fork NODE_ID (8 lowercase hex chars)" }
+    case "export":
+    case "import":
+      return arg && !arg.includes("\0")
+        ? { type: name as "export" | "import", path: arg }
+        : { type: "invalid", reason: "Usage: /" + name + " FILE" }
     case "pin": return { type: "pin" }
     case "stop": return { type: "stop" }
     case "use": {
