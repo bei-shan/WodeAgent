@@ -419,8 +419,19 @@ class HistoryManager:
             return False
         usage_estimated = self._last_usage_tokens + len(pending_input or "") // 3
         estimated_total = max(self.estimate_context_tokens(pending_input), usage_estimated)
-        threshold = int(self._config.context_window * self._config.compression_threshold)
-        return estimated_total >= threshold
+        # Keep space for model output, tool returns and summarization.
+        # Claude Code Best reserves output capacity; OpenCode keeps a
+        # configurable headroom before its model context limit. Clamp the
+        # reserve for tiny context windows to preserve existing thresholds.
+        response_reserve = min(
+            max(0, self._config.context_response_reserve_tokens),
+            max(0, self._config.context_window // 5),
+        )
+        threshold = min(
+            int(self._config.context_window * self._config.compression_threshold),
+            self._config.context_window - response_reserve,
+        )
+        return estimated_total >= max(1, threshold)
 
     def compact(self, on_event=None, return_info: bool = False):
         """执行历史压缩。树模式下保留 compaction 条目而非删除消息。"""
