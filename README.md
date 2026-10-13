@@ -199,19 +199,36 @@ python scripts/chat_test_agent.py --skip-wizard
 python scripts/chat_test_agent.py --wizard
 ```
 
-### Web 启动
+### Web 启动（本地 MVP）
+
+在仓库根目录先配置好 `.env` 里的模型凭据，再分别启动两个终端：
 
 ```bash
-# 后端 (FastAPI)
-uvicorn desktop.service.app:create_app --factory --reload
+# 终端 1：FastAPI，仅绑定本机
+pip install -r requirements.txt
+uvicorn desktop.service.app:create_app --factory --host 127.0.0.1 --port 8000
 
-# 前端 (Vite)
+# 终端 2：Vite
 cd desktop/web
-npm install
+npm ci
 npm run dev
 ```
 
-浏览器访问 Vite 输出地址即可使用图形界面（会话列表、流式聊天、文件浏览 / 上传、Skill / MCP / Hooks 编辑）。
+打开 http://localhost:5173 。开发服务器自动转发 `/api` 和 WebSocket 请求到后端。
+
+目前可使用会话与历史恢复、聊天内容流式更新、工具调用卡片、工作区文件浏览/上传/预览/下载、权限确认、Agent Teams、Skill/MCP/Hooks 管理和模型 Profile 切换。模型 Profile 需预先在 `.env` 配置。
+
+**限制：**只支持可信本机环境，没有登录/Token 鉴权，**不要用 `--host 0.0.0.0` 暴露公网**。深度思考的真实模型推理参数尚未接通，Web 开关保持禁用；桌面打包壳尚未制作。
+
+验收命令：
+
+```bash
+cd desktop/web && npm ci && npm run build && cd ../..
+python -m pip install httpx
+python -m pytest tests/test_web_service.py tests/test_session_manager.py tests/test_session_tree.py tests/test_llm_streaming.py -q
+```
+
+PR 的 GitHub Actions 也会自动跑相同检查。
 
 ---
 

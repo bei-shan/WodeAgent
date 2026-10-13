@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
-import type { SessionInfo, AgentEvent, FileEntry, SkillInfo, McpServerCfg, TeamInfo } from './api'
+import FileBrowser from './FileBrowser'
+import type { SessionInfo, AgentEvent, SkillInfo, McpServerCfg, TeamInfo } from './api'
 
 // ═══════════════════════════════════════════════════════════════════════
 // Types
@@ -12,7 +13,7 @@ interface PermRequest { requestId: string; tool: string; path: string; action: s
 interface AskRequest { requestId: string; prompt: string }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
-const GITHUB_URL = 'https://github.com/bei-shan/MyCodeAgent'
+const GITHUB_URL = 'https://github.com/bei-shan/WodeAgent'
 
 const SCENARIOS = [
   { label: '代码审查', prompt: '请帮我审查以下代码，关注安全性、性能和最佳实践：' },
@@ -558,8 +559,10 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
-  const [fileEntries, setFileEntries] = useState<FileEntry[]>([])
-  const [fileCwd, setFileCwd] = useState('.')
+  const [streamConnected, setStreamConnected] = useState(false)
+  const [subagentStatus, setSubagentStatus] = useState('')
+  const [selectedModel, setSelectedModel] = useState('')
+  const activeSidRef = useRef<string | null>(null)
 
   // Models
   const [models, setModels] = useState<api.ModelInfo[]>([])
@@ -575,35 +578,71 @@ export default function App() {
   useEffect(() => { api.skills.list().then(setSkillsList).catch(() => {}) }, [])
   useEffect(() => { api.mcp.list().then(setMcpServers).catch(() => {}) }, [])
 
-  const selectSession = async (sid: string) => {
+  const connectSession = (sid: string) => {
+    setStreamConnected(false)
     disconnectRef.current?.()
-    setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null); setGeneratedFiles([])
-    // Activate if this is a persisted (disk-only) session
-    try { await fetch(`/api/sessions/${sid}/activate`, { method: 'POST' }) } catch {}
-    disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
-    try { const cfg = await api.config.get(sid); setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode); setThinkingLevel(cfg.thinking_level) } catch {}
-    // Load persisted history
+    let previouslyConnected = false
+    disconnectRef.current = api.connectStream(
+      sid, handleEvent,
+      () => setStreamConnected(false),
+      () => {
+        if (activeSidRef.current !== sid) return
+        setStreamConnected(true)
+        if (previouslyConnected) {
+          // Recover terminal events that may have been missed offline.
+          api.sessions.get(sid).then(meta => {
+            if (activeSidRef.current !== sid) return
+            setSending(meta.busy)
+            if (!meta.busy) {
+              api.sessions.history(sid).then(data => {
+                if (activeSidRef.current === sid && data.messages.length) {
+                  setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
+                }
+              }).catch(() => {})
+            }
+          }).catch(() => {})
+        }
+        previouslyConnected = true
+      },
+    )
+  }
+
+  const selectSession = async (sid: string) => {
+    activeSidRef.current = sid
+    setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
+    setGeneratedFiles([]); setSubagentStatus('')
     try {
-      const res = await fetch(`/api/sessions/${sid}/history`)
-      const data = await res.json()
-      if (data.messages?.length) {
-        setMessages(data.messages.map((m: any) => ({ id: uid(), role: m.role, content: m.content })))
+      await api.sessions.activate(sid)
+      connectSession(sid)
+      const data = await api.sessions.history(sid)
+      if (activeSidRef.current === sid) {
+        setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
+      }
+      const meta = await api.sessions.get(sid)
+      if (activeSidRef.current === sid) setSending(meta.busy)
+    } catch (e: any) { alert('打开会话失败：' + e.message) }
+    try {
+      const cfg = await api.config.get(sid)
+      if (activeSidRef.current === sid) {
+        setAgentTeams(cfg.enable_agent_teams); setPlanMode(cfg.plan_mode)
+        setThinkingLevel(cfg.thinking_level); setSelectedModel(cfg.model)
       }
     } catch {}
-    try { setTeamsList(await api.teams.list(sid)) } catch {}
+    try { if (activeSidRef.current === sid) setTeamsList(await api.teams.list(sid)) } catch {}
   }
 
   const createSession = async () => {
-    try { const s = await api.sessions.create(); setSessions(prev => [s, ...prev]); selectSession(s.id) } catch (e: any) { alert(e.message) }
+    try { const session = await api.sessions.create(); setSessions(prev => [session, ...prev]); await selectSession(session.id) }
+    catch (e: any) { alert(e.message) }
   }
 
   const deleteSession = async (sid: string) => {
     const prevSessions = sessions
     setSessions(prev => prev.filter(s => s.id !== sid))
-    if (activeSid === sid) { setActiveSid(null); disconnectRef.current?.() }
+    if (activeSidRef.current === sid) { activeSidRef.current = null; setActiveSid(null); setStreamConnected(false); disconnectRef.current?.() }
     try { await api.sessions.delete(sid) } catch (e: any) {
       setSessions(prevSessions)
-      if (activeSid === sid) setActiveSid(sid)
+      if (activeSidRef.current === null) { activeSidRef.current = sid; setActiveSid(sid); connectSession(sid) }
       alert('删除失败: ' + (e.message || '未知错误'))
     }
   }
@@ -620,16 +659,26 @@ export default function App() {
     try { await api.teams.create(activeSid, newTeamName.trim()); setTeamsList(await api.teams.list(activeSid)); setNewTeamName(''); setShowNewTeam(false) } catch (e: any) { alert(e.message) }
   }
 
-  const loadFiles = async (path: string) => {
-    if (!activeSid) return
-    try { const tree = await api.files.tree(activeSid, path); setFileEntries(tree.entries); setFileCwd(tree.path) } catch {}
-  }
-  useEffect(() => { if (activeSid) loadFiles('.') }, [activeSid])
+  useEffect(() => () => { disconnectRef.current?.() }, [])
 
   // ── Events ──────────────────────────────────────────────────────
   const handleEvent = (event: AgentEvent) => {
     const { type, payload } = event
     switch (type) {
+      case 'llm.delta':
+        if (payload.kind === 'content' && payload.text) {
+          setMessages(prev => {
+            const last = prev[prev.length - 1]
+            if (last?.role === 'assistant' && last.streaming) {
+              return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: m.content + payload.text } : m)
+            }
+            return [...prev, { id: uid(), role: 'assistant', content: payload.text, streaming: true }]
+          })
+        }
+        break
+      case 'subagent.started': setSubagentStatus('子代理运行中…'); break
+      case 'subagent.tool_use': setSubagentStatus('子代理正在调用工具…'); break
+      case 'subagent.finished': setSubagentStatus('子代理已完成'); break
       case 'tool.started':
         setTools(prev => [...prev, { id: payload.tool_call_id || uid(), name: payload.tool, input: payload.input || {}, status: 'running', step: event.step }]); break
       case 'tool.completed': {
@@ -655,8 +704,19 @@ export default function App() {
       case 'run.finished': setSending(false); loadSessions(); break
       case 'permission.requested': setPermReq({ requestId: payload.request_id, tool: payload.tool, path: payload.path, action: payload.action }); break
       case 'ask_user.requested': setAskReq({ requestId: payload.request_id, prompt: payload.prompt }); break
-      case 'turn.completed': setSending(false); loadSessions(); if (activeSid) { api.teams.list(activeSid).then(setTeamsList).catch(() => {}) }; break
-      case 'error': setMessages(prev => [...prev, { id: uid(), role: 'assistant', content: `${payload.message}` }]); setSending(false); break
+      case 'turn.completed':
+        setMessages(prev => prev.map(m => m.streaming ? {
+          ...m,
+          content: String(payload.response || '').startsWith('已停止生成')
+            ? String(payload.response) : m.content || String(payload.response || ''),
+          streaming: false,
+        } : m))
+        setSending(false); loadSessions()
+        if (activeSidRef.current) { api.teams.list(activeSidRef.current).then(setTeamsList).catch(() => {}) }
+        break
+      case 'error':
+        setMessages(prev => [...prev.map(m => m.streaming ? { ...m, streaming: false } : m), { id: uid(), role: 'assistant', content: String(payload.message || '运行失败') }])
+        setSending(false); break
     }
   }
 
@@ -666,13 +726,16 @@ export default function App() {
   const sendMessage = async () => {
     if (!input.trim() || sending) return
     // Auto-create session if none active
-    let sid = activeSid
+    let sid = activeSidRef.current
     if (!sid) {
       try {
-        const s = await api.sessions.create(); setSessions(prev => [s, ...prev]); sid = s.id; setActiveSid(sid)
-        disconnectRef.current?.()
-        disconnectRef.current = api.connectStream(sid, handleEvent, () => {})
-      } catch (e: any) { return }
+        const session = await api.sessions.create()
+        sid = session.id
+        setSessions(prev => [session, ...prev])
+        activeSidRef.current = sid
+        setActiveSid(sid)
+        connectSession(sid)
+      } catch (e: any) { alert('创建会话失败：' + e.message); return }
     }
     // Append @file references for uploaded files
     let content = input.trim()
@@ -681,7 +744,7 @@ export default function App() {
       content = content ? `${content}\n${refs}` : refs
       setUploadedFiles([])
     }
-    setInput(''); setSending(true)
+    setInput(''); setSending(true); setSubagentStatus('')
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
     try { await api.sessions.send(sid, content) } catch (e: any) {
@@ -690,6 +753,24 @@ export default function App() {
   }
 
   const fillScenario = (prompt: string) => { setInput(prompt) }
+  const chooseModel = async (profile: api.ModelInfo) => {
+    try {
+      let sid = activeSidRef.current
+      if (!sid) {
+        const session = await api.sessions.create()
+        sid = session.id; setSessions(prev => [session, ...prev])
+        await selectSession(sid)
+      }
+      await api.config.update(sid, { model_profile: profile.name })
+      setSelectedModel(profile.model)
+      setShowModelPicker(false)
+    } catch (e: any) { alert('切换模型失败：' + e.message) }
+  }
+  const interrupt = async () => {
+    if (!activeSidRef.current) return
+    try { await api.sessions.interrupt(activeSidRef.current) }
+    catch (e: any) { alert('中断失败：' + e.message) }
+  }
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
 
   // File upload
@@ -699,9 +780,10 @@ export default function App() {
       const form = new FormData(); form.append('file', files[i])
       try {
         const res = await fetch(`/api/sessions/${activeSid}/upload`, { method: 'POST', body: form })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
         const data = await res.json()
         setUploadedFiles(prev => [...prev, { name: data.name, path: data.path }])
-      } catch {}
+      } catch (e: any) { alert('上传失败：' + e.message) }
     }
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -861,7 +943,10 @@ export default function App() {
             </svg>
           </button>
           <div className="flex items-center gap-3">
-          {sending && <span className="text-xs text-blue-500 font-medium mr-2">Agent 处理中…</span>}
+          {activeSid && <span className={`text-xs mr-2 ${streamConnected ? 'text-emerald-600' : 'text-amber-600'}`}>
+            {streamConnected ? '实时连接正常' : '连接中 / 自动重连…'}
+          </span>}
+          {sending && <button onClick={interrupt} className="text-xs text-red-600 border rounded-lg px-3 py-1.5">停止生成</button>}
             <a href={GITHUB_URL} target="_blank" rel="noopener"
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
               <Svg d={Icons.doc} size={16} />
@@ -887,6 +972,7 @@ export default function App() {
 
         {/* ── Hooks management panel ── */}
         {sidebarTab === 'hooks' && <HooksPanel />}
+        {sidebarTab === 'files' && <FileBrowser sessionId={activeSid} />}
 
         {/* ── Chat / empty state ── */}
         {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (
@@ -903,13 +989,13 @@ export default function App() {
                     <button onClick={() => setShowModelPicker(!showModelPicker)}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
                       <Svg d={Icons.brain} size={16} />
-                      <span>{models[0]?.model || 'Model'}</span>
+                      <span>{selectedModel || models[0]?.model || 'Model'}</span>
                       <Svg d={Icons.chevron} size={12} className="text-gray-400" />
                     </button>
                     {showModelPicker && models.length > 0 && (
                       <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-10 min-w-[180px]">
                         {models.map(m => (
-                          <button key={m.name} onClick={() => setShowModelPicker(false)}
+                          <button key={m.name} onClick={() => chooseModel(m)}
                             className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">{m.model}</button>
                         ))}
                       </div>
@@ -917,7 +1003,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => fileInputRef.current?.click()}
+                  <button onClick={() => fileInputRef.current?.click()} disabled={!activeSid} title={activeSid ? '上传文件' : '请先创建会话'}
                     className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
                     <Svg d={Icons.plus} size={16} />
                   </button>
@@ -934,8 +1020,8 @@ export default function App() {
               <div className="flex items-center justify-between px-5 pb-4">
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <span className="text-[11px] text-gray-400">深度思考</span>
-                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                    <span className="text-[11px] text-gray-400" title="模型推理参数尚未接入，暂不可用">深度思考（待接入）</span>
+                    <label className="toggle"><input type="checkbox" disabled title="功能暂未接入" /><span className="slider" /></label>
                   </label>
                   <label className="flex items-center gap-1.5 cursor-pointer select-none">
                     <span className="text-[11px] text-gray-400">Agent 团队</span>
@@ -949,7 +1035,7 @@ export default function App() {
                     }} /><span className="slider" /></label>
                   </label>
                 </div>
-                <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                <button onClick={sendMessage} disabled={sending || !input.trim()}
                   className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
                   <Svg d={Icons.send} size={17} />
                 </button>
@@ -1000,6 +1086,13 @@ export default function App() {
                   </div>
                 </div>
               ))}
+              {tools.length > 0 && (
+                <div className="space-y-2" aria-label="工具执行记录">
+                  <h3 className="text-xs text-gray-500 ml-10">工具执行记录</h3>
+                  {tools.map(tool => <ToolCard key={tool.id} tool={tool} sid={activeSid} />)}
+                </div>
+              )}
+              {subagentStatus && <div className="ml-10 text-xs text-blue-600">{subagentStatus}</div>}
               {/* Generated files download */}
               {generatedFiles.length > 0 && (
                 <div className="border-t border-gray-100 pt-3 mt-2">
@@ -1030,11 +1123,11 @@ export default function App() {
                     <Svg d={Icons.plus} size={14} />
                   </button>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-sm text-gray-500">深度思考</span>
-                    <label className="toggle"><input type="checkbox" checked={thinkingLevel === 'high'} onChange={() => setThinkingLevel(thinkingLevel === 'high' ? 'medium' : 'high')} /><span className="slider" /></label>
+                    <span className="text-sm text-gray-500" title="模型推理参数尚未接入">深度思考（待接入）</span>
+                    <label className="toggle"><input type="checkbox" disabled title="功能暂未接入" /><span className="slider" /></label>
                   </label>
                 </div>
-                <button onClick={sendMessage} disabled={!activeSid || sending || !input.trim()}
+                <button onClick={sendMessage} disabled={sending || !input.trim()}
                   className="w-8 h-8 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
                   <Svg d={Icons.send} size={15} />
                 </button>

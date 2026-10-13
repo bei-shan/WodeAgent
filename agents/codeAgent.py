@@ -4,6 +4,7 @@ import uuid
 import os
 import logging
 import sys
+import threading
 import traceback as tb
 from pathlib import Path
 from typing import Any, Optional, List, Tuple
@@ -78,6 +79,7 @@ class CodeAgent(Agent):
         )
         self.last_response_raw: Optional[Any] = None
         self.llm_stream_callback = None
+        self._interrupt_requested = threading.Event()
         # Structured event sink — UI adapters subscribe here instead of
         # overriding _console().  Default is no-op (headless/testing safe).
         if event_sink is None:
@@ -506,6 +508,14 @@ class CodeAgent(Agent):
             if getattr(tool, "_permission_gate", None) is None:
                 tool._permission_gate = self._permission_gate
 
+    def interrupt(self) -> None:
+        """Request cooperative cancellation, checked between LLM/tool steps.
+
+        An in-flight provider request or shell process cannot be preempted.
+        The turn exits before the next tool/LLM step after that call returns.
+        """
+        self._interrupt_requested.set()
+
     def run(self, input_text: str, **kwargs) -> str:
         """
         Code Agent 的入口（Message List 自然累积模式）
@@ -591,6 +601,7 @@ class CodeAgent(Agent):
                 trace_logger=trace_logger,
             )
         finally:
+            self._interrupt_requested.clear()
             trace_logger.log_event(
                 "run_end",
                 {"run_id": run_id, "final": response_text if "response_text" in locals() else ""},
@@ -675,6 +686,8 @@ class CodeAgent(Agent):
         tool_choice = "auto"
 
         for step in range(1, self.max_steps + 1):
+            if self._interrupt_requested.is_set():
+                return "已停止生成（用户中断）"
             # Auto-retry pending MCP servers each step so tools appear
             # MCP retry handled by MCPFeature.runtime_blocks()
 
@@ -701,6 +714,8 @@ class CodeAgent(Agent):
                 messages, base_messages, tools_schema, tool_choice,
                 show_raw, trace_logger, step,
             )
+            if self._interrupt_requested.is_set():
+                return "已停止生成（用户中断）"
             if result is None:
                 break
 
@@ -975,6 +990,8 @@ class CodeAgent(Agent):
         )
 
         for call in tool_calls:
+            if self._interrupt_requested.is_set():
+                break
             tool_name = call.get("name") or "unknown_tool"
             tool_call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
             raw_args = call.get("arguments") or {}

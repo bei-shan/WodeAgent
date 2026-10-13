@@ -33,6 +33,7 @@ class EventType:
     STEP_STARTED = "step.started"
     LLM_STARTED = "llm.started"
     LLM_COMPLETED = "llm.completed"
+    LLM_DELTA = "llm.delta"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     ASSISTANT_FINAL = "assistant.final"

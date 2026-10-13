@@ -99,10 +99,15 @@ class AgentSession:
             self._busy = True
 
         # Auto-name session from first user message.
-        if not self.title:
+        if not self.title or self.title == "新会话":
             self.title = content.strip()[:40]
 
-        self._ensure_agent()
+        try:
+            self._ensure_agent()
+        except Exception:
+            with self._busy_lock:
+                self._busy = False
+            raise
         self._thread = threading.Thread(
             target=self._run_turn,
             args=(content,),
@@ -169,6 +174,18 @@ class AgentSession:
         self.workspace_dir = str(workspace.resolve())
 
         agent = self._agent_factory()
+        # A CodeAgent initializes a temporary session ID in SessionFeature.
+        # Reuse the Web ID instead so history, snapshots and workspace agree.
+        store = getattr(agent, "_session_manager", None)
+        old_id = getattr(agent, "_session_id", None)
+        if store is not None and old_id != self.session_id:
+            store.delete_session(old_id)
+            agent._session_id = self.session_id
+            snapshot = store.load_session(self.session_id) or {}
+            if snapshot.get("history_entries"):
+                agent.history_manager.load_entries(snapshot["history_entries"])
+            elif snapshot.get("history_messages"):
+                agent.history_manager.load_messages(snapshot["history_messages"])
 
         # Redirect agent to session workspace using the built-in rebind
         # which properly updates project_root, permission gate, tools,
@@ -178,6 +195,11 @@ class AgentSession:
 
         # Install session-scoped event sink → queue.
         agent.event_sink = _QueueEventSink(self.events)
+        # Stream content tokens to the Web event queue, including reasoning
+        # metadata (the UI deliberately displays only content deltas).
+        agent.llm_stream_callback = lambda kind, text, step: self.events.put(
+            AgentEvent("llm.delta", {"kind": kind, "text": text}, step=step)
+        )
 
         # Wire permission broker → blocks on permission.requested events.
         broker = _SessionPermissionBroker(self)
@@ -245,7 +267,9 @@ class SessionController:
 
     def create_session(self, agent_factory: Callable[[], Any]) -> str:
         """Create a new session.  Returns the session ID."""
-        session_id = uuid.uuid4().hex[:12]
+        # Reserve the same ID in the persistent catalog before first turn.
+        from core.session_manager import SessionManager
+        session_id = SessionManager().create_session()
         session = AgentSession(session_id, agent_factory, workspace_base=self._workspace_base)
         with self._lock:
             self._sessions[session_id] = session

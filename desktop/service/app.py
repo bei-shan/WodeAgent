@@ -72,6 +72,7 @@ _STREAM_EVENTS = {
     EventType.STEP_STARTED,
     EventType.LLM_STARTED,
     EventType.LLM_COMPLETED,
+    EventType.LLM_DELTA,
     EventType.TOOL_STARTED,
     EventType.TOOL_COMPLETED,
     EventType.ASSISTANT_FINAL,
@@ -92,7 +93,7 @@ _STREAM_EVENTS = {
 # ═══════════════════════════════════════════════════════════════════════
 
 def create_app(
-    agent_factory: Callable[[], Any],
+    agent_factory: Optional[Callable[[], Any]] = None,
     tool_registry: Any = None,
     project_root: str = ".",
 ) -> FastAPI:
@@ -110,6 +111,22 @@ def create_app(
         Base project directory for file browsing (before worktree).
     """
 
+    if agent_factory is None:
+        # Allows the documented uvicorn --factory entry point to work.
+        from core.env import load_env
+        from core.config import Config
+        from core.llm import HelloAgentsLLM
+        from agents.codeAgent import CodeAgent
+        from tools.registry import ToolRegistry
+        load_env()
+        config = Config.from_env()
+        def agent_factory() -> Any:
+            return CodeAgent(
+                name="web", llm=HelloAgentsLLM(),
+                tool_registry=ToolRegistry(), project_root=project_root,
+                config=config,
+            )
+
     app = FastAPI(
         title="MyCodeAgent API",
         version="0.1.0",
@@ -119,7 +136,10 @@ def create_app(
     # CORS — permissive for local dev; tighten for production.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "http://localhost:5173", "http://127.0.0.1:5173",
+            "http://localhost:8000", "http://127.0.0.1:8000",
+        ],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -236,8 +256,14 @@ def create_app(
             raise HTTPException(500, "Failed to create session")
         # Override its ID to match the persisted one
         session.session_id = sid
+        from core.session_manager import SessionManager
+        previous = SessionManager().get_session(sid)
+        if previous is not None:
+            session.title = previous.title
         ctrl._sessions.pop(new_sid, None)
         ctrl._sessions[sid] = session
+        from core.session_manager import SessionManager
+        SessionManager().delete_session(new_sid)
         return {"status": "activated", "id": sid}
 
     @app.delete("/api/sessions/{sid}")
@@ -254,7 +280,9 @@ def create_app(
         ws_path = Path(app.state.data_dir) / "sessions" / sid
         if ws_path.exists():
             shutil.rmtree(ws_path)
-        if not mem_deleted and not snap_path.exists():
+        from core.session_manager import SessionManager
+        disk_deleted = SessionManager().delete_session(sid)
+        if not mem_deleted and not disk_deleted:
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
 
@@ -269,6 +297,8 @@ def create_app(
         if not new_title:
             raise HTTPException(400, "Title is required")
         session.title = new_title
+        from core.session_manager import SessionManager
+        SessionManager().rename_session(sid, new_title)
         return {"status": "renamed", "title": new_title}
 
     # In-memory pinned sessions set
@@ -300,7 +330,8 @@ def create_app(
             snap = load_session_snapshot(str(snap_path))
         except Exception:
             return {"messages": []}
-        entries = snap.get("history_entries") or []
+        # Both new tree snapshots and legacy message-list snapshots.
+        entries = snap.get("history_entries") or snap.get("history_messages") or []
         messages = []
         for entry in entries:
             role = entry.get("role", "")
@@ -332,7 +363,8 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
-        session.interrupt()
+        if not session.interrupt():
+            raise HTTPException(409, "Agent is not running or does not support cancellation")
         return {"status": "interrupted"}
 
     @app.post("/api/sessions/{sid}/upload")
@@ -359,7 +391,7 @@ def create_app(
                 i += 1
         with open(dest, "wb") as f:
             shutil.copyfileobj(file.file, f)
-        rel_path = str(dest.relative_to(Pt.cwd())).replace("\\", "/")
+        rel_path = dest.name  # always relative to this session's workspace
         return {"path": rel_path, "name": safe_name, "size": dest.stat().st_size}
 
     # ═══════════════════════════════════════════════════════════════
@@ -404,9 +436,9 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
+        if session._agent is None:
+            session._ensure_agent()
         agent = session._agent
-        if agent is None:
-            raise HTTPException(400, "Session not started yet")
         model = getattr(agent.llm, 'model', '')
         provider = getattr(agent.llm, 'provider', '')
         teams = bool(getattr(agent, 'enable_agent_teams', False))
@@ -414,7 +446,7 @@ def create_app(
         return SessionConfig(
             model=model, provider=provider,
             enable_agent_teams=teams, plan_mode=plan,
-            thinking_level="medium",
+            thinking_level=agent.history_manager.get_thinking_level(),
         )
 
     @app.put("/api/sessions/{sid}/config")
@@ -423,9 +455,20 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
+        if session.busy:
+            raise HTTPException(409, "Cannot change configuration during a turn")
+        if session._agent is None:
+            session._ensure_agent()
         agent = session._agent
-        if agent is None:
-            raise HTTPException(400, "Session not started yet")
+        if body.model_profile is not None:
+            from core.model_profiles import load_model_profiles
+            profiles = load_model_profiles()
+            if body.model_profile == "default" and not profiles:
+                pass  # already using the configured default LLM
+            elif body.model_profile not in profiles:
+                raise HTTPException(400, "Unknown model profile")
+            else:
+                agent.switch_model(model=body.model_profile)
         if body.enable_agent_teams is not None:
             agent.enable_agent_teams = bool(body.enable_agent_teams)
             if hasattr(agent.config, 'enable_agent_teams'):
@@ -522,10 +565,14 @@ def create_app(
             return
 
         # Bridge sync queue → async WebSocket.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        # Read concurrently: otherwise a disconnected socket can keep draining
+        # the session's single-consumer event queue indefinitely.
+        disconnected = asyncio.create_task(ws.receive_text())
         try:
             while True:
-                # Check for client disconnect (non-blocking).
+                if disconnected.done():
+                    break
                 try:
                     event: AgentEvent = await loop.run_in_executor(
                         None, session.events.get, True, 1.0  # block=True, timeout=1s
@@ -550,8 +597,9 @@ def create_app(
         except Exception:
             logger.exception("WebSocket error for session %s", sid[:8])
         finally:
-            # Don't delete session on disconnect — user may reconnect.
-            pass
+            disconnected.cancel()
+            await asyncio.gather(disconnected, return_exceptions=True)
+            # Session stays alive and the browser may reconnect.
 
     # ═══════════════════════════════════════════════════════════════
     # Files — session-scoped (each session may be in a worktree)
@@ -563,11 +611,12 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is not None and session.workspace_dir:
             return Path(session.workspace_dir).resolve()
-        # Fallback: workspace based on data dir
+        # Never expose the project root for a missing or uninitialized session.
+        if session is None:
+            raise HTTPException(404, "Session not found")
         ws = Path(app.state.data_dir) / "sessions" / sid
-        if ws.exists():
-            return ws.resolve()
-        return Path(app.state.project_root).resolve()
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws.resolve()
 
     @app.get("/api/sessions/{sid}/files", response_model=FileTreeResponse)
     async def file_tree(
