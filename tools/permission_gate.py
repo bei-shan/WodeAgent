@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -82,7 +83,8 @@ class PermissionGate:
         self._project_root = Path(project_root).resolve()
         self._interactive = bool(interactive)
         self._soft_sandbox = bool(soft_sandbox)
-        self._cache: dict[str, str] = {}  # resolved_path → "granted" | "denied"
+        self._cache: dict[str, str] = {}  # canonical resolved_path → "granted" | "denied"
+        self._cache_lock = threading.RLock()
         self._cache_size = max(1, int(cache_size))
         # Optional broker: callable(path, tool_name, action) -> "granted"|"denied"
         # When set, ask() delegates to it instead of using input().
@@ -102,6 +104,7 @@ class PermissionGate:
             cache_size=self._cache_size,
         )
         gate._cache = self._cache  # Share cache reference
+        gate._cache_lock = self._cache_lock
         return gate
 
     # ------------------------------------------------------------------
@@ -124,20 +127,24 @@ class PermissionGate:
         - ``"denied"``  — permanently denied or previously refused
         - ``"ask"``     — needs user confirmation
         """
-        # Always deny sensitive paths.
-        if _is_always_denied(resolved_path):
+        try:
+            canonical = str(Path(resolved_path).resolve())
+        except (OSError, RuntimeError, ValueError, TypeError):
             return "denied"
 
-        # Inside project root → always granted.
-        if self.is_within_root(resolved_path):
+        # Evaluate the original spelling AND the canonical symlink target.
+        # A previously approved alias never overrides permanent denials.
+        if _is_always_denied(str(resolved_path)) or _is_always_denied(canonical):
+            return "denied"
+
+        if self.is_within_root(canonical):
             return "granted"
 
-        # Hard-sandbox fallback.
         if not self._soft_sandbox:
             return "denied"
 
-        # Check session cache.
-        cached = self._cache.get(resolved_path)
+        with self._cache_lock:
+            cached = self._cache.get(canonical)
         if cached is not None:
             return cached
 
@@ -157,8 +164,10 @@ class PermissionGate:
         When a broker is set (via ``self._broker``), delegates to it
         instead of calling ``input()`` directly.
         """
+        decision = self.check(resolved_path)
+        if decision != "ask":
+            return decision
         if not self._interactive:
-            self._cache_decision(resolved_path, "denied")
             return "denied"
 
         # ── Delegate to UI adapter if wired ──
@@ -204,18 +213,22 @@ class PermissionGate:
 
     def clear_cache(self) -> None:
         """Clear all cached decisions."""
-        self._cache.clear()
+        with self._cache_lock:
+            self._cache.clear()
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _cache_decision(self, resolved_path: str, decision: str) -> None:
-        if len(self._cache) >= self._cache_size:
-            # Evict oldest entry (simple FIFO).
-            first_key = next(iter(self._cache))
-            del self._cache[first_key]
-        self._cache[resolved_path] = decision
+        canonical = str(Path(resolved_path).resolve())
+        if _is_always_denied(str(resolved_path)) or _is_always_denied(canonical):
+            return
+        with self._cache_lock:
+            if canonical not in self._cache and len(self._cache) >= self._cache_size:
+                first_key = next(iter(self._cache))
+                del self._cache[first_key]
+            self._cache[canonical] = decision
 
     def _try_relpath(self, resolved_path: str) -> Optional[str]:
         """Return a relative path if inside project root, else None."""
