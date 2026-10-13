@@ -159,12 +159,23 @@ class ToolRegistry:
                 params = tool.get_parameters()
             except Exception:
                 params = []
+            schema_provider = getattr(tool, "get_input_schema", None)
+            if callable(schema_provider):
+                try:
+                    params_schema = schema_provider()
+                except Exception:
+                    # Never advertise an MCP tool whose source schema cannot
+                    # be validated: a later runtime call will fail closed too.
+                    logger.warning("Skipping tool %s with invalid input schema", tool.name)
+                    continue
+            else:
+                params_schema = self._parameters_to_schema(params)
             tools.append({
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": self._parameters_to_schema(params),
+                    "parameters": params_schema,
                 },
             })
 
@@ -369,7 +380,8 @@ class ToolRegistry:
         # INVALID_PARAM / NOT_FOUND / CONFLICT 是模型调用方式问题，
         # 不是工具本身故障，不应触发熔断
         _CIRCUIT_SAFE_ERRORS = {
-            ErrorCode.INVALID_PARAM, ErrorCode.NOT_FOUND, ErrorCode.CONFLICT,
+            ErrorCode.INVALID_PARAM, ErrorCode.MCP_PARAM_ERROR,
+            ErrorCode.ACCESS_DENIED, ErrorCode.NOT_FOUND, ErrorCode.CONFLICT,
             ErrorCode.IS_DIRECTORY, ErrorCode.BINARY_FILE,
             ErrorCode.ASK_USER_UNAVAILABLE,
         }
