@@ -26,3 +26,4 @@ jobs:
       - run: bun install
       - run: bun run typecheck
       - run: bun test
+      - run: python3 test/pty_smoke.py
