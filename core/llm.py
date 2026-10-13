@@ -522,7 +522,7 @@ class HelloAgentsLLM:
                     wait_s,
                     attempt + 1,
                     self.max_retries,
-                    e,
+                    policy.kind,
                 )
                 time.sleep(wait_s)
 
@@ -547,15 +547,16 @@ class HelloAgentsLLM:
                 response = self._client.chat.completions.create(**request_kwargs)
                 return response
             except Exception as e:
-                if attempt >= self.max_retries:
-                    raise HelloAgentsException(f"LLM调用失败: {str(e)}")
-                wait_s = self.retry_backoff * (2 ** attempt)
+                policy = classify_model_error(e)
+                if not policy.retryable or attempt >= self.max_retries:
+                    raise ModelInvocationError(policy.kind, retryable=policy.retryable) from e
+                wait_s = retry_delay(attempt, self.retry_backoff)
                 logger.warning(
                     "LLM调用失败，%.1fs后重试（%d/%d）: %s",
                     wait_s,
                     attempt + 1,
                     self.max_retries,
-                    e,
+                    policy.kind,
                 )
                 time.sleep(wait_s)
 
@@ -641,7 +642,7 @@ class HelloAgentsLLM:
                     wait_s,
                     attempt + 1,
                     self.max_retries,
-                    exc,
+                    policy.kind,
                 )
                 time.sleep(wait_s)
         raise HelloAgentsException(f"LLM调用失败: {str(last_error)}")
