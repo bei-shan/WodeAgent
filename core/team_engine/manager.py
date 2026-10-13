@@ -50,6 +50,7 @@ from .task_board import TaskBoardService
 from .approval import ApprovalService
 from .supervisor import WorkerSupervisor
 from .execution import ExecutionService
+from .worker_dispatcher import WorkerDispatchService
 from .errors import TeamEngineError
 
 
@@ -107,6 +108,7 @@ class TeamManager:
         self.approval_service = ApprovalService()
         self._load_persisted_approvals()
         self.worker_supervisor = WorkerSupervisor()
+        self.worker_dispatcher = WorkerDispatchService(self)
         self.execution_service = ExecutionService(
             project_root=self.project_root,
             llm=self.llm,
@@ -650,39 +652,8 @@ class TeamManager:
         )
 
     def _process_member_inbox(self, team_name: str, teammate_name: str) -> bool:
-        processed_ids = self._processed_by_member[(team_name, teammate_name)]
-        cursor = self._inbox_cursor.get((team_name, teammate_name), 0)
-        rows = self.store.read_inbox_messages_from(team_name, teammate_name, start_line=cursor)
-        did_work = False
-        rows_processed = 0
-        worker = self.worker_supervisor.workers.get((sanitize_name(team_name), sanitize_name(teammate_name)))
-        for row in rows:
-            rows_processed += 1
-            message_id = str(row.get("message_id") or "")
-            if not message_id or message_id in processed_ids:
-                continue
-            status = str(row.get("status") or "")
-            if status not in {MESSAGE_STATUS_PENDING, MESSAGE_STATUS_DELIVERED}:
-                continue
-            message_type = str(row.get("type") or MESSAGE_TYPE_MESSAGE)
-            if message_type in {MESSAGE_TYPE_MESSAGE, MESSAGE_TYPE_BROADCAST}:
-                did_work = self._enqueue_message_work(team_name, teammate_name, row) or did_work
-            elif message_type == MESSAGE_TYPE_SHUTDOWN_REQUEST:
-                self._send_shutdown_response(team_name, teammate_name, row)
-                self._request_worker_stop(team_name, teammate_name)
-            elif message_type == MESSAGE_TYPE_PLAN_APPROVAL_RESPONSE:
-                self._apply_plan_approval_response(team_name, teammate_name, row)
-            self.mark_message_processed(team_name, message_id, processed_by=teammate_name)
-            processed_ids.add(message_id)
-            if worker is not None:
-                worker.messages_processed += 1
-            did_work = True
-        did_work = self._process_next_work_item(team_name, teammate_name) or did_work
-        did_work = self._dispatch_approved_plan_work(team_name, teammate_name) or did_work
-        if not did_work:
-            did_work = self._claim_board_task_to_work_item(team_name, teammate_name) or did_work
-        self._inbox_cursor[(team_name, teammate_name)] = cursor + rows_processed
-        return did_work
+        """Backward-compatible method dispatching to WorkerDispatchService."""
+        return self.worker_dispatcher._process_member_inbox(team_name, teammate_name)
 
     def _process_next_work_item(self, team_name: str, teammate_name: str) -> bool:
         queued = self.store.list_work_items(team_name, owner=teammate_name, status=WORK_ITEM_STATUS_QUEUED)
@@ -762,40 +733,8 @@ class TeamManager:
         return True
 
     def _claim_board_task_to_work_item(self, team_name: str, teammate_name: str) -> bool:
-        claimed = self.claim_next_board_task(team_name, owner=teammate_name)
-        if not claimed:
-            return False
-        task_id = str(claimed.get("id"))
-        subject = str(claimed.get("subject") or f"task-{task_id}")
-        description = str(claimed.get("description") or "").strip()
-        instruction = description or subject
-        if self._teammate_requires_plan_approval(team_name, teammate_name):
-            entry = self.approval_service.create_request(team_name, teammate_name, task_id, subject)
-            self._persist_approval(entry)
-            self._emit(
-                team_name,
-                EVENT_PLAN_APPROVAL_REQUESTED,
-                {
-                    "request_id": entry["request_id"],
-                    "teammate": teammate_name,
-                    "task_id": task_id,
-                    "status": "pending",
-                },
-            )
-            return True
-        item = self.store.create_work_item(
-            team_name,
-            owner=teammate_name,
-            title=subject,
-            instruction=instruction,
-            payload={"board_task_id": task_id},
-        )
-        self._emit(
-            team_name,
-            EVENT_WORK_ITEM_ASSIGNED,
-            {"work_id": item["work_id"], "owner": teammate_name, "status": item["status"]},
-        )
-        return True
+        """Backward-compatible method dispatching to WorkerDispatchService."""
+        return self.worker_dispatcher._claim_board_task_to_work_item(team_name, teammate_name)
 
     def _dispatch_approved_plan_work(self, team_name: str, teammate_name: str) -> bool:
         normalized_team = sanitize_name(team_name)
@@ -828,41 +767,8 @@ class TeamManager:
         return True
 
     def _enqueue_message_work(self, team_name: str, teammate_name: str, message_row: Dict[str, Any]) -> bool:
-        message_id = str(message_row.get("message_id") or "").strip()
-        if not message_id:
-            return False
-        text = str(message_row.get("text") or "").strip()
-        if not text:
-            return False
-        existing = self.store.list_work_items(team_name, owner=teammate_name)
-        for item in existing:
-            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-            if str(payload.get("source_message_id") or "") == message_id:
-                return False
-
-        summary = str(message_row.get("summary") or "").strip()
-        message_kind = str(message_row.get("type") or MESSAGE_TYPE_MESSAGE).strip().lower()
-        title = summary or f"message-{message_id[:8]}"
-        payload = {
-            "source": "message",
-            "source_message_id": message_id,
-            "message_type": message_kind,
-            "from_member": str(message_row.get("from") or ""),
-            "request_id": str(message_row.get("request_id") or ""),
-        }
-        item = self.store.create_work_item(
-            team_name,
-            owner=teammate_name,
-            title=title,
-            instruction=text,
-            payload=payload,
-        )
-        self._emit(
-            team_name,
-            EVENT_WORK_ITEM_ASSIGNED,
-            {"work_id": item["work_id"], "owner": teammate_name, "status": item["status"]},
-        )
-        return True
+        """Backward-compatible method dispatching to WorkerDispatchService."""
+        return self.worker_dispatcher._enqueue_message_work(team_name, teammate_name, message_row)
 
     def _send_shutdown_response(self, team_name: str, teammate_name: str, message_row: Dict[str, Any]) -> None:
         request_id = str(message_row.get("request_id") or "").strip()
@@ -902,19 +808,8 @@ class TeamManager:
         return {}
 
     def _apply_plan_approval_response(self, team_name: str, teammate_name: str, message_row: Dict[str, Any]) -> None:
-        request_id = str(message_row.get("request_id") or "").strip()
-        if not request_id:
-            return
-        approved_raw = message_row.get("approved")
-        if isinstance(approved_raw, bool):
-            approved = approved_raw
-        else:
-            text = str(message_row.get("text") or "").lower()
-            approved = "approve" in text and "reject" not in text
-        feedback = str(message_row.get("feedback") or "").strip()
-        updated = self.approval_service.apply_response(team_name, teammate_name, request_id, approved, feedback)
-        if updated:
-            self._persist_approval(self.approval_service.get_request(request_id))
+        """Backward-compatible method dispatching to WorkerDispatchService."""
+        return self.worker_dispatcher._apply_plan_approval_response(team_name, teammate_name, message_row)
 
     def _execute_work_item(self, team_name: str, teammate_name: str, work_item: Dict[str, Any]) -> Dict[str, Any]:
         return self.execution_service.execute_work_item(team_name, teammate_name, work_item)
