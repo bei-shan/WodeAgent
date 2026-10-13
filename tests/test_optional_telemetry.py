@@ -32,7 +32,7 @@ class DummyHost:
 
     def _refresh_skills_prompt(self): pass
     def _log_system_messages_if_needed(self, *_): pass
-    def _log_message_write(self, *_): pass
+    def _log_message_write(self, *_, **__): pass
     def _auto_save_session(self): pass
     def _console(self, *_): pass
 
