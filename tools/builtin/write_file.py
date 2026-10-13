@@ -13,6 +13,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 
 
 class WriteTool(Tool):
+    strict_input_contract = True
     """文件写入工具，支持全量覆盖、自动创建目录、diff 预览、dry_run"""
     usage_notes = 'Write: Create or overwrite a file with FULL content. Parent dirs auto-created. Use dry_run=true to preview. For existing files: Read first (framework auto-injects mtime/size). For new files: no prior Read needed.'
 
