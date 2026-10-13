@@ -130,3 +130,18 @@ def test_new_client_recovers_pending_permission(tmp_path, monkeypatch):
 
         assert session.resolve_permission("req1", "granted")
         assert session.pending_prompts() == []
+
+def test_reconnecting_with_stale_future_cursor_after_restart(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    with TestClient(app) as client:
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        session = app.state.controller.get_session(sid)
+        with client.websocket_connect(f"/api/sessions/{sid}/stream?after=123") as ws:
+            reset = ws.receive_json()
+            assert reset["type"] == "stream.reset"
+            assert reset["payload"]["reason"] == "cursor_ahead"
+            assert reset["payload"]["resume_from"] == 0
+            session.events.put(event("step.started"))
+            next_frame = ws.receive_json()
+            assert next_frame["seq"] == 1
