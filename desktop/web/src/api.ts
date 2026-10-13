@@ -15,6 +15,8 @@ export interface AgentEvent {
   type: string;
   payload: Record<string, any>;
   step: number;
+  /** Monotonic, per-session event cursor used for replay and deduplication. */
+  seq?: number;
 }
 
 export interface FileEntry {
@@ -193,8 +195,12 @@ export function connectStream(
   onEvent: (e: AgentEvent) => void,
   onDisconnect: () => void,
   onConnect?: () => void,
+  replayFromStart = false,
 ): () => void {
   let ws: WebSocket | null = null
+  // Existing session: tail after loading the saved history.
+  // New session: start at zero so events emitted while connecting are replayed.
+  let lastSeq: number | null = replayFromStart ? 0 : null
   let closed = false
   let retry: ReturnType<typeof setTimeout> | null = null
   let attempts = 0
@@ -202,15 +208,25 @@ export function connectStream(
   const connect = () => {
     if (closed) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/stream`)
+    const after = lastSeq === null ? '' : `?after=${lastSeq}`
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/stream${after}`)
     ws = socket
     socket.onopen = () => {
       attempts = 0
       onConnect?.()
     }
     socket.onmessage = (msg) => {
-      try { onEvent(JSON.parse(msg.data) as AgentEvent) }
-      catch { /* ignore malformed frames */ }
+      try {
+        const event = JSON.parse(msg.data) as AgentEvent
+        if (event.type === 'stream.reset' && typeof event.payload?.resume_from === 'number') {
+          lastSeq = event.payload.resume_from
+        }
+        if (typeof event.seq === 'number') {
+          if (lastSeq !== null && event.seq <= lastSeq) return
+          lastSeq = event.seq
+        }
+        onEvent(event)
+      } catch { /* ignore malformed frames */ }
     }
     socket.onclose = () => {
       if (closed) return
