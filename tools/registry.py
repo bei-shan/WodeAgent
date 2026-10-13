@@ -255,9 +255,17 @@ class ToolRegistry:
         
         # Deny before optimistic-lock injection or any adapter execution.
         if not self._tool_allowed(name):
-            return self._create_internal_error_response(
-                name, "Tool blocked by Docker sandbox policy.", parameters,
-            )
+            return json.dumps({
+                "status": ToolStatus.ERROR.value,
+                "data": {},
+                "text": "Tool blocked by Docker sandbox policy.",
+                "error": {
+                    "code": ErrorCode.ACCESS_DENIED.value,
+                    "message": "Tool blocked by Docker sandbox policy.",
+                },
+                "stats": {"time_ms": 0},
+                "context": {"cwd": ".", "params_input": parameters},
+            }, ensure_ascii=False)
 
         # =====================================================================
         # 乐观锁自动注入：为 Write/Edit 注入 expected_mtime_ms / expected_size_bytes
