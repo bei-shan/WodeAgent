@@ -45,7 +45,12 @@ export function connectStream(
     onConnection("connecting")
     // Bun-only WebSocket constructor supports Authorization headers.
     // Never expose credentials in the URL, subprotocol or event payloads.
-    const ws = new WebSocket(
+    // DOM typings only allow subprotocols, while Bun's runtime supports
+    // an options object. Keep the extension typed and scoped to this adapter.
+    type BunWebSocket = new (
+      url: string, options?: string | string[] | { headers: Record<string, string> },
+    ) => WebSocket
+    const ws = new (WebSocket as unknown as BunWebSocket)(
       streamUrl(base, sessionId, cursor.lastSeq),
       bearerToken ? { headers: { Authorization: "Bearer " + bearerToken } } : undefined,
     )
