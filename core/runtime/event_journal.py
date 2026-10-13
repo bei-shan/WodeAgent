@@ -53,6 +53,18 @@ class EventJournal:
         with self._condition:
             return self._latest
 
+    def active_turn_cursor(self) -> int:
+        """Resume an in-progress turn from its last run.started boundary.
+
+        If the marker was evicted, return zero; replay will detect a gap
+        rather than silently presenting incomplete history as complete.
+        """
+        with self._condition:
+            for item in reversed(self._entries):
+                if item.event.type == "run.started":
+                    return item.seq - 1
+            return 0
+
     def put(self, event: AgentEvent, block: bool = True, timeout: float | None = None) -> int:
         """Append without blocking producers; retained args match queue.put."""
         del block, timeout
