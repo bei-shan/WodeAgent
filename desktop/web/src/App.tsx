@@ -705,7 +705,12 @@ export default function App() {
       case 'permission.requested': setPermReq({ requestId: payload.request_id, tool: payload.tool, path: payload.path, action: payload.action }); break
       case 'ask_user.requested': setAskReq({ requestId: payload.request_id, prompt: payload.prompt }); break
       case 'turn.completed':
-        setMessages(prev => prev.map(m => m.streaming ? { ...m, content: m.content || String(payload.response || ''), streaming: false } : m))
+        setMessages(prev => prev.map(m => m.streaming ? {
+          ...m,
+          content: String(payload.response || '').startsWith('已停止生成')
+            ? String(payload.response) : m.content || String(payload.response || ''),
+          streaming: false,
+        } : m))
         setSending(false); loadSessions()
         if (activeSidRef.current) { api.teams.list(activeSidRef.current).then(setTeamsList).catch(() => {}) }
         break
