@@ -5,8 +5,8 @@
 ## 组件与调用方向
 
 ```text
-React Web (desktop/web/)      OpenTUI (tui-v2/)      Legacy Python TUI
-                  \               |                 /
+React Web (desktop/web/)              OpenTUI (tui-v2/)
+                  \                       /
                       FastAPI service (desktop/service/)
                                    |
                     Application Services (application/)
@@ -40,7 +40,7 @@ React Web (desktop/web/)      OpenTUI (tui-v2/)      Legacy Python TUI
 
 ## 当前结构性债务（不等同于可以删除）
 
-- Python TUI 与 Web/TS TUI 尚有两套交互形态；迁移未完成之前保留旧入口。
+- 旧 Python Rich/prompt_toolkit TUI 已退役；OpenTUI 仍需真实 PTY 交互验收，旧专有命令需通过服务端 API 补齐。
 - Web `App.tsx`、`desktop/service/app.py`、`agents/codeAgent.py`、`core/team_engine/manager.py` 仍较大，应逐步拆分职责并保留回归测试。
 - 运行时协议、持久化格式和权限模型需要独立版本化，不宜在「文档清理」时顺手破坏兼容。
 

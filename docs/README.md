@@ -20,6 +20,7 @@
 
 - [2026-10-13 核心架构参考](design/2026-10-13-reference-agent-architecture.md)
 - [2026-10-13 TypeScript TUI 分层](design/2026-10-13-tui-v2-layered-architecture.md)
+- [2026-10-13 Python TUI 退役](design/2026-10-13-python-tui-retirement.md)
 - [2026-10-13 AgentLoop / ContextRuntime](design/2026-10-13-agent-loop-context-runtime.md)
 - [2026-10-13 Application Services](design/2026-10-13-application-services-refactor.md)
 - [2026-10-13 工具运行时拆分](design/2026-10-13-tool-runtime-extraction.md)
