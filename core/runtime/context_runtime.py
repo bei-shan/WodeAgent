@@ -66,7 +66,11 @@ class ContextRuntime:
                 "details": compress_info,
             }, step=step)
 
-            compressed_history = host.history_manager.to_messages()
+            compressed_history = (
+                host.history_manager.to_messages_branch()
+                if hasattr(host.history_manager, "to_messages_branch")
+                else host.history_manager.to_messages()
+            )
             final_context = host.context_builder.build_messages(compressed_history)
             trace_logger.log_event(
                 "history_compression_final_context",
@@ -84,7 +88,12 @@ class ContextRuntime:
     def build_step_messages(self, trace_logger, step: int):
         """构建当前 step 的 messages 列表，返回 (messages, base_messages)。"""
         host = self.host
-        history_messages = host.history_manager.to_messages()
+        # Branch-sensitive prompts must not include abandoned sibling paths.
+        history_messages = (
+            host.history_manager.to_messages_branch()
+            if hasattr(host.history_manager, "to_messages_branch")
+            else host.history_manager.to_messages()
+        )
         messages = host._build_messages(history_messages)
         base_messages = messages
         trace_logger.log_event(

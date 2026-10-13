@@ -212,6 +212,10 @@ class AgentSession:
             snapshot = store.load_session(self.session_id) or {}
             if snapshot.get("history_entries"):
                 agent.history_manager.load_entries(snapshot["history_entries"])
+                if hasattr(agent.history_manager, "restore_tree_state"):
+                    agent.history_manager.restore_tree_state(
+                        snapshot.get("cursor_id"), snapshot.get("labels"),
+                    )
             elif snapshot.get("history_messages"):
                 agent.history_manager.load_messages(snapshot["history_messages"])
 
