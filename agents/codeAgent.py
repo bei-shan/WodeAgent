@@ -73,6 +73,11 @@ class CodeAgent(Agent):
         self.project_root = project_root
         self._original_project_root = project_root
         self.tool_registry = tool_registry
+        self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
+        if self._sandbox_mode not in {"local_trusted", "docker"}:
+            raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted or docker")
+        if self._sandbox_mode == "docker" and getattr(self.config, "enable_agent_teams", False):
+            raise ValueError("Docker sandbox mode does not support AgentTeams yet")
         self.logger = logger or setup_logger(
             name=f"agent.{self.name}",
             level=self.config.log_level,
@@ -208,8 +213,30 @@ class CodeAgent(Agent):
             team_registered = register_team_tools(bootstrap)
             self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
 
+        if self._sandbox_mode == "docker":
+            # Install the isolated executor before the first model request.
+            # Fail-closed registry policy also covers any tools registered
+            # later by Features, MCP or custom clients.
+            from core.sandbox.docker_provider import DockerCommandProvider
+            from core.sandbox.command_tool import SandboxBashTool
+            provider = DockerCommandProvider(
+                self.project_root,
+                image=self.config.sandbox_docker_image,
+                memory=self.config.sandbox_memory,
+                cpus=self.config.sandbox_cpus,
+                pids_limit=self.config.sandbox_pids_limit,
+            )
+            self.tool_registry.register_tool(SandboxBashTool(provider))
+            self.tool_registry.restrict_to_tools({"Bash"})
+            self.logger.warning(
+                "Docker sandbox mode: only container Bash is exposed; "
+                "host file, MCP, skill and subagent tools are denied"
+            )
+
         # MCP prompt sync (tools registered by MCPFeature.init)
-        self.context_builder.set_mcp_tools_prompt(self._mcp_tools_prompt)
+        self.context_builder.set_mcp_tools_prompt(
+            "" if self._sandbox_mode == "docker" else self._mcp_tools_prompt
+        )
 
     def _inject_config_to_modules(self) -> None:
         """Inject Config into modules that use module-level singletons.
@@ -480,6 +507,11 @@ class CodeAgent(Agent):
 
     def _rebind_project_root(self, project_root: str) -> None:
         """Rebind path-aware runtime components after worktree root changes."""
+        if self._sandbox_mode == "docker":
+            raise RuntimeError(
+                "Worktree root switching is disabled in Docker sandbox mode; "
+                "configure a new isolated session workspace instead"
+            )
         root = Path(project_root).resolve()
         self.project_root = str(root)
         self._permission_gate = create_permission_gate(project_root=self.project_root)
