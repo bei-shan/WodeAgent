@@ -23,6 +23,8 @@ from pathlib import Path
 
 class MockBackend(http.server.BaseHTTPRequestHandler):
     calls: list[str] = []
+    forked = False
+    fork_target: str | None = None
 
     def log_message(self, format, *args):
         pass
@@ -42,7 +44,27 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/sessions":
             return self.respond([])
         if self.path.endswith("/history"):
-            return self.respond({"messages": []})
+            return self.respond({"messages": [
+                {"role": "user", "content": "PTY-tree-root"},
+            ] if self.forked else []})
+        if self.path.endswith("/tree"):
+            return self.respond({
+                "nodes": {
+                    "a1b2c3d4": {
+                        "id": "a1b2c3d4", "type": "message",
+                        "role": "user", "parentId": None, "content": "PTY-tree-root",
+                    },
+                    "b1b2c3d4": {
+                        "id": "b1b2c3d4", "type": "message",
+                        "role": "assistant", "parentId": "a1b2c3d4",
+                        "content": "Previous answer",
+                    },
+                },
+                "children": {"__root__": ["a1b2c3d4"],
+                             "a1b2c3d4": ["b1b2c3d4"]},
+                "cursor_id": "b1b2c3d4",
+                "labels": {},
+            })
         if self.path.endswith("/turn"):
             return self.respond({"status": "idle"})
         return self.respond({"detail": "missing"}, 404)
@@ -53,6 +75,16 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
             return self.respond({"id": "deadbeef1234", "title": "PTY", "busy": False}, 201)
         if self.path.endswith("/activate"):
             return self.respond({"status": "active"})
+        if self.path.endswith("/fork"):
+            size = int(self.headers.get("Content-Length", "0"))
+            if size > 1024:
+                return self.respond({"detail": "too large"}, 413)
+            body = json.loads(self.rfile.read(size))
+            if body.get("target_id") != "a1b2c3d4":
+                return self.respond({"detail": "node not found"}, 404)
+            type(self).forked = True
+            type(self).fork_target = body["target_id"]
+            return self.respond({"cursor_id": body["target_id"]})
         return self.respond({"status": "ok"})
 
 
@@ -118,13 +150,32 @@ def main():
             print("Fixture routes:", MockBackend.calls)
             raise AssertionError("PTY keyboard or terminal command help not rendered")
 
+        def type_command(command: str) -> None:
+            for byte in (command + "\r").encode("ascii"):
+                os.write(master, bytes([byte]))
+                time.sleep(0.04)
+
+        type_command("/tree")
+        assert pump(b"PTY-tree-root", 5.0), "Tree command did not display actual server nodes"
+        assert "GET /api/sessions/deadbeef1234/tree" in MockBackend.calls, "Tree endpoint unused"
+
+        type_command("/fork a1b2c3d4")
+        if not pump(b"Forked from message", 5.0):
+            print("PTY tail:", repr(bytes(captured[-3000:])))
+            print("Fixture routes:", MockBackend.calls)
+            raise AssertionError("Fork HTTP flow did not update TUI notice")
+        assert MockBackend.fork_target == "a1b2c3d4", "Fork target was not sent to API"
+        assert MockBackend.calls.count("GET /api/sessions/deadbeef1234/history") >= 2, (
+            "Fork did not refresh selected branch history"
+        )
+
         os.write(master, b"\x03")  # Ctrl+C; idle UI must quit cleanly.
         try:
             proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             raise AssertionError("Ctrl+C did not shut down OpenTUI")
         assert proc.returncode == 0, "OpenTUI exited with error: " + str(proc.returncode)
-        print("PTY smoke: renderer, server bootstrap, slash command, Ctrl+C exit OK")
+        print("PTY smoke: renderer, /help, /tree, /fork HTTP, Ctrl+C exit OK")
     finally:
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
