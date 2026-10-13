@@ -256,6 +256,10 @@ def create_app(
             raise HTTPException(500, "Failed to create session")
         # Override its ID to match the persisted one
         session.session_id = sid
+        from core.session_manager import SessionManager
+        previous = SessionManager().get_session(sid)
+        if previous is not None:
+            session.title = previous.title
         ctrl._sessions.pop(new_sid, None)
         ctrl._sessions[sid] = session
         from core.session_manager import SessionManager
@@ -359,7 +363,8 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
-        session.interrupt()
+        if not session.interrupt():
+            raise HTTPException(409, "Agent is not running or does not support cancellation")
         return {"status": "interrupted"}
 
     @app.post("/api/sessions/{sid}/upload")
