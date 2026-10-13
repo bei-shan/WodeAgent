@@ -16,6 +16,7 @@ on:
       - 'core/sandbox/**'
       - 'tools/registry.py'
       - 'tests/test_sandbox_boundary.py'
+      - 'tests/test_sandbox_docker_integration.py'
       - 'core/context_engine/**'
       - 'core/config.py'
       - 'prompts/agents_prompts/summary_prompt.py'
@@ -71,3 +72,18 @@ jobs:
         working-directory: desktop/web
       - run: npx playwright test
         working-directory: desktop/web
+
+  docker-sandbox-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest
+      # The Agent never pulls images. A trusted runner preloads an image for
+      # this live (non-mocked) sandbox integration test.
+      - run: docker pull python:3.12-alpine
+      - run: python -m pytest tests/test_sandbox_docker_integration.py -q
+        env:
+          AGENT_DOCKER_INTEGRATION: '1'
