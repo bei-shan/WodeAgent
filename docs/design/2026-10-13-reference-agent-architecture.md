@@ -50,3 +50,22 @@
 | P2 | OpenTelemetry / Trace 中转（可选） | 一条用户请求有清晰 run_id/turn_id/span，敏感信息脱敏 |
 
 各阶段仅借鉴上游的接口边界、数据结构和失败处理思路；**不按源码文件照搬**，每阶段独立验证后合并。
+
+## 5. 第二阶段 P0 已落地：Turn 终态与安全模型恢复
+
+本阶段在事件游标改造的基础上追加以下能力（PR 链式依赖第一阶段）：
+
+- **统一终态**：单个 `turn.finished` 事件携带 `completed / failed / cancelled`、`response`、`error_kind`、`retryable`；继续发布原有 `turn.completed` 兼容旧 UI，但新 UI 仅依据 `turn.finished` 判定终态。
+- **进程重启恢复**：`GET /api/sessions/{sid}/turn` 返回 `running / idle` 或最近一次终态；最近终态通过 JSON sidecar 原子写入 `memory/sessions`，与会话删除同步清理。
+- **真实中断语义**：`CodeAgent.run` 记录 `last_turn_status`，由 worker 规范化为终态；ReAct 达到最大步数亦算失败，不能误报成功。
+- **异常分类**：`core/llm_recovery.py` 根据 HTTP 状态、异常类型与上下文长度错误识别 network、rate_limited、provider_unavailable、unauthorized、invalid_request、context_overflow。
+- **受控重试**：只重试无副作用的提供方请求；永久性错误直接失败；退避至多 8 秒；LLM 流已收到 chunk 后禁止自动重试或 fallback。
+- **敏感信息最小化**：客户端接收稳定的错误类型和安全的错误提示；不把原始服务提供方异常文本直接送到 Web；日志避免打印原始错误消息。
+- **执行一致性**：模型出错时即使没有最终回答也保存已完成的历史消息和工具步骤；发布 `run.finished` 时携带 status；Web 不在内部 run.finished 时提前撤销“停止”按钮。
+
+### 依然受限
+
+- 当前只保存最近一次执行的终态，不提供多轮执行审计表或 durable event 全量日志。
+- 流式调用已经产生 token 的场景不自动重试，仍需将“部分输出 + 失败状态”呈现给用户，由用户决定是否继续。
+- 中断是协作式的，无法立即杀死正在等待的 provider 请求或已经启动的 shell 工具。
+- CI 使用模拟模型；真实模型供应商的长时限流、上下文压缩策略需要额外集成验收。
