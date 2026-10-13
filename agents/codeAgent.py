@@ -755,6 +755,18 @@ class CodeAgent(Agent):
         from core.features import BUILTIN_FEATURES
         from core.runtime.tool_scheduler import plan_tool_batches, run_tool_batch
         from core.runtime.tool_contracts import error_envelope
+        from core.runtime.tool_runtime import ToolRuntime
+        from core.runtime.tool_scheduler import ToolBatch
+
+        # Test/plugin callers may override _execute_tool at the instance level.
+        # Preserve that compatibility while the framework-owned entrypoint
+        # uses the explicit three-phase runtime.
+        use_stages = "_execute_tool" not in self.__dict__
+        staged_runtime = ToolRuntime(self.tool_registry, self.logger) if use_stages else None
+        if use_stages and not hasattr(self, "_last_tool_timing"):
+            self._last_tool_timing = {}
+        prepared = {}
+        prepare_errors = {}
 
         for call in tool_calls:
             if not call.get("id"):
@@ -823,7 +835,18 @@ class CodeAgent(Agent):
                 return json.dumps(result, ensure_ascii=False), None, None, 0
             dispatch_started = time.monotonic()
             try:
-                result = str(self._execute_tool(item["name"], item["input"]))
+                if self._interrupt_requested.is_set():
+                    result = json.dumps(error_envelope(
+                        "INTERRUPTED", "Tool not executed: user interrupted", {},
+                    ), ensure_ascii=False)
+                elif item["index"] in prepare_errors:
+                    raise prepare_errors[item["index"]]
+                elif use_stages:
+                    from core.runtime.cancellation import scoped_tool_cancellation
+                    with scoped_tool_cancellation(self._interrupt_requested):
+                        result = staged_runtime.dispatch(prepared[item["index"]])
+                else:
+                    result = str(self._execute_tool(item["name"], item["input"]))
                 return result, None, None, int((time.monotonic() - dispatch_started) * 1000)
             except Exception as exc:
                 result = error_envelope("EXECUTION_ERROR", str(exc), item["input"])
@@ -831,7 +854,34 @@ class CodeAgent(Agent):
 
         for batch in batches:
             interrupted = self._interrupt_requested.is_set()
-            mode = "parallel" if batch.concurrent and not interrupted else "serial"
+            prepared = {}
+            prepare_errors = {}
+            if use_stages and not interrupted:
+                # All feature pre-hooks and policy decisions run on the owner
+                # thread, before the worker pool starts any I/O.
+                for item in batch.calls:
+                    if item["parse_error"]:
+                        continue
+                    try:
+                        prepared[item["index"]] = staged_runtime.prepare(
+                            item["name"], item["input"], agent=self,
+                            features=self._features,
+                            emit_messages=self._hook_system_messages.extend,
+                        )
+                    except Exception as exc:
+                        prepare_errors[item["index"]] = exc
+            # Updated inputs can change which concurrency guarantees hold.
+            # Fail closed: if any changed call is not explicitly safe, serial.
+            actual_parallel = batch.concurrent and not interrupted
+            if use_stages and actual_parallel:
+                for item in batch.calls:
+                    prep = prepared.get(item["index"])
+                    tool = self.tool_registry.get_tool(item["name"])
+                    if (prep is None or prep.blocked_output is not None
+                            or tool is None or not tool.is_concurrency_safe(prep.parameters)):
+                        actual_parallel = False
+                        break
+            mode = "parallel" if actual_parallel else "serial"
             trace_logger.log_event("tool_batch_started", {
                 "mode": mode, "count": len(batch.calls),
                 "tools": [item["name"] for item in batch.calls],
@@ -859,7 +909,10 @@ class CodeAgent(Agent):
                     elif self.logger.isEnabledFor(logging.DEBUG):
                         self.logger.debug("Action: %s %s", item["name"], item["input"])
 
-                outcomes = run_tool_batch(batch, execute, max_workers=max_workers)
+                outcomes = run_tool_batch(
+                    ToolBatch(batch.calls, concurrent=actual_parallel),
+                    execute, max_workers=max_workers,
+                )
             else:
                 # Complete all announced tool_call IDs, even on interruption:
                 # leaving unmatched IDs would make the next model call invalid.
@@ -873,6 +926,20 @@ class CodeAgent(Agent):
             errors = 0
             for item, (observation, execution_error, error_trace, call_duration_ms) in zip(batch.calls, outcomes):
                 tool_name, tool_call_id, tool_input = item["name"], item["id"], item["input"]
+                if use_stages and not interrupted and item["index"] in prepared and execution_error is None:
+                    try:
+                        observation = staged_runtime.publish(
+                            prepared[item["index"]], observation,
+                            agent=self,
+                            emit_messages=self._hook_system_messages.extend,
+                            record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
+                        )
+                    except Exception:
+                        execution_error = "Tool result hook failed"
+                        error_trace = None
+                        observation = json.dumps(error_envelope(
+                            "EXECUTION_ERROR", execution_error, {},
+                        ), ensure_ascii=False)
                 if item["parse_error"]:
                     errors += 1
                     trace_logger.log_event("error", {
