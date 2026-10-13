@@ -1,12 +1,12 @@
-# MyCodeAgent 项目总览（PROJECT_OVERVIEW）
+# Ridge 项目总览（PROJECT_OVERVIEW）
 
-> 本文档是 MyCodeAgent 仓库的"单一文档级深度导览"。读完它，你应当能在脑中复盘整个代码库的运行时分层、关键子系统接口、关键事件流，以及当前已落地与遗留的扩展点。如果某节需要更细的设计细节，请跳转到 `docs/design/`、`docs/agent_teams/`、`docs/plans/` 下对应文档。
+> 本文档是 Ridge 仓库的"单一文档级深度导览"。读完它，你应当能在脑中复盘整个代码库的运行时分层、关键子系统接口、关键事件流，以及当前已落地与遗留的扩展点。如果某节需要更细的设计细节，请跳转到 `docs/design/`、`docs/agent_teams/`、`docs/plans/` 下对应文档。
 
 ---
 
 ## 1. 项目定位
 
-MyCodeAgent（内部代号 WodeAgent）是一个面向学习与实验的 AI 编程代理框架。它围绕 **ReAct 循环 + 工具协议 + 上下文工程 + 子代理委派 + 团队协作 + TUI/Web 双前端 + 可观测性** 七条主线展开，使用 Python 3.12+ 实现，兼容 OpenAI / DeepSeek / 通义千问 / 智谱 GLM / Kimi / ModelScope / SiliconFlow / Ollama / vLLM 等多家 LLM 供应商。整套系统坚持"运行时核与 UI 解耦"的工程取向：CodeAgent 只负责跑模型与工具，所有交互均通过事件队列与回调注入完成，因此同一份 agent 内核可以被 prompt_toolkit + Rich 的 TUI 主入口、以及 FastAPI + WebSocket 的桌面/Web 应用同时驱动，且互不感知。
+Ridge（原项目名 Ridge / WodeAgent）是一个面向学习与实验的 AI 编程代理框架。它围绕 **ReAct 循环 + 工具协议 + 上下文工程 + 子代理委派 + 团队协作 + TUI/Web 双前端 + 可观测性** 七条主线展开，使用 Python 3.12+ 实现，兼容 OpenAI / DeepSeek / 通义千问 / 智谱 GLM / Kimi / ModelScope / SiliconFlow / Ollama / vLLM 等多家 LLM 供应商。整套系统坚持"运行时核与 UI 解耦"的工程取向：CodeAgent 只负责跑模型与工具，所有交互均通过事件队列与回调注入完成，因此同一份 agent 内核可以被 prompt_toolkit + Rich 的 TUI 主入口、以及 FastAPI + WebSocket 的桌面/Web 应用同时驱动，且互不感知。
 
 ---
 

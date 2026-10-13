@@ -1,4 +1,4 @@
-"""MyCodeAgent Web Service — FastAPI application.
+"""Ridge Code Web Service — FastAPI application.
 
 Usage::
 
@@ -140,7 +140,7 @@ def create_app(
             )
 
     app = FastAPI(
-        title="MyCodeAgent API",
+        title="Ridge Code API",
         version="0.1.0",
         docs_url="/docs",
     )

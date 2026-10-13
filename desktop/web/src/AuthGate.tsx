@@ -81,7 +81,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <form onSubmit={login} className="w-full max-w-sm bg-white rounded-2xl shadow-md border border-gray-100 p-7 space-y-5">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">解锁 WodeAgent</h1>
+          <h1 className="text-xl font-semibold text-gray-900">解锁 Ridge</h1>
           <p className="text-sm text-gray-500 mt-2">请输入服务端配置的 WEB_AUTH_TOKEN。令牌只用于本次登录，不会保存在浏览器存储中。</p>
         </div>
         <label className="block text-sm text-gray-700">

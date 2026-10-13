@@ -1,4 +1,4 @@
-# MyCodeAgent 完整实现总结
+# Ridge Code · 历史实现总结
 
 > 最后更新: 2026-06-26 | 测试: 937 passed, 0 failed
 

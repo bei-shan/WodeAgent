@@ -1,4 +1,4 @@
-# WodeAgent modular architecture and TypeScript TUI v2 (2026-10-13)
+# Ridge modular architecture and TypeScript TUI v2 (2026-10-13)
 
 ## Decision
 - Python remains the authoritative Agent Engine; **no reimplementation of the ReAct loop in TypeScript**.

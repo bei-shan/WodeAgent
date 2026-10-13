@@ -54,7 +54,7 @@ export function App(props: { client: AgentClient }) {
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#10141d">
       <box height={3} flexDirection="row" justifyContent="space-between"
         paddingLeft={2} paddingRight={2} alignItems="center" backgroundColor="#1c2637">
-        <text fg="#75baff">WodeAgent · TUI v2</text>
+        <text fg="#75baff">Ridge · TUI v2</text>
         <text fg="#aebbd0">
           {view().connection + " · " + view().status + " · " + (view().sessionId?.slice(0, 8) ?? "no session")}
         </text>

@@ -864,7 +864,7 @@ function AppCore() {
             <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
             </div>
-            <span className="font-bold text-gray-800 text-lg">MyCodeAgent</span>
+            <span className="font-bold text-gray-800 text-lg">Ridge</span>
           </div>
         </div>
 
@@ -1029,7 +1029,7 @@ function AppCore() {
         {/* ── Chat / empty state ── */}
         {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (
           <div className="flex-1 flex flex-col items-center justify-center px-8">
-            <h1 className="text-[28px] font-bold text-gray-800 mb-12 tracking-tight">Hi, 我是 MyCodeAgent</h1>
+            <h1 className="text-[28px] font-bold text-gray-800 mb-12 tracking-tight">Hi, 我是 Ridge</h1>
 
             {/* Input card — white, shadow, accessories bar above textarea */}
             <div className="w-full max-w-4xl bg-white rounded-2xl border border-gray-200 shadow-sm">
