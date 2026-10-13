@@ -266,8 +266,10 @@ class HistoryManager:
         # 沿 parent_id 链回溯
         chain: List[Message] = []
         current_id = self._cursor_id
+        seen: set[str] = set()
 
-        while current_id is not None:
+        while current_id is not None and current_id not in seen:
+            seen.add(current_id)
             msg = self._id_index.get(current_id)
             if msg is not None:
                 chain.append(msg)
@@ -672,6 +674,10 @@ class HistoryManager:
         self._messages = []
         self._id_index = {}
         self._entries = []
+        self._cursor_id = None
+        self._labels = {}
+        self._current_model = None
+        self._thinking_level = "off"
         for entry in entries or []:
             etype = entry.get("type", ENTRY_MESSAGE)
             if etype == ENTRY_MESSAGE:
@@ -697,6 +703,26 @@ class HistoryManager:
                     }
                 elif etype == ENTRY_THINKING_CHANGE:
                     self._thinking_level = entry.get("thinkingLevel", "off")
+                elif etype == ENTRY_LABEL:
+                    target, label = entry.get("targetId"), entry.get("label")
+                    if target and label:
+                        self._labels[target] = label
+                    elif target:
+                        self._labels.pop(target, None)
+
+    def restore_tree_state(
+        self, cursor_id: Optional[str], labels: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Restore canonical snapshot cursor, not the final serialized leaf."""
+        if cursor_id is not None and (
+            cursor_id in self._id_index or self._find_entry(cursor_id) is not None
+        ):
+            self._cursor_id = cursor_id
+        if isinstance(labels, dict):
+            self._labels = {
+                k: v for k, v in labels.items()
+                if isinstance(k, str) and isinstance(v, str)
+            }
 
     def to_messages(self) -> List[Dict[str, Any]]:
         """将所有消息转为 OpenAI messages 格式（向后兼容 — 使用 _messages）。"""
