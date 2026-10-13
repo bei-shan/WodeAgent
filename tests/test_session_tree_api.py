@@ -86,9 +86,10 @@ def test_unknown_tree_or_fork_sessions_are_404(tmp_path, monkeypatch):
     monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
     with TestClient(create_app(agent_factory=TreeAgent, project_root=str(tmp_path))) as client:
         assert client.get("/api/sessions/ffffffffffff/tree").status_code == 404
+        # Unknown sessions are hidden before validating a message cursor.
         assert client.post("/api/sessions/ffffffffffff/fork", json={
             "target_id": "abcdefgh",
-        }).status_code == 400
+        }).status_code == 404
         assert client.post("/api/sessions/ffffffffffff/fork", json={
             "target_id": "12345678",
         }).status_code == 404
