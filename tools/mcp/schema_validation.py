@@ -55,9 +55,9 @@ def compile_mcp_input_schema(schema: Any) -> Draft202012Validator:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
         raise MCPInputSchemaError("MCP input schema is invalid.") from exc
-    # The MCP input contract is always an object, even if an absent type in a
-    # remote schema would otherwise allow scalars.
-    return Draft202012Validator({"allOf": [{"type": "object"}, schema]})
+    # Keep the original schema as the resolver root so local #/$defs refs
+    # remain correct. MCPToolAdapter already requires an arguments dict.
+    return Draft202012Validator(schema)
 
 
 def _safe_location(error: ValidationError) -> str:
