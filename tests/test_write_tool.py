@@ -930,7 +930,7 @@ import pytest
     (123, "content", "INVALID_PARAM"),
     ("file.txt", 456, "INVALID_PARAM"),
     ("../escape.txt", "x", "ACCESS_DENIED"),
-    ("/absolute.txt", "x", "ACCESS_DENIED"),
+    ("/absolute.txt", "x", "INVALID_PARAM"),
     ("emoji🎉.txt", "x", None),     # unicode path
     ("normal.txt", "", None),       # empty content is valid
 ])
