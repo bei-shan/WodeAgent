@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -52,7 +53,7 @@ def test_failed_replace_leaves_previous_snapshot_and_cleans_temp_file(tmp_path, 
     import core.team_engine.task_board_store as module
 
     def fail_replace(src, dst):
-        assert json.loads(open(src, encoding="utf-8").read())["description"] == "after"
+        assert json.loads(Path(src).read_text(encoding="utf-8"))["description"] == "after"
         raise OSError("simulated replace failure")
 
     with monkeypatch.context() as patcher:
