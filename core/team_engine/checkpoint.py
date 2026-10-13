@@ -109,7 +109,7 @@ class TeamCheckpointService:
         # Restore inbox cursors from snapshot.
         snapshot_cursors = snapshot.get("inbox_cursors")
         if isinstance(snapshot_cursors, dict):
-            if not hasattr(self, "_inbox_cursor"):
+            if not hasattr(owner, "_inbox_cursor"):
                 owner._inbox_cursor: Dict[tuple[str, str], int] = {}
             for key, cursor in snapshot_cursors.items():
                 if "|" in key and isinstance(cursor, int):
