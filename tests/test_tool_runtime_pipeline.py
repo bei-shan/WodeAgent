@@ -77,8 +77,10 @@ def test_blocked_feature_stops_tool_dispatch_and_preserves_existing_messages():
     body = json.loads(output)
     assert body == {
         "status": "error", "data": {},
+        "text": "blocked by policy",
         "error": {"code": "DENIED", "message": "blocked by policy"},
         "stats": {"time_ms": 0},
+        "context": {"cwd": ".", "params_input": {"input": "echo foo"}},
     }
     assert events == [
         ("before", "one", {"input": "echo foo"}),
