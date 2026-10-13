@@ -33,7 +33,7 @@ export function Composer(props: {
           onSubmit={() => props.onSubmit(props.value)}
           width="100%"
         />
-        <text fg="#70819c">Enter send · Ctrl+N new · Ctrl+C interrupt / exit</text>
+        <text fg="#70819c">Enter send · /help commands · Ctrl+N new · Ctrl+C interrupt / exit</text>
       </box>
     </>
   )

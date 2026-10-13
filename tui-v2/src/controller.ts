@@ -1,4 +1,5 @@
 import { AgentClient } from "./api/client"
+import { parseTerminalCommand, TERMINAL_HELP, type TerminalCommand } from "./commands"
 import { connectStream, type ConnectionState } from "./api/stream"
 import type { AgentEvent, SessionInfo } from "./protocol"
 import { emptyView, projectEvent, withHistory, type SessionView } from "./state/reducer"
@@ -122,6 +123,73 @@ export class TuiController {
     }
   }
 
+  private note(text: string): void {
+    this.update({ ...this.view, notice: text })
+  }
+
+  private async command(cmd: TerminalCommand): Promise<void> {
+    const id = this.view.sessionId
+    if (cmd.type === "invalid") { this.note(cmd.reason); return }
+    if (cmd.type === "help") { this.note(TERMINAL_HELP); return }
+    if (cmd.type === "stop") { await this.interrupt(); return }
+    if (cmd.type === "sessions") {
+      await this.refreshSessions()
+      this.note(this.view.sessions.map((s, i) =>
+        (i + 1) + ". " + (s.pinned ? "★ " : "") + s.title + " (" + s.id.slice(0, 8) + ")",
+      ).join("\n") || "No sessions")
+      return
+    }
+    if (cmd.type === "new") { await this.newSession(); return }
+    if (cmd.type === "use") {
+      const selected = this.view.sessions[cmd.index - 1]
+      if (!selected) { this.note("Session index out of range. Use /sessions."); return }
+      await this.selectSession(selected.id)
+      return
+    }
+    if (cmd.type === "models") {
+      const models = await this.api.models()
+      this.note(models.map((m) => m.name + " · " + m.provider + "/" + m.model).join("\n") || "No model profiles configured")
+      return
+    }
+    if (!id) { this.note("Create or select a session first."); return }
+    if (cmd.type === "delete") {
+      if (!cmd.confirmed) { this.note("To delete the current session, type /delete confirm"); return }
+      if (this.view.busy) { this.note("Stop the current turn before deleting."); return }
+      await this.api.deleteSession(id)
+      this.disconnect?.()
+      this.disconnect = null
+      ++this.epoch
+      const sessions = await this.api.listSessions()
+      this.update({ ...emptyView(), sessions, notice: "Session deleted" })
+      if (sessions.length) await this.selectSession(sessions[0].id)
+      else await this.newSession()
+      return
+    }
+    if (cmd.type === "rename") {
+      const result = await this.api.renameSession(id, cmd.title)
+      this.update({ ...this.view, title: result.title,
+        sessions: this.view.sessions.map((s) => s.id === id ? { ...s, title: result.title } : s),
+        notice: "Session renamed" })
+      return
+    }
+    if (cmd.type === "pin") {
+      const { pinned } = await this.api.togglePin(id)
+      this.update({ ...this.view,
+        sessions: this.view.sessions.map((s) => s.id === id ? { ...s, pinned } : s),
+        notice: pinned ? "Session pinned" : "Session unpinned" })
+      return
+    }
+    if (this.view.busy) { this.note("Wait for the current turn to finish."); return }
+    if (cmd.type === "model") {
+      await this.api.updateSessionConfig(id, { model_profile: cmd.profile })
+      this.note("Model profile selected: " + cmd.profile)
+    } else if (cmd.type === "plan" || cmd.type === "teams") {
+      await this.api.updateSessionConfig(id, cmd.type === "plan"
+        ? { plan_mode: cmd.enabled } : { enable_agent_teams: cmd.enabled })
+      this.note(cmd.type + (cmd.enabled ? " enabled" : " disabled"))
+    }
+  }
+
   /** Submission is context-sensitive: pending AskUser and permission are server commands. */
   async submit(raw: string): Promise<void> {
     const content = raw.trim()
@@ -142,6 +210,11 @@ export class TuiController {
         }
         await this.api.permission(id, pending.requestId, decision === "y" || decision === "yes")
         if (id === this.view.sessionId) this.update({ ...this.view, pending: null, notice: "" })
+        return
+      }
+      const cmd = parseTerminalCommand(content)
+      if (cmd) {
+        await this.command(cmd)
         return
       }
       if (this.view.busy) {

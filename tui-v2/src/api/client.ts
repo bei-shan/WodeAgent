@@ -46,6 +46,26 @@ export class AgentClient {
   listSessions() { return this.request<SessionInfo[]>("GET", "/api/sessions") }
   createSession(title = "") { return this.request<SessionInfo>("POST", "/api/sessions", { title }) }
   activateSession(id: string) { return this.request<{ status: string }>("POST", "/api/sessions/" + encodeURIComponent(id) + "/activate") }
+  renameSession(id: string, title: string) {
+    return this.request<{ status: string; title: string }>("PUT", "/api/sessions/" + encodeURIComponent(id) + "/rename", { title })
+  }
+  togglePin(id: string) {
+    return this.request<{ pinned: boolean }>("POST", "/api/sessions/" + encodeURIComponent(id) + "/pin")
+  }
+  deleteSession(id: string) {
+    return this.request<{ status: string }>("DELETE", "/api/sessions/" + encodeURIComponent(id))
+  }
+  models() {
+    return this.request<Array<{ name: string; model: string; provider: string }>>("GET", "/api/models")
+  }
+  sessionConfig(id: string) {
+    return this.request<{ model: string; provider: string; plan_mode: boolean; enable_agent_teams: boolean }>(
+      "GET", "/api/sessions/" + encodeURIComponent(id) + "/config",
+    )
+  }
+  updateSessionConfig(id: string, payload: { model_profile?: string; plan_mode?: boolean; enable_agent_teams?: boolean }) {
+    return this.request<{ status: string }>("PUT", "/api/sessions/" + encodeURIComponent(id) + "/config", payload)
+  }
   history(id: string) { return this.request<SavedHistory>("GET", "/api/sessions/" + encodeURIComponent(id) + "/history") }
   turn(id: string) { return this.request<TurnOutcome>("GET", "/api/sessions/" + encodeURIComponent(id) + "/turn") }
   send(id: string, content: string) {
