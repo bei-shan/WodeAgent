@@ -125,7 +125,22 @@ class SkillLoader:
 
     # ── Internal ────────────────────────────────────────────────────
 
+    def _safe_skill_path(self, path: Path) -> bool:
+        """Never follow symlinked skill entries or project-external paths."""
+        try:
+            relative = path.relative_to(self._project_root)
+            current = self._project_root
+            for component in relative.parts:
+                current = current / component
+                if current.is_symlink():
+                    return False
+            return path.resolve().is_relative_to(self._project_root)
+        except (OSError, ValueError, RuntimeError):
+            return False
+
     def _ensure_runtime_dir(self) -> None:
+        if not self._safe_skill_path(self._runtime_dir):
+            raise ValueError("Unsafe skill runtime directory")
         if not self._runtime_dir.exists():
             self._runtime_dir.mkdir(parents=True, exist_ok=True)
 
@@ -140,6 +155,8 @@ class SkillLoader:
             try:
                 rel = src_path.relative_to(self._source_dir)
                 dst = self._runtime_dir / rel
+                if not self._safe_skill_path(src_path) or not self._safe_skill_path(dst):
+                    continue
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_path, dst)
             except OSError:
@@ -154,7 +171,7 @@ class SkillLoader:
         # Source dir — built-in defaults (reference)
         if self._source_dir.exists():
             paths.extend(self._source_dir.rglob("SKILL.md"))
-        return sorted(paths)
+        return sorted(p for p in paths if self._safe_skill_path(p))
 
     def _get_skills_state(self) -> Tuple[float, int]:
         max_mtime = 0.0
@@ -169,6 +186,8 @@ class SkillLoader:
         return max_mtime, count
 
     def _parse_skill_file(self, path: Path) -> Optional[SkillMeta]:
+        if not self._safe_skill_path(path):
+            return None
         try:
             content = path.read_text(encoding="utf-8")
         except OSError:
