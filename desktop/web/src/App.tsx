@@ -578,7 +578,7 @@ export default function App() {
   useEffect(() => { api.skills.list().then(setSkillsList).catch(() => {}) }, [])
   useEffect(() => { api.mcp.list().then(setMcpServers).catch(() => {}) }, [])
 
-  const connectSession = (sid: string) => {
+  const connectSession = (sid: string, replayFromStart = false) => {
     setStreamConnected(false)
     disconnectRef.current?.()
     let previouslyConnected = false
@@ -604,19 +604,20 @@ export default function App() {
         }
         previouslyConnected = true
       },
+      replayFromStart,
     )
   }
 
-  const selectSession = async (sid: string) => {
+  const selectSession = async (sid: string, fresh = false) => {
     activeSidRef.current = sid
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
     setGeneratedFiles([]); setSubagentStatus('')
     try {
       await api.sessions.activate(sid)
-      connectSession(sid)
       const data = await api.sessions.history(sid)
       if (activeSidRef.current === sid) {
         setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
+        connectSession(sid, fresh)
       }
       const meta = await api.sessions.get(sid)
       if (activeSidRef.current === sid) setSending(meta.busy)
@@ -632,7 +633,7 @@ export default function App() {
   }
 
   const createSession = async () => {
-    try { const session = await api.sessions.create(); setSessions(prev => [session, ...prev]); await selectSession(session.id) }
+    try { const session = await api.sessions.create(); setSessions(prev => [session, ...prev]); await selectSession(session.id, true) }
     catch (e: any) { alert(e.message) }
   }
 
@@ -665,6 +666,17 @@ export default function App() {
   const handleEvent = (event: AgentEvent) => {
     const { type, payload } = event
     switch (type) {
+      case 'stream.reset':
+        setSubagentStatus('事件缓存已过期，正在从已保存的会话历史恢复…')
+        if (activeSidRef.current) {
+          const sid = activeSidRef.current
+          api.sessions.history(sid).then(data => {
+            if (activeSidRef.current === sid && data.messages.length) {
+              setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
+            }
+          }).catch(() => {})
+        }
+        break
       case 'llm.delta':
         if (payload.kind === 'content' && payload.text) {
           setMessages(prev => {
@@ -734,7 +746,7 @@ export default function App() {
         setSessions(prev => [session, ...prev])
         activeSidRef.current = sid
         setActiveSid(sid)
-        connectSession(sid)
+        connectSession(sid, true)
       } catch (e: any) { alert('创建会话失败：' + e.message); return }
     }
     // Append @file references for uploaded files
@@ -759,7 +771,7 @@ export default function App() {
       if (!sid) {
         const session = await api.sessions.create()
         sid = session.id; setSessions(prev => [session, ...prev])
-        await selectSession(sid)
+        await selectSession(sid, true)
       }
       await api.config.update(sid, { model_profile: profile.name })
       setSelectedModel(profile.model)
