@@ -20,3 +20,23 @@ test("independent terminal conversation component renders saved messages", async
     setup.renderer.destroy()
   }
 })
+
+
+test("multi-line terminal command output remains visible", async () => {
+  const view = { ...emptyView(), notice: [
+    "/help · /new · /sessions",
+    "/rename · /pin · /delete confirm",
+    "/models · /plan on|off",
+    "/tree · /fork NODE_ID (8 hex chars)",
+  ].join("\n") }
+  const setup = await testRender(() => <ConversationPanel view={view} />, { width: 100, height: 26 })
+  try {
+    await setup.renderOnce()
+    const text = setup.captureCharFrame()
+    expect(text).toContain("/help")
+    expect(text).toContain("/tree")
+    expect(text).toContain("/fork")
+  } finally {
+    setup.renderer.destroy()
+  }
+})

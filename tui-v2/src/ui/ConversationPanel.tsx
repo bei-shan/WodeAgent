@@ -25,7 +25,12 @@ export function ConversationPanel(props: { view: SessionView }) {
         </For>
       </scrollbox>
       <box height={1}><text fg="#c09ef0">{props.view.subagent || " "}</text></box>
-      <box height={1}><text fg="#f3bb6e">{props.view.notice || " "}</text></box>
+      <box flexDirection="column"
+        height={Math.min(6, Math.max(1, props.view.notice.split("\n").length))}>
+        <For each={props.view.notice.split("\n").slice(0, 6)}>
+          {(line) => <text fg="#f3bb6e">{line || " "}</text>}
+        </For>
+      </box>
     </box>
   )
 }
