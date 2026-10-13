@@ -21,26 +21,8 @@ export function App(props: { client: AgentClient }) {
     const input = value.trim()
     if (!input) return
     setDraft("")
-    if (!view().pending) {
-      if (input === "/new") { void controller.newSession(); return }
-      if (input === "/help") {
-        // Guidance is kept in the presentation layer, not passed to the LLM.
-        setHelp(true)
-        return
-      }
-      const selection = /^\/use\s+([1-9][0-9]*)$/.exec(input)
-      if (selection) {
-        const session = view().sessions[Number(selection[1]) - 1]
-        if (session) void controller.selectSession(session.id)
-        else setHelp(true)
-        return
-      }
-    }
-    setHelp(false)
     void controller.submit(input)
   }
-  const [help, setHelp] = createSignal(false)
-
   useKeyboard((key) => {
     if (key.ctrl && key.name === "n") {
       void controller.newSession()
@@ -69,9 +51,6 @@ export function App(props: { client: AgentClient }) {
             <text fg="#8fa2c1">{view().busy ? "● Agent working" : "Ready"}</text>
           </box>
           <ConversationPanel view={view()} />
-          <Show when={help()}>
-            <box height={1}><text fg="#f3bb6e">Commands: /new · /use 1..N · /help · Ctrl+N · Ctrl+C</text></box>
-          </Show>
           <Composer view={view()} value={draft()} onChange={setDraft} onSubmit={submit} />
         </box>
       </box>
