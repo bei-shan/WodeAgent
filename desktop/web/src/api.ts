@@ -85,6 +85,10 @@ async function req<T>(method: string, path: string, body?: any): Promise<T> {
   };
   const res = await fetch(BASE + path, opts);
   if (!res.ok) {
+    if (res.status === 401) {
+      // The server session may have expired while the app was open.
+      window.dispatchEvent(new Event('wodeagent-auth-expired'));
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || res.statusText);
   }
