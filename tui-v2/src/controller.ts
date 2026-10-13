@@ -1,5 +1,6 @@
 import { AgentClient } from "./api/client"
 import { parseTerminalCommand, TERMINAL_HELP, type TerminalCommand } from "./commands"
+import { formatSessionTree } from "./tree"
 import { connectStream, type ConnectionState } from "./api/stream"
 import type { AgentEvent, SessionInfo } from "./protocol"
 import { emptyView, projectEvent, withHistory, type SessionView } from "./state/reducer"
@@ -152,6 +153,11 @@ export class TuiController {
       return
     }
     if (!id) { this.note("Create or select a session first."); return }
+    if (cmd.type === "tree") {
+      if (this.view.busy) { this.note("Wait for the current turn to finish."); return }
+      this.note(formatSessionTree(await this.api.tree(id)))
+      return
+    }
     if (cmd.type === "delete") {
       if (!cmd.confirmed) { this.note("To delete the current session, type /delete confirm"); return }
       if (this.view.busy) { this.note("Stop the current turn before deleting."); return }
@@ -180,6 +186,19 @@ export class TuiController {
       return
     }
     if (this.view.busy) { this.note("Wait for the current turn to finish."); return }
+    if (cmd.type === "fork") {
+      const epoch = this.epoch
+      const result = await this.api.fork(id, cmd.targetId)
+      const history = await this.api.history(id)
+      if (this.disposed || epoch !== this.epoch || id !== this.view.sessionId) return
+      this.update({
+        ...withHistory(this.view, history.messages),
+        notice: "Forked from message " + result.cursor_id,
+        busy: false,
+        status: "idle",
+      })
+      return
+    }
     if (cmd.type === "model") {
       await this.api.updateSessionConfig(id, { model_profile: cmd.profile })
       this.note("Model profile selected: " + cmd.profile)
