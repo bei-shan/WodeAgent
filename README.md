@@ -63,7 +63,7 @@ bun test
 bun run dev
 ```
 
-可以使用 `RIDGECODE_SERVER` 指定服务端地址；旧的 `WODEAGENT_SERVER` 继续作为兼容回退。当前 TUI v2 尚未实现 Web 的令牌登录流程，因此在启用 `WEB_AUTH_TOKEN` 时不能直接复用 Web 登录。参见 [TUI v2 说明](tui-v2/README.md)。
+可以使用 `RIDGECODE_SERVER` 指定服务端地址；旧的 `WODEAGENT_SERVER` 继续作为兼容回退。启用服务端 `WEB_AUTH_TOKEN` 后，TUI 可使用 `RIDGECODE_AUTH_TOKEN` 设置相同令牌，通过 Bearer 请求头认证（兼容旧变量 `WODEAGENT_AUTH_TOKEN`）；具体限制见 TUI 文档。参见 [TUI v2 说明](tui-v2/README.md)。
 
 原有 Python TUI 仍可使用：
 
@@ -114,7 +114,7 @@ cd tui-v2 && bun install && bun run typecheck && bun test
 
 更完整的测试范围在 `.github/workflows/` 中定义；具体结果以 CI 为准。本地需要按所测试功能配置相应依赖，Docker 集成测试还需要 Docker。
 
-阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解开发约定；[品牌与旧命名兼容说明](docs/REBRANDING.md) 记录改名边界和后续迁移工作。
+阅读 [文档导航](docs/README.md) 查看最新架构与历史设计的区别；[CONTRIBUTING.md](CONTRIBUTING.md) 介绍开发约定；[品牌与旧命名兼容说明](docs/REBRANDING.md) 记录改名边界和后续迁移工作。
 
 ## 当前限制
 

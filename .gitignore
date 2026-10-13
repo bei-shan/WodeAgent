@@ -21,4 +21,16 @@ claude_code_env.sh
 .idea/
 techBlogs/
 memory/
-eval/   
+eval/
+.mycode/
+.teams/
+.tasks/
+.worktrees/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
