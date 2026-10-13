@@ -33,6 +33,17 @@ def _finish(client, sid):
     return client.get(f"/api/sessions/{sid}/turn").json()
 
 
+def _terminal_events(session):
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        events = [x.event for x in session.events.read_after(0).events]
+        terminal = [x for x in events if x.type == "turn.finished"]
+        if terminal:
+            return terminal
+        time.sleep(0.01)
+    raise AssertionError("No turn.finished event emitted")
+
+
 def test_success_outcome_with_durable_restart(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
@@ -46,8 +57,8 @@ def test_success_outcome_with_durable_restart(tmp_path, monkeypatch):
             "error_kind": None, "retryable": False,
         }
         assert load_turn_outcome(sid).status is TurnStatus.COMPLETED
-        events = [x.event for x in app.state.controller.get_session(sid).events.read_after(0).events]
-        assert len([e for e in events if e.type == "turn.finished"]) == 1
+        terminal = _terminal_events(app.state.controller.get_session(sid))
+        assert len(terminal) == 1
 
     app2 = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
     with TestClient(app2) as client:
@@ -65,8 +76,7 @@ def test_cancelled_turn_is_not_reported_as_completed(tmp_path, monkeypatch):
         state = _finish(client, sid)
         assert state["status"] == "cancelled"
         assert "已停止生成" in state["response"]
-        events = [x.event for x in app.state.controller.get_session(sid).events.read_after(0).events]
-        terminal = [x for x in events if x.type == "turn.finished"]
+        terminal = _terminal_events(app.state.controller.get_session(sid))
         assert len(terminal) == 1 and terminal[0].payload["status"] == "cancelled"
 
 
@@ -81,8 +91,7 @@ def test_model_failure_reports_category_not_credentials(tmp_path, monkeypatch):
         assert state["error_kind"] == "rate_limited"
         assert state["retryable"] is True
         assert state["response"] == ""
-        stream = [x.event for x in app.state.controller.get_session(sid).events.read_after(0).events]
-        terminal = [x for x in stream if x.type == "turn.finished"]
+        terminal = _terminal_events(app.state.controller.get_session(sid))
         assert len(terminal) == 1 and terminal[0].payload["error_kind"] == "rate_limited"
 
 
@@ -96,5 +105,5 @@ def test_unexpected_errors_never_expose_exception_text(tmp_path, monkeypatch):
         assert state["status"] == "failed"
         assert state["error_kind"] == "agent_error"
         assert "secret" not in str(state)
-        terminal = [x.event for x in app.state.controller.get_session(sid).events.read_after(0).events if x.event.type == "turn.finished"]
+        terminal = _terminal_events(app.state.controller.get_session(sid))
         assert "secret" not in str(terminal[0].payload)
