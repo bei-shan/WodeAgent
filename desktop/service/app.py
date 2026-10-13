@@ -46,7 +46,7 @@ from core.runtime.session_controller import (
 from core.events import AgentEvent, EventType
 from desktop.service.application import (
     ServiceError, SessionService, TurnService, SessionSettingsService, TeamsService,
-    WorkspaceService, ConfigCatalogService,
+    WorkspaceService, ConfigCatalogService, SkillCatalogService,
 )
 from desktop.service.schemas import (
     SessionCreate,
@@ -191,6 +191,7 @@ def create_app(
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state.config_catalog = ConfigCatalogService(app.state.project_root)
+    app.state.skill_catalog = SkillCatalogService(app.state.project_root)
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
@@ -614,137 +615,27 @@ def create_app(
 
     @app.get("/api/skills", response_model=list[SkillInfo])
     async def list_skills():
-        """List all project skills."""
-        from core.skills.skill_loader import SkillLoader
-        loader = SkillLoader(app.state.project_root)
-        try:
-            skills = loader.list_skills(refresh=True)
-        except Exception:
-            skills = []
-        return [
-            SkillInfo(name=s.name, description=s.description, base_dir=s.base_dir)
-            for s in skills
-        ]
+        return app.state.skill_catalog.list()
 
     @app.get("/api/skills/{name}/content")
     async def get_skill_content(name: str):
-        """Read a skill's SKILL.md file content."""
-        from core.skills.skill_loader import SkillLoader
-        loader = SkillLoader(app.state.project_root)
-        skill = loader.get_skill(name, refresh=True)
-        if skill is None:
-            raise HTTPException(404, f"Skill not found: {name}")
-        try:
-            content = Path(skill.path).read_text(encoding="utf-8")
-        except Exception:
-            raise HTTPException(500, "Failed to read skill file")
-        # Strip frontmatter to get body
-        body = content.split("---\n", 2)[-1] if content.count("---") >= 2 else content
-        # Re-parse frontmatter
-        parts = content.split("---", 2)
-        fm_lines = parts[1].strip().splitlines() if len(parts) >= 3 else []
-        frontmatter = {}
-        for line in fm_lines:
-            if ":" in line:
-                k, v = line.split(":", 1)
-                frontmatter[k.strip()] = v.strip().strip('"')
-        return {
-            "name": skill.name,
-            "description": skill.description,
-            "content": body.strip(),
-            "frontmatter": frontmatter,
-        }
+        return app.state.skill_catalog.get(name)
 
     @app.post("/api/skills", status_code=201)
     async def create_skill(body: SkillCreate):
-        """Create a new skill — writes .mycodeagent/skills/<name>/SKILL.md."""
-        skills_dir = Path(app.state.project_root) / ".mycodeagent" / "skills" / body.name
-        if skills_dir.exists():
-            raise HTTPException(409, f"Skill '{body.name}' already exists")
-        try:
-            skills_dir.mkdir(parents=True, exist_ok=False)
-            frontmatter = f"---\nname: {body.name}\ndescription: \"{body.description}\"\n---\n"
-            (skills_dir / "SKILL.md").write_text(
-                frontmatter + "\n" + body.content + "\n",
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            raise HTTPException(500, f"Failed to create skill: {exc}")
-        return {"status": "created", "name": body.name}
+        return app.state.skill_catalog.create(body.name, body.description, body.content)
 
     @app.put("/api/skills/{name}")
     async def update_skill(name: str, body: SkillUpdate):
-        """Update an existing skill."""
-        from core.skills.skill_loader import SkillLoader
-        loader = SkillLoader(app.state.project_root)
-        skill = loader.get_skill(name, refresh=True)
-        if skill is None:
-            raise HTTPException(404, f"Skill not found: {name}")
-        try:
-            current = Path(skill.path).read_text(encoding="utf-8")
-        except Exception:
-            raise HTTPException(500, "Failed to read skill file")
-
-        # Update frontmatter description if provided
-        if body.description is not None:
-            parts = current.split("---", 2)
-            if len(parts) >= 3:
-                fm_lines = parts[1].strip().splitlines()
-                new_fm_lines = []
-                for line in fm_lines:
-                    if line.strip().startswith("description:"):
-                        new_fm_lines.append(f"description: \"{body.description}\"")
-                    else:
-                        new_fm_lines.append(line)
-                parts[1] = "\n".join(new_fm_lines)
-                current = "---".join(parts)
-
-        # Update body if provided
-        if body.content is not None:
-            parts = current.split("---", 2)
-            if len(parts) >= 3:
-                current = "---".join(parts[:2]) + "---\n" + body.content + "\n"
-            else:
-                current = current.rstrip() + "\n" + body.content + "\n"
-
-        try:
-            Path(skill.path).write_text(current, encoding="utf-8")
-        except Exception:
-            raise HTTPException(500, "Failed to write skill file")
-        return {"status": "updated", "name": name}
+        return app.state.skill_catalog.update(name, body.description, body.content)
 
     @app.delete("/api/skills/{name}")
     async def delete_skill(name: str):
-        """Delete a skill directory."""
-        from core.skills.skill_loader import SkillLoader
-        import shutil
-        loader = SkillLoader(app.state.project_root)
-        skill = loader.get_skill(name, refresh=True)
-        if skill is None:
-            raise HTTPException(404, f"Skill not found: {name}")
-        try:
-            shutil.rmtree(Path(skill.path).parent)
-        except Exception as exc:
-            raise HTTPException(500, f"Failed to delete skill: {exc}")
-        return {"status": "deleted", "name": name}
+        return app.state.skill_catalog.delete(name)
 
     @app.post("/api/skills/validate")
     async def validate_skill(body: SkillCreate):
-        """Validate a skill submission without creating it.
-
-        Checks that the YAML frontmatter has required fields (name, description)
-        and the content is non-empty markdown.
-        """
-        errors: list[str] = []
-        if not body.name or not body.name.strip():
-            errors.append("缺少 name 字段")
-        elif not __import__('re').match(r'^[a-z0-9]+(?:-[a-z0-9]+)*$', body.name.strip()):
-            errors.append("name 格式无效（只允许小写字母、数字、连字符）")
-        if not body.description or not body.description.strip():
-            errors.append("缺少 description 字段")
-        if not body.content or not body.content.strip():
-            errors.append("内容不能为空")
-        return {"valid": len(errors) == 0, "errors": errors}
+        return app.state.skill_catalog.validate(body.name, body.description, body.content)
 
     # ── Enable/disable state ───────────────────────────────────────
 
