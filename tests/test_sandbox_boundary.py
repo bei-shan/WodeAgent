@@ -35,7 +35,7 @@ def test_docker_flags_no_network_no_privilege_no_host_environment(tmp_path, monk
     for value in ("--rm", "--pull=never", "--read-only", "--cap-drop=ALL", "--network=none", "--pids-limit", "--memory", "--cpus"):
         assert value in argv
     assert argv[argv.index("--user") + 1] == "65534:65534"
-    assert argv[argv.index("--security-opt") + 1] == "no-new-privileges"
+    assert "--security-opt=no-new-privileges" in argv
     assert argv[argv.index("--env") + 1] == "HOME=/tmp"
     assert argv[argv.index("--workdir") + 1] == "/workspace"
     assert not any("DOCKER_HOST=" in x or "API_KEY=" in x for x in argv)
