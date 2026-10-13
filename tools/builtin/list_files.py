@@ -34,6 +34,9 @@ class ListFilesTool(Tool):
         ".venv",         # Python 虚拟环境（另一种命名）
     }
 
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        return True
+
     def __init__(
         self,
         name: str = "LS",
