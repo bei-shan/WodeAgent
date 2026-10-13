@@ -3,7 +3,7 @@
 **Ridge** 是一个本地优先、可扩展的 AI 编程代理项目：使用 Python 实现 Agent 引擎，由同一套会话运行时同时服务 Web 和终端界面。项目目前处于持续开发阶段，适合个人开发、学习与实验，并非开箱即用的多用户 SaaS。
 
 - **Agent 引擎**：Python 3.12+、ReAct、工具调用、可组合 Feature、模型路由
-- **交互界面**：React/TypeScript Web、TypeScript/OpenTUI 终端（实验性），以及保留的 Python TUI
+- **交互界面**：React/TypeScript Web 与 TypeScript/OpenTUI 终端（单一终端实现，仍在迭代）
 - **执行能力**：代码读写、命令执行、MCP、Skills、子代理与 Agent Teams
 - **上下文管理**：会话树、压缩、工具输出截断、Trace 与流式事件
 - **安全选项**：工作区路径边界、工具权限、可选的本地 Web 登录、实验性 Docker 工具隔离
@@ -65,17 +65,13 @@ bun run dev
 
 可以使用 `RIDGECODE_SERVER` 指定服务端地址；旧的 `WODEAGENT_SERVER` 继续作为兼容回退。启用服务端 `WEB_AUTH_TOKEN` 后，TUI 可使用 `RIDGECODE_AUTH_TOKEN` 设置相同令牌，通过 Bearer 请求头认证（兼容旧变量 `WODEAGENT_AUTH_TOKEN`）；具体限制见 TUI 文档。参见 [TUI v2 说明](tui-v2/README.md)。
 
-原有 Python TUI 仍可使用：
-
-```bash
-python scripts/chat_test_agent.py
-```
+旧 Python Rich/prompt_toolkit TUI 已退役，OpenTUI 是唯一维护的交互式终端客户端。常用会话、模型与 Plan/Teams 命令已迁移；旧 CLI 独有的树形分支、快照导入导出等命令尚未迁移，详见 [终端迁移清单](docs/design/2026-10-13-tui-command-migration.md)。
 
 ## 架构概览
 
 ```text
-Web (desktop/web)    TUI v2 (tui-v2)    Python TUI (tui/)
-           \              |              /
+Web (desktop/web)          OpenTUI (tui-v2)
+           \                   /
             FastAPI / runtime events
                      |
        core/runtime + core/events
@@ -120,7 +116,7 @@ cd tui-v2 && bun install && bun run typecheck && bun test
 
 - Web 主要定位可信本机单用户场景；没有提供多租户 RBAC 或安全的公网托管方案。
 - Docker 工具隔离为 opt-in 实验能力，不能替代完整的容器安全策略。
-- 新版 TypeScript TUI 尚在迭代，Python TUI 仍是兼容入口。
+- OpenTUI 是唯一维护的终端客户端；仍有少数旧 Python CLI 命令需要通过版本化服务端 API 补齐。
 - 模型可用性、推理能力以及工具实际权限取决于运行环境与配置。
 
 **许可证**：[MIT](LICENSE)。

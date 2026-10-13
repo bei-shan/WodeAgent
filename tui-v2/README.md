@@ -28,6 +28,8 @@ bun run dev
 
 - 会话列表、历史加载、新会话、消息提交、中断、权限确认与 AskUser
 - WebSocket 事件顺序、replay cursor、去重、缺口检测与重连
+- `/new`、`/sessions`、`/use N`、`/rename TITLE`、`/pin`、`/delete confirm` 等会话命令
+- `/models`、`/model PROFILE`、`/plan on|off`、`/teams on|off`、`/stop`、`/help` 等运行控制
 - 清晰的分层，不覆写 `CodeAgent` 的私有方法
 
 ```text
@@ -39,4 +41,4 @@ src/ui/              OpenTUI 视图与交互
 src/index.tsx        启动入口
 ```
 
-设计参见 [TUI v2 分层说明](../docs/design/2026-10-13-tui-v2-layered-architecture.md)。原 Python TUI 仍保留作为兼容入口。
+设计参见 [TUI v2 分层说明](../docs/design/2026-10-13-tui-v2-layered-architecture.md)。旧 Python TUI 已退役，OpenTUI 是唯一维护的终端界面。参见 [退役说明](../docs/design/2026-10-13-python-tui-retirement.md)。
