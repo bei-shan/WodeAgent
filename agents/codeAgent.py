@@ -867,7 +867,7 @@ class CodeAgent(Agent):
                     (json.dumps(error_envelope(
                         "INTERRUPTED", "Tool not executed: user interrupted", item["input"],
                     ), ensure_ascii=False), None, None, 0)
-                    for _ in batch.calls
+                    for item in batch.calls
                 ]
 
             errors = 0
