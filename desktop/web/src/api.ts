@@ -75,6 +75,36 @@ export interface SkillDetail {
   frontmatter: Record<string, string>;
 }
 
+export interface TraceNode {
+  kind: 'model' | 'tool';
+  name: string;
+  status: string;
+  duration_ms: number | null;
+  tokens?: { input: number; output: number; total: number };
+}
+export interface TraceRun {
+  run_id: number;
+  status: string;
+  started_at: string | null;
+  duration_ms: number | null;
+  tokens: { input: number; output: number; total: number };
+  cost_usd_estimate: number | null;
+  quality: {
+    label: 'healthy' | 'warning' | 'needs_review' | 'pending';
+    tool_errors: number;
+    empty_retries: number;
+    note: string;
+  };
+  steps: { step: number; nodes: TraceNode[] }[];
+}
+export interface TraceAnalysis {
+  available: boolean;
+  trace_id: string | null;
+  truncated: boolean;
+  pricing_configured: boolean;
+  runs: TraceRun[];
+}
+
 // ── HTTP wrappers ────────────────────────────────────────────────────
 
 async function req<T>(method: string, path: string, body?: any): Promise<T> {
@@ -102,6 +132,7 @@ export const sessions = {
   create: (title?: string) => req<SessionInfo>('POST', '/sessions', { title: title || '' }),
   activate: (id: string) => req<{ status: string }>('POST', `/sessions/${id}/activate`),
   history: (id: string) => req<{ messages: Array<{role: 'user' | 'assistant'; content: string}> }>('GET', `/sessions/${id}/history`),
+  trace: (id: string) => req<TraceAnalysis>('GET', `/sessions/${encodeURIComponent(id)}/trace`),
   turn: (id: string) => req<{status: 'running' | 'idle' | 'completed' | 'failed' | 'cancelled'; response?: string; error_kind?: string; retryable?: boolean}>('GET', `/sessions/${id}/turn`),
   get:    (id: string)    => req<SessionInfo>('GET', `/sessions/${id}`),
   delete: (id: string)    => req<void>('DELETE', `/sessions/${id}`),
