@@ -1,5 +1,19 @@
 import type { SessionInfo, TurnStatus } from "../protocol"
 
+export type SessionTreeNode = {
+  id: string
+  parentId: string | null
+  role?: string
+  content?: string
+  type: string
+  summary?: string
+}
+export type SessionTree = {
+  nodes: Record<string, SessionTreeNode>
+  children: Record<string, string[]>
+  cursor_id: string | null
+  labels: Record<string, string>
+}
 export type SavedHistory = { messages: Array<{ role: string; content: string }> }
 export type TurnOutcome = { status: TurnStatus; response?: string; error_kind?: string; retryable?: boolean }
 
@@ -65,6 +79,15 @@ export class AgentClient {
   }
   updateSessionConfig(id: string, payload: { model_profile?: string; plan_mode?: boolean; enable_agent_teams?: boolean }) {
     return this.request<{ status: string }>("PUT", "/api/sessions/" + encodeURIComponent(id) + "/config", payload)
+  }
+  tree(id: string) {
+    return this.request<SessionTree>("GET", "/api/sessions/" + encodeURIComponent(id) + "/tree")
+  }
+  fork(id: string, targetId: string) {
+    return this.request<{ cursor_id: string }>(
+      "POST", "/api/sessions/" + encodeURIComponent(id) + "/fork",
+      { target_id: targetId },
+    )
   }
   history(id: string) { return this.request<SavedHistory>("GET", "/api/sessions/" + encodeURIComponent(id) + "/history") }
   turn(id: string) { return this.request<TurnOutcome>("GET", "/api/sessions/" + encodeURIComponent(id) + "/turn") }

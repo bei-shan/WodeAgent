@@ -11,6 +11,10 @@ class SessionCreate(BaseModel):
     title: str = ""
 
 
+class SessionFork(BaseModel):
+    target_id: str = Field(..., min_length=8, max_length=8)
+
+
 class SessionInfo(BaseModel):
     id: str
     title: str = ""

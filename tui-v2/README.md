@@ -42,3 +42,5 @@ src/index.tsx        启动入口
 ```
 
 设计参见 [TUI v2 分层说明](../docs/design/2026-10-13-tui-v2-layered-architecture.md)。旧 Python TUI 已退役，OpenTUI 是唯一维护的终端界面。参见 [退役说明](../docs/design/2026-10-13-python-tui-retirement.md)。
+
+会话树：`/tree` 展示包含节点 ID 的分支视图，`/fork 1234abcd` 从对应消息分叉；仅空闲会话允许分叉，原分支保留，并立即持久化当前光标。旧的 `/fork` 功能现已由服务端 API 正式支持。

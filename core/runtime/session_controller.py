@@ -177,6 +177,36 @@ class AgentSession:
             self._ensure_agent()
             return self._agent
 
+    def session_tree(self) -> dict:
+        """Return the current tree from an idle session (no concurrent writes)."""
+        with self._busy_lock:
+            if self._busy:
+                raise RuntimeError("Session is running")
+            history = self.ensure_agent().history_manager
+            return history.get_tree()
+
+    def fork_history(self, target_id: str) -> dict:
+        """Atomically switch the selected branch and persist before unlocking."""
+        with self._busy_lock:
+            if self._busy:
+                raise RuntimeError("Session is running")
+            agent = self.ensure_agent()
+            history = agent.history_manager
+            previous_entries = history.serialize_entries()
+            previous_cursor = history.get_cursor_id()
+            previous_labels = dict(history._labels)
+            # A fork never deletes the abandoned branch: it moves the cursor.
+            history.fork(target_id)
+            try:
+                snapshot = agent._build_snapshot()
+                agent._session_manager.save_session(self.session_id, snapshot)
+            except Exception:
+                # A save error must not leave an unpersisted branch in memory.
+                history.load_entries(previous_entries)
+                history.restore_tree_state(previous_cursor, previous_labels)
+                raise
+            return {"cursor_id": history.get_cursor_id()}
+
     @property
     def agent(self) -> Any:
         """The active agent if already initialized; does not cause side effects."""
