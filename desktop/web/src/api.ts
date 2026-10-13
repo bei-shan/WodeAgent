@@ -94,6 +94,8 @@ async function req<T>(method: string, path: string, body?: any): Promise<T> {
 export const sessions = {
   list:   ()              => req<SessionInfo[]>('GET', '/sessions'),
   create: (title?: string) => req<SessionInfo>('POST', '/sessions', { title: title || '' }),
+  activate: (id: string) => req<{ status: string }>('POST', `/sessions/${id}/activate`),
+  history: (id: string) => req<{ messages: Array<{role: 'user' | 'assistant'; content: string}> }>('GET', `/sessions/${id}/history`),
   get:    (id: string)    => req<SessionInfo>('GET', `/sessions/${id}`),
   delete: (id: string)    => req<void>('DELETE', `/sessions/${id}`),
   rename: (id: string, title: string) =>
@@ -170,7 +172,7 @@ export interface TeamInfo { name: string; queued: number; running: number; succe
 
 export const config = {
   get:    (sid: string) => req<SessionConfig>('GET', `/sessions/${sid}/config`),
-  update: (sid: string, data: { enable_agent_teams?: boolean; plan_mode?: boolean }) =>
+  update: (sid: string, data: { enable_agent_teams?: boolean; plan_mode?: boolean; model_profile?: string }) =>
     req<{ status: string }>('PUT', `/sessions/${sid}/config`, data),
 };
 
@@ -182,24 +184,50 @@ export const teams = {
 
 // ── WebSocket ────────────────────────────────────────────────────────
 
+/**
+ * Reconnect with bounded backoff. Disconnecting intentionally clears timers
+ * and prevents a stale session's events from leaking into a new one.
+ */
 export function connectStream(
   sessionId: string,
   onEvent: (e: AgentEvent) => void,
   onDisconnect: () => void,
+  onConnect?: () => void,
 ): () => void {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/api/sessions/${sessionId}/stream`;
-  const ws = new WebSocket(wsUrl);
-  let closed = false;
+  let ws: WebSocket | null = null
+  let closed = false
+  let retry: ReturnType<typeof setTimeout> | null = null
+  let attempts = 0
 
-  ws.onmessage = (msg) => {
-    try {
-      const event: AgentEvent = JSON.parse(msg.data);
-      onEvent(event);
-    } catch { /* ignore malformed */ }
-  };
-  ws.onclose = () => { if (!closed) onDisconnect(); };
-  ws.onerror = () => { if (!closed) onDisconnect(); };
+  const connect = () => {
+    if (closed) return
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    ws = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionId)}/stream`)
+    ws.onopen = () => {
+      attempts = 0
+      onConnect?.()
+    }
+    ws.onmessage = (msg) => {
+      try { onEvent(JSON.parse(msg.data) as AgentEvent) }
+      catch { /* ignore malformed frames */ }
+    }
+    ws.onclose = () => {
+      if (closed) return
+      onDisconnect()
+      attempts += 1
+      retry = setTimeout(connect, Math.min(10000, 500 * 2 ** Math.min(attempts, 5)))
+    }
+    ws.onerror = () => ws?.close()
+  }
+  connect()
 
-  return () => { closed = true; ws.close(); };
+  return () => {
+    closed = true
+    if (retry !== null) clearTimeout(retry)
+    if (ws) {
+      ws.onclose = null
+      ws.onerror = null
+      ws.close()
+    }
+  }
 }
