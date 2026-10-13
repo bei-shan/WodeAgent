@@ -108,6 +108,8 @@ python -m pip install -r requirements-observability.txt
 
 详细配置、数据外发边界和测试说明参见 [Langfuse/OpenTelemetry 接入设计](docs/design/2026-10-13-optional-otel-langfuse-tracing.md)。
 
+Web 侧边栏新增 **Trace** 面板：展示当前会话的本地 Trace ID、调用树、耗时、Token 用量和运行健康度。设置 `TRACE_INPUT_USD_PER_MILLION` 与 `TRACE_OUTPUT_USD_PER_MILLION` 后可显示 USD **估算费用**，不配置就不计算。运行健康度不是答案正确率。详见 [Web Trace 分析设计](docs/design/2026-10-13-web-trace-timeline.md)。
+
 ## 测试和开发
 
 ```bash
