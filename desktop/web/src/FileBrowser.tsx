@@ -10,6 +10,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [truncated, setTruncated] = useState(false)
+  const [refresh, setRefresh] = useState(0)
 
   useEffect(() => {
     setPath('.')
@@ -30,7 +31,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
       if (!cancelled) { setEntries([]); setError(String(err.message || err)) }
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [sessionId, path])
+  }, [sessionId, path, refresh])
 
   const view = async (entry: FileEntry) => {
     if (!sessionId) return
@@ -40,6 +41,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
       return
     }
     setSelected(entry.path)
+    setContent('')
     setError('')
     try {
       const result = await files.content(sessionId, entry.path)
@@ -59,7 +61,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
             <h2 className="text-xl font-semibold">工作区文件</h2>
             <p className="text-sm text-gray-500">仅显示当前会话的文件</p>
           </div>
-          <button className="text-sm px-3 py-2 rounded-lg border bg-white" onClick={() => setPath(p => p === '.' ? './' : p === './' ? '.' : p)} disabled={!sessionId}>
+          <button className="text-sm px-3 py-2 rounded-lg border bg-white" onClick={() => setRefresh(n => n + 1)} disabled={!sessionId}>
             刷新
           </button>
         </div>
