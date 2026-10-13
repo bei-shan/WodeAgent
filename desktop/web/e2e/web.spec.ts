@@ -188,6 +188,34 @@ test('new session reconnects with cursor and ignores duplicate frames', async ({
   await expect(page.getByText('甲乙', { exact: true })).toBeVisible()
 })
 
+test('new selection ignores frames from a stale prior WebSocket', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  const firstSocketCount = await page.evaluate(() => (window as any).__mockSockets.length)
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__mockSockets.length))
+    .toBe(firstSocketCount + 1)
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+
+  await page.evaluate(() => {
+    const sockets = (window as any).__mockSockets
+    // The prior socket's queued event must not mutate the new selection,
+    // even when both selections happen to reuse the same session id.
+    sockets[sockets.length - 2].onmessage?.({ data: JSON.stringify({
+      type: 'llm.delta', seq: 1, step: 2,
+      payload: { kind: 'content', text: 'STALE-WEBSOCKET-FRAME' },
+    }) })
+    ;(window as any).__emitAgent({
+      type: 'llm.delta', seq: 1, step: 2,
+      payload: { kind: 'content', text: 'CURRENT-SESSION-FRAME' },
+    })
+  })
+  await expect(page.getByText('CURRENT-SESSION-FRAME')).toBeVisible()
+  await expect(page.getByText('STALE-WEBSOCKET-FRAME')).toHaveCount(0)
+})
+
 test('journal reset rebases cursor before the next reconnect', async ({ page }) => {
   await mockBackend(page)
   await page.goto('/')
