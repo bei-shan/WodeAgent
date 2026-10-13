@@ -73,6 +73,8 @@ class ToolRegistry:
 
     def restrict_to_tools(self, allowed: set[str]) -> None:
         """Guard every tool dispatch; no host fallback in Docker mode."""
+        if self._sandbox_allowed_tools is not None:
+            raise PermissionError("Sandbox tool policy cannot be relaxed after activation")
         self._sandbox_allowed_tools = frozenset(allowed)
 
     def _tool_allowed(self, name: str) -> bool:
@@ -85,6 +87,8 @@ class ToolRegistry:
         Args:
             tool: Tool实例
         """
+        if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
+            raise PermissionError("Cannot replace an approved sandbox tool")
         if tool.name in self._tools:
             logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
 
@@ -100,6 +104,8 @@ class ToolRegistry:
             description: 工具描述
             func: 工具函数，接受字符串参数，返回字符串结果
         """
+        if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
+            raise PermissionError("Cannot override an approved sandbox tool")
         if name in self._functions:
             logger.warning("工具 '%s' 已存在，将被覆盖。", name)
 
@@ -111,6 +117,8 @@ class ToolRegistry:
 
     def unregister(self, name: str):
         """注销工具"""
+        if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
+            raise PermissionError("Cannot remove the approved sandbox tool")
         if name in self._tools:
             del self._tools[name]
             logger.info("工具 '%s' 已注销。", name)
@@ -622,6 +630,8 @@ class ToolRegistry:
 
     def clear(self):
         """清空所有工具"""
+        if self._sandbox_allowed_tools is not None:
+            raise PermissionError("Cannot clear registry while sandbox policy is active")
         self._tools.clear()
         self._functions.clear()
         logger.info("所有工具已清空。")
