@@ -72,6 +72,7 @@ _STREAM_EVENTS = {
     EventType.STEP_STARTED,
     EventType.LLM_STARTED,
     EventType.LLM_COMPLETED,
+    EventType.LLM_DELTA,
     EventType.TOOL_STARTED,
     EventType.TOOL_COMPLETED,
     EventType.ASSISTANT_FINAL,
@@ -92,7 +93,7 @@ _STREAM_EVENTS = {
 # ═══════════════════════════════════════════════════════════════════════
 
 def create_app(
-    agent_factory: Callable[[], Any],
+    agent_factory: Optional[Callable[[], Any]] = None,
     tool_registry: Any = None,
     project_root: str = ".",
 ) -> FastAPI:
@@ -110,6 +111,22 @@ def create_app(
         Base project directory for file browsing (before worktree).
     """
 
+    if agent_factory is None:
+        # Allows the documented uvicorn --factory entry point to work.
+        from core.env import load_env
+        from core.config import Config
+        from core.llm import HelloAgentsLLM
+        from agents.codeAgent import CodeAgent
+        from tools.registry import ToolRegistry
+        load_env()
+        config = Config.from_env()
+        def agent_factory() -> Any:
+            return CodeAgent(
+                name="web", llm=HelloAgentsLLM(),
+                tool_registry=ToolRegistry(), project_root=project_root,
+                config=config,
+            )
+
     app = FastAPI(
         title="MyCodeAgent API",
         version="0.1.0",
@@ -119,7 +136,10 @@ def create_app(
     # CORS — permissive for local dev; tighten for production.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "http://localhost:5173", "http://127.0.0.1:5173",
+            "http://localhost:8000", "http://127.0.0.1:8000",
+        ],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -359,7 +379,7 @@ def create_app(
                 i += 1
         with open(dest, "wb") as f:
             shutil.copyfileobj(file.file, f)
-        rel_path = str(dest.relative_to(Pt.cwd())).replace("\\", "/")
+        rel_path = dest.name  # always relative to this session's workspace
         return {"path": rel_path, "name": safe_name, "size": dest.stat().st_size}
 
     # ═══════════════════════════════════════════════════════════════
@@ -404,9 +424,9 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
+        if session._agent is None:
+            session._ensure_agent()
         agent = session._agent
-        if agent is None:
-            raise HTTPException(400, "Session not started yet")
         model = getattr(agent.llm, 'model', '')
         provider = getattr(agent.llm, 'provider', '')
         teams = bool(getattr(agent, 'enable_agent_teams', False))
@@ -414,7 +434,7 @@ def create_app(
         return SessionConfig(
             model=model, provider=provider,
             enable_agent_teams=teams, plan_mode=plan,
-            thinking_level="medium",
+            thinking_level=agent.history_manager.get_thinking_level(),
         )
 
     @app.put("/api/sessions/{sid}/config")
@@ -423,9 +443,20 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is None:
             raise HTTPException(404, "Session not found")
+        if session.busy:
+            raise HTTPException(409, "Cannot change configuration during a turn")
+        if session._agent is None:
+            session._ensure_agent()
         agent = session._agent
-        if agent is None:
-            raise HTTPException(400, "Session not started yet")
+        if body.model_profile is not None:
+            from core.model_profiles import load_model_profiles
+            profiles = load_model_profiles()
+            if body.model_profile == "default" and not profiles:
+                pass  # already using the configured default LLM
+            elif body.model_profile not in profiles:
+                raise HTTPException(400, "Unknown model profile")
+            else:
+                agent.switch_model(model=body.model_profile)
         if body.enable_agent_teams is not None:
             agent.enable_agent_teams = bool(body.enable_agent_teams)
             if hasattr(agent.config, 'enable_agent_teams'):
@@ -563,11 +594,12 @@ def create_app(
         session = ctrl.get_session(sid)
         if session is not None and session.workspace_dir:
             return Path(session.workspace_dir).resolve()
-        # Fallback: workspace based on data dir
+        # Never expose the project root for a missing or uninitialized session.
+        if session is None:
+            raise HTTPException(404, "Session not found")
         ws = Path(app.state.data_dir) / "sessions" / sid
-        if ws.exists():
-            return ws.resolve()
-        return Path(app.state.project_root).resolve()
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws.resolve()
 
     @app.get("/api/sessions/{sid}/files", response_model=FileTreeResponse)
     async def file_tree(
