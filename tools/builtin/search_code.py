@@ -35,6 +35,9 @@ class GrepTool(Tool):
     # 搜索超时时间（秒）
     TIMEOUT_SEC = 2.0
 
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        return True
+
     def __init__(self, name: str = "Grep", project_root: Optional[Path] = None):
         """
         初始化 Grep 工具
