@@ -123,7 +123,7 @@ def _show_welcome() -> None:
     console.print()
     console.print(
         Panel(
-            "[bold cyan]🐱 Welcome to Ridge Code![/bold cyan]\n\n"
+            "[bold cyan]🏔️ Welcome to Ridge Code![/bold cyan]\n\n"
             "Let's set up your environment.\n"
             "You can skip this with [bold]--skip-wizard[/bold].\n\n"
             "Press Enter to continue...",
