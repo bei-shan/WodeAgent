@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from core.env import load_env
+from core.runtime.config_scope import active_config
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -50,24 +51,28 @@ def set_truncator_config(config: "Config") -> None:
 
 
 def _get_max_lines() -> int:
-    if _config is not None:
-        return _config.tool_output_max_lines
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_max_lines
     return int(os.getenv("TOOL_OUTPUT_MAX_LINES", "2000"))
 
 def _get_max_bytes() -> int:
-    if _config is not None:
-        return _config.tool_output_max_bytes
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_max_bytes
     return int(os.getenv("TOOL_OUTPUT_MAX_BYTES", "51200"))  # 50KB
 
 def _get_truncate_direction() -> str:
-    if _config is not None:
-        return _config.tool_output_truncate_direction
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_truncate_direction
     direction = os.getenv("TOOL_OUTPUT_TRUNCATE_DIRECTION", "head").lower().strip()
     return direction if direction in {"head", "tail", "head_tail"} else "head"
 
 def _get_head_tail_lines() -> int:
-    if _config is not None:
-        return _config.tool_output_head_tail_lines
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_head_tail_lines
     value = os.getenv("TOOL_OUTPUT_HEAD_TAIL_LINES", "40")
     try:
         count = int(value)
@@ -76,13 +81,15 @@ def _get_head_tail_lines() -> int:
     return max(count, 1)
 
 def _get_output_dir() -> str:
-    if _config is not None:
-        return _config.tool_output_dir
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_dir
     return os.getenv("TOOL_OUTPUT_DIR", "tool-output")
 
 def _get_retention_days() -> int:
-    if _config is not None:
-        return _config.tool_output_retention_days
+    config = active_config() or _config
+    if config is not None:
+        return config.tool_output_retention_days
     return int(os.getenv("TOOL_OUTPUT_RETENTION_DAYS", "7"))
 
 

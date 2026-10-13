@@ -146,8 +146,8 @@ class CodeAgent(Agent):
 
     def _init_core(self) -> None:
         """Initialise core infrastructure that features depend on."""
-        # Inject config into modules that use module-level config singletons
-        self._inject_config_to_modules()
+        # Each Agent owns its circuit-breaker policy.
+        self.tool_registry.configure(self.config)
 
         # Summary generator
         summary_generator = create_summary_generator(
@@ -200,6 +200,7 @@ class CodeAgent(Agent):
         bootstrap.provide("background_runner", self._background_runner)
         bootstrap.provide("skill_loader", self._skill_loader)
         bootstrap.provide("main_llm", self.llm)
+        bootstrap.provide("config", self.config)
         bootstrap.provide("tool_registry", self.tool_registry)
         bootstrap.provide("event_sink", self.event_sink)
         bootstrap.provide("interactive", self.interactive)
@@ -238,20 +239,6 @@ class CodeAgent(Agent):
         self.context_builder.set_mcp_tools_prompt(
             "" if self._sandbox_mode == "docker" else self._mcp_tools_prompt
         )
-
-    def _inject_config_to_modules(self) -> None:
-        """Inject Config into modules that use module-level singletons.
-
-        This centralises config access — modules check the injected config first,
-        then fall back to os.getenv() for backward compatibility.
-        """
-        from core.context_engine.observation_truncator import set_truncator_config
-        from tools.registry import set_registry_config
-        from tools.builtin.task import set_task_config
-
-        set_truncator_config(self.config)
-        set_registry_config(self.config)
-        set_task_config(self.config)
 
     # ------------------------------------------------------------------
     # Worktree session isolation
@@ -552,6 +539,12 @@ class CodeAgent(Agent):
         self._interrupt_requested.set()
 
     def run(self, input_text: str, **kwargs) -> str:
+        """Run each turn with isolated configuration in the current thread."""
+        from core.runtime.config_scope import scoped_config
+        with scoped_config(self.config):
+            return self._run_scoped(input_text, **kwargs)
+
+    def _run_scoped(self, input_text: str, **kwargs) -> str:
         """
         Code Agent 的入口（Message List 自然累积模式）
         

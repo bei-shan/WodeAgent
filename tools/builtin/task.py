@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from core.llm import HelloAgentsLLM
 from core.message import Message
 from core.runtime.subagent_bridge import SubagentEventBridge
+from core.runtime.config_scope import active_config
 from core.team_engine.turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
 from ..base import Tool, ToolParameter, ErrorCode
@@ -123,19 +124,20 @@ Output
 # Light model configuration
 # =============================================================================
 
-def _create_light_llm() -> Optional[HelloAgentsLLM]:
+def _create_light_llm(config: "Optional[Config]" = None) -> Optional[HelloAgentsLLM]:
     """
     Create a light model LLM instance from environment config.
     
     Uses LIGHT_LLM_* environment variables. If not configured,
     returns None (caller should fallback to main model).
     """
-    if _task_config is not None:
-        light_model = _task_config.light_llm_model_id
-        light_api_key = _task_config.light_llm_api_key
-        light_base_url = _task_config.light_llm_base_url
-        light_provider = _task_config.light_llm_provider
-        light_temp = _task_config.light_llm_temperature
+    config = config or active_config() or _task_config
+    if config is not None:
+        light_model = config.light_llm_model_id
+        light_api_key = config.light_llm_api_key
+        light_base_url = config.light_llm_base_url
+        light_provider = config.light_llm_provider
+        light_temp = config.light_llm_temperature
     else:
         light_model = os.getenv("LIGHT_LLM_MODEL_ID")
         light_api_key = os.getenv("LIGHT_LLM_API_KEY")
@@ -316,6 +318,7 @@ class TaskTool(Tool):
         team_manager: Optional[Any] = None,
         background_runner: Optional[Any] = None,
         event_sink: Optional[Any] = None,
+        config: "Optional[Config]" = None,
     ):
         if project_root is None:
             raise ValueError("project_root must be provided by the framework")
@@ -337,8 +340,9 @@ class TaskTool(Tool):
         self._team_manager = team_manager
         self._background_runner = background_runner
         self._event_sink = event_sink
-        if _task_config is not None:
-            self._subagent_max_steps = _task_config.subagent_max_steps
+        self._config = config or active_config() or _task_config
+        if self._config is not None:
+            self._subagent_max_steps = self._config.subagent_max_steps
         else:
             self._subagent_max_steps = int(os.getenv("SUBAGENT_MAX_STEPS", "15"))
     
@@ -758,7 +762,7 @@ class TaskTool(Tool):
 
             # Legacy light model.
             if self._light_llm is None:
-                self._light_llm = _create_light_llm()
+                self._light_llm = _create_light_llm(self._config)
             if self._light_llm is not None:
                 return self._light_llm
 
@@ -768,7 +772,7 @@ class TaskTool(Tool):
     
     def _create_filtered_registry(self) -> ToolRegistry:
         """Create a tool registry with only allowed tools for subagents."""
-        filtered = ToolRegistry()
+        filtered = ToolRegistry(config=self._config)
         main_gate = None
 
         for tool in self._tool_registry.get_all_tools():

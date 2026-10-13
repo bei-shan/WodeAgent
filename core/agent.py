@@ -19,7 +19,7 @@ class Agent(ABC):
         self.name = name
         self.llm = llm
         self.system_prompt = system_prompt
-        self.config = config or Config.from_env()
+        self.config = config.model_copy(deep=True) if config is not None else Config.from_env()
 
     @abstractmethod
     def run(self, input_text: str, **kwargs) -> str:
