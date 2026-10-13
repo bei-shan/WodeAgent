@@ -75,7 +75,9 @@ def validate_archive(payload: Any) -> dict:
         clean.append({"id": mid, "parent_id": parent, "role": role, "content": content})
 
     cursor = payload["cursor_id"]
-    if cursor is not None and (not isinstance(cursor, str) or cursor not in seen):
+    if (cursor is None and messages) or (cursor is not None and (
+        not isinstance(cursor, str) or cursor not in seen
+    )):
         _invalid("cursor must select a visible message")
     labels = payload["labels"]
     if not isinstance(labels, dict) or len(labels) > MAX_MESSAGES:
