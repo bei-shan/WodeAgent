@@ -1,0 +1,139 @@
+"""Agent turn transaction boundary: input, tracing, status, saving and events.
+
+The ReAct loop owns steps; this host-neutral lifecycle owns each turn's
+begin/end and guarantees an end-event even when model calls fail.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Protocol
+from core.events import AgentEvent, EventType
+from core.context_engine.input_preprocessor import preprocess_input
+
+
+class TurnHost(Protocol):
+    logger: logging.Logger
+    trace_logger: Any
+    context_builder: Any
+    history_manager: Any
+    event_sink: Any
+    _run_id: int
+    _run_limit_hit: bool
+
+    def _refresh_skills_prompt(self) -> None: ...
+    def _log_system_messages_if_needed(self, trace_logger: Any) -> None: ...
+    def _log_message_write(self, trace_logger: Any, role: str, content: str,
+                           metadata: dict, step: int) -> None: ...
+    def _react_loop(self, pending_input: str, show_raw: bool, trace_logger: Any) -> str: ...
+    def _auto_save_session(self) -> None: ...
+    def _console(self, message: str) -> None: ...
+
+
+class AgentTurnLifecycle:
+    def __init__(self, host: TurnHost):
+        self.host = host
+
+    def run(self, input_text: str, **kwargs) -> str:
+        """Run one Agent turn with deterministic completion."""
+        host = self.host
+        show_raw = kwargs.pop("show_raw", False)
+        if not show_raw:
+            host.last_response_raw = None
+
+        if host.console_progress:
+            host._console("⏳ Agent 正在处理，请稍候...")
+
+        # 1. 预处理用户输入（@file 解析）
+        host._refresh_skills_prompt()
+        host.context_builder.set_skills_prompt(host._skills_prompt)
+        preprocess_result = preprocess_input(input_text)
+        processed_input = preprocess_result.processed_input
+
+        # 2. Parse token budget from user input
+        if hasattr(host, "_budget_tracker"):
+            host._budget_tracker.parse_from_input(input_text)
+
+        if preprocess_result.mentioned_files:
+            mentioned = ", ".join(preprocess_result.mentioned_files)
+            if host.console_verbose:
+                host._console(f"\n📎 检测到文件引用: {mentioned}")
+                if preprocess_result.truncated_count > 0:
+                    host._console(f"   (另有 {preprocess_result.truncated_count} 个文件被省略)")
+            elif host.logger.isEnabledFor(logging.DEBUG):
+                host.logger.debug("检测到文件引用: %s", mentioned)
+                if preprocess_result.truncated_count > 0:
+                    host.logger.debug("另有 %d 个文件被省略", preprocess_result.truncated_count)
+
+        trace_logger = host.trace_logger
+        host._run_id += 1
+        run_id = host._run_id
+
+        host.event_sink.emit(AgentEvent(EventType.RUN_STARTED, {
+            "run_id": run_id,
+            "input": input_text,
+        }))
+
+        host._log_system_messages_if_needed(trace_logger)
+        trace_logger.log_event(
+            "run_start",
+            {
+                "run_id": run_id,
+                "input": input_text,
+                "processed": processed_input,
+            },
+            step=0,
+        )
+        
+        # 2. 压缩检测改为每次 ReAct 之前（循环内）
+
+        # 3. 将用户消息写入 history（轮次开始时写入）
+        host.history_manager.append_user(processed_input)
+        trace_logger.log_event("user_input", {"text": input_text, "processed": processed_input}, step=0)
+        host._log_message_write(trace_logger, "user", processed_input, {}, step=0)
+
+        if host.console_verbose:
+            host._console(f"\n⚙️ Engine 启动: {input_text}")
+        elif host.logger.isEnabledFor(logging.DEBUG):
+            host.logger.debug("Engine 启动: %s", input_text)
+
+        response_text = ""
+        host._run_limit_hit = False
+        run_failed = False
+        try:
+            response_text = host._react_loop(
+                pending_input=processed_input,
+                show_raw=show_raw,
+                trace_logger=trace_logger,
+            )
+        except Exception:
+            run_failed = True
+            raise
+        finally:
+            stopped = host._interrupt_requested.is_set()
+            host.last_turn_status = (
+                "cancelled" if stopped else "failed"
+                if run_failed or host._run_limit_hit else "completed"
+            )
+            host.last_turn_error_kind = "step_limit" if host._run_limit_hit else None
+            host._interrupt_requested.clear()
+            # Save the user input and any completed steps even when provider
+            # calls fail or the user cancels the remaining execution.
+            host._auto_save_session()
+            trace_logger.log_event(
+                "run_end",
+                {"run_id": run_id, "final": response_text, "status": host.last_turn_status},
+                step=0,
+            )
+            host.event_sink.emit(AgentEvent(EventType.RUN_FINISHED, {
+                "run_id": run_id, "final": response_text, "status": host.last_turn_status,
+            }))
+        if host.console_progress:
+            host._console("✅ Agent 已完成")
+
+        host.logger.debug("response=%s", response_text)
+        host.logger.info("history_size=%d, rounds=%d",
+                        host.history_manager.get_message_count(),
+                        host.history_manager.get_rounds_count())
+
+        return response_text
+

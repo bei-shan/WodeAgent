@@ -28,7 +28,6 @@ from core.response_parser import (
 
 load_env()
 from core.context_engine.history_manager import HistoryManager
-from core.context_engine.input_preprocessor import preprocess_input
 from core.context_engine.summary_compressor import create_summary_generator
 from core.session_store import save_session_snapshot, load_session_snapshot
 from core.team_engine.display_mode import resolve_teammate_mode
@@ -545,122 +544,9 @@ class CodeAgent(Agent):
             return self._run_scoped(input_text, **kwargs)
 
     def _run_scoped(self, input_text: str, **kwargs) -> str:
-        """
-        Code Agent 的入口（Message List 自然累积模式）
-        
-        流程：
-        1. 预处理用户输入（@file 解析）
-        2. 检查是否需要压缩历史
-        3. 将用户消息写入 history（轮次开始）
-        4. 运行 ReAct 循环（每步 assistant/tool 消息自然累积）
-        5. 返回最终结果
-        
-        Message List 模式：
-        - 不再使用 scratchpad 拼接
-        - 每步的 messages 由 history 自然累积
-        - L1/L2 作为 system messages
-        - L3 是累积的 user/assistant/tool
-        """
-        show_raw = kwargs.pop("show_raw", False)
-        if not show_raw:
-            self.last_response_raw = None
-
-        if self.console_progress:
-            self._console("⏳ Agent 正在处理，请稍候...")
-
-        # 1. 预处理用户输入（@file 解析）
-        self._refresh_skills_prompt()
-        self.context_builder.set_skills_prompt(self._skills_prompt)
-        preprocess_result = preprocess_input(input_text)
-        processed_input = preprocess_result.processed_input
-
-        # 2. Parse token budget from user input
-        if hasattr(self, "_budget_tracker"):
-            self._budget_tracker.parse_from_input(input_text)
-
-        if preprocess_result.mentioned_files:
-            mentioned = ", ".join(preprocess_result.mentioned_files)
-            if self.console_verbose:
-                self._console(f"\n📎 检测到文件引用: {mentioned}")
-                if preprocess_result.truncated_count > 0:
-                    self._console(f"   (另有 {preprocess_result.truncated_count} 个文件被省略)")
-            elif self.logger.isEnabledFor(logging.DEBUG):
-                self.logger.debug("检测到文件引用: %s", mentioned)
-                if preprocess_result.truncated_count > 0:
-                    self.logger.debug("另有 %d 个文件被省略", preprocess_result.truncated_count)
-
-        trace_logger = self.trace_logger
-        self._run_id += 1
-        run_id = self._run_id
-
-        self.event_sink.emit(AgentEvent(EventType.RUN_STARTED, {
-            "run_id": run_id,
-            "input": input_text,
-        }))
-
-        self._log_system_messages_if_needed(trace_logger)
-        trace_logger.log_event(
-            "run_start",
-            {
-                "run_id": run_id,
-                "input": input_text,
-                "processed": processed_input,
-            },
-            step=0,
-        )
-        
-        # 2. 压缩检测改为每次 ReAct 之前（循环内）
-
-        # 3. 将用户消息写入 history（轮次开始时写入）
-        self.history_manager.append_user(processed_input)
-        trace_logger.log_event("user_input", {"text": input_text, "processed": processed_input}, step=0)
-        self._log_message_write(trace_logger, "user", processed_input, {}, step=0)
-
-        if self.console_verbose:
-            self._console(f"\n⚙️ Engine 启动: {input_text}")
-        elif self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("Engine 启动: %s", input_text)
-
-        response_text = ""
-        self._run_limit_hit = False
-        run_failed = False
-        try:
-            response_text = self._react_loop(
-                pending_input=processed_input,
-                show_raw=show_raw,
-                trace_logger=trace_logger,
-            )
-        except Exception:
-            run_failed = True
-            raise
-        finally:
-            stopped = self._interrupt_requested.is_set()
-            self.last_turn_status = (
-                "cancelled" if stopped else "failed"
-                if run_failed or self._run_limit_hit else "completed"
-            )
-            self.last_turn_error_kind = "step_limit" if self._run_limit_hit else None
-            self._interrupt_requested.clear()
-            # Save the user input and any completed steps even when provider
-            # calls fail or the user cancels the remaining execution.
-            self._auto_save_session()
-            trace_logger.log_event(
-                "run_end",
-                {"run_id": run_id, "final": response_text, "status": self.last_turn_status},
-                step=0,
-            )
-            self.event_sink.emit(AgentEvent(EventType.RUN_FINISHED, {
-                "run_id": run_id, "final": response_text, "status": self.last_turn_status,
-            }))
-        if self.console_progress:
-            self._console("✅ Agent 已完成")
-
-        self.logger.debug("response=%s", response_text)
-        self.logger.info("history_size=%d, rounds=%d",
-                        self.history_manager.get_message_count(),
-                        self.history_manager.get_rounds_count())
-
-        return response_text
+        """Compatibility adapter for isolated Agent turn lifecycle."""
+        from core.runtime.turn_lifecycle import AgentTurnLifecycle
+        return AgentTurnLifecycle(self).run(input_text, **kwargs)
 
     def close(self):
         """Close the Agent: run feature cleanups in reverse-init order,
