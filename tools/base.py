@@ -142,6 +142,14 @@ class Tool(ABC):
     # 抽象方法
     # -------------------------------------------------------------------------
     
+    def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
+        """Opt-in only: a tool may run alongside other explicitly safe tools.
+
+        Implementations must be read-only, non-interactive and thread-safe.
+        Tools not declaring this remain serial (including Bash, MCP, plugins).
+        """
+        return False
+
     @abstractmethod
     def run(self, parameters: Dict[str, Any]) -> str:
         """
