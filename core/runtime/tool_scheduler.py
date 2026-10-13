@@ -7,6 +7,7 @@ this module owns grouping and bounded execution only.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence, TypeVar
 
@@ -66,8 +67,16 @@ def run_tool_batch(
     """
     if not batch.concurrent or max_workers < 2:
         return [execute(item) for item in batch.calls]
+    # ContextVars (per-session configuration, tracing scope) do not propagate
+    # into Python threads automatically. Give each invocation its own context.
+    contexts = [(copy_context(), item) for item in batch.calls]
+
+    def invoke(pair: tuple[Any, T]) -> R:
+        context, item = pair
+        return context.run(execute, item)
+
     with ThreadPoolExecutor(
         max_workers=min(max_workers, len(batch.calls)),
         thread_name_prefix="agent-tool",
     ) as pool:
-        return list(pool.map(execute, batch.calls))
+        return list(pool.map(invoke, contexts))
