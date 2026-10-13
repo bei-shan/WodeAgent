@@ -109,7 +109,7 @@ class ModelBanner:
             dir_display = project_root
 
         info = Table.grid(padding=(0, 1))
-        info.add_row(Text("WodeAgent", style="bold white"), Text(version, style="dim"))
+        info.add_row(Text("Ridge", style="bold white"), Text(version, style="dim"))
         info.add_row(Text(provider.upper(), style="bold cyan"), Text(model, style="bright_white"))
         info.add_row(Text("Workspace", style="dim"), Text(dir_display, style="bold green"))
 

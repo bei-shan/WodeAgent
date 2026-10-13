@@ -1,4 +1,4 @@
-// API client — HTTP + WebSocket for MyCodeAgent service.
+// API client — HTTP + WebSocket for Ridge Code service.
 
 const BASE = '/api';
 
