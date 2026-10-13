@@ -218,6 +218,9 @@ export function connectStream(
     socket.onmessage = (msg) => {
       try {
         const event = JSON.parse(msg.data) as AgentEvent
+        if (event.type === 'stream.reset' && typeof event.payload?.resume_from === 'number') {
+          lastSeq = event.payload.resume_from
+        }
         if (typeof event.seq === 'number') {
           if (lastSeq !== null && event.seq <= lastSeq) return
           lastSeq = event.seq
