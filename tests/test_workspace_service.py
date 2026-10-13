@@ -183,6 +183,7 @@ def test_session_root_symlink_rejected_and_upload_not_escaped(client, tmp_path):
     app, http = client
     sid = http.post("/api/sessions", json={}).json()["id"]
     root = tmp_path / ".mycodeagent" / "sessions" / sid
+    app.state.workspace_service.list(sid)  # Materialize the session root first.
     other = tmp_path / "other"
     other.mkdir()
     root.rename(root.with_name(root.name + "-saved"))
