@@ -73,6 +73,7 @@ class TeamManager:
         max_llm_concurrency: Optional[int] = None,
         teammate_runtime_mode: str = "in-process",
         tmux_orchestrator: Optional[Any] = None,
+        config: Optional[Any] = None,
     ):
         self.store = store or TeamStore(
             project_root=project_root,
@@ -87,6 +88,7 @@ class TeamManager:
         self.llm = llm
         self.tool_registry = tool_registry
         self.work_executor = work_executor
+        self.config = config
         runtime_mode = str(teammate_runtime_mode or "in-process").strip().lower()
         self.teammate_runtime_mode = runtime_mode if runtime_mode in {"in-process", "tmux"} else "in-process"
         self.tmux_orchestrator = tmux_orchestrator
@@ -98,7 +100,7 @@ class TeamManager:
         self._recent_errors: Dict[str, str] = {}
         self._processed_by_member: Dict[tuple[str, str], set[str]] = defaultdict(set)
         self._inbox_cursor: Dict[tuple[str, str], int] = defaultdict(lambda: 0)
-        max_parallel = max_llm_concurrency or int(os.getenv("TEAM_LLM_MAX_CONCURRENCY", "4"))
+        max_parallel = max_llm_concurrency or (config.team_llm_max_concurrency if config else int(os.getenv("TEAM_LLM_MAX_CONCURRENCY", "4")))
         self._llm_semaphore = threading.Semaphore(max(1, max_parallel))
         self.message_router = MessageRouter(store=self.store, emit_fn=self._emit)
         self.task_board_service = TaskBoardService(self.task_board)
@@ -112,6 +114,7 @@ class TeamManager:
             work_executor=self.work_executor,
             read_team_fn=self._read_team_or_raise,
             llm_semaphore=self._llm_semaphore,
+            config=config,
         )
         # Backward-compatible aliases used by existing tests.
         self._workers = self.worker_supervisor.workers

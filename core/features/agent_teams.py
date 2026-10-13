@@ -47,6 +47,7 @@ class AgentTeamsFeature(AgentFeature):
                     llm=agent.llm,
                     tool_registry=agent.tool_registry,
                     teammate_runtime_mode=runtime_mode,
+                    config=agent.config,
                 )
             except Exception as exc:
                 agent.logger.warning(

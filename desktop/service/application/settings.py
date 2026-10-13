@@ -81,6 +81,7 @@ class SessionSettingsService:
                     llm=agent.llm,
                     tool_registry=agent.tool_registry,
                     teammate_runtime_mode=mode,
+                    config=agent.config,
                 )
             except Exception as exc:
                 logger.exception("TeamManager initialization failed")
