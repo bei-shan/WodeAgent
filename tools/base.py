@@ -38,6 +38,7 @@ class ErrorCode(str, Enum):
     PERMISSION_DENIED = "PERMISSION_DENIED"  # OS 权限不足（EACCES 等）
     INVALID_PARAM = "INVALID_PARAM"   # 参数校验失败（正则错误、类型错误等）
     TIMEOUT = "TIMEOUT"               # 工具在获取有效数据前超时
+    INTERRUPTED = "INTERRUPTED"       # 用户取消了正在执行的工具
     INTERNAL_ERROR = "INTERNAL_ERROR" # 未分类的内部异常
     EXECUTION_ERROR = "EXECUTION_ERROR" # 其它 I/O 或执行错误（磁盘满等）
     IS_DIRECTORY = "IS_DIRECTORY"     # 路径是目录而非文件
