@@ -581,10 +581,29 @@ export default function App() {
   const connectSession = (sid: string) => {
     setStreamConnected(false)
     disconnectRef.current?.()
+    let previouslyConnected = false
     disconnectRef.current = api.connectStream(
       sid, handleEvent,
       () => setStreamConnected(false),
-      () => setStreamConnected(true),
+      () => {
+        if (activeSidRef.current !== sid) return
+        setStreamConnected(true)
+        if (previouslyConnected) {
+          // Recover terminal events that may have been missed offline.
+          api.sessions.get(sid).then(meta => {
+            if (activeSidRef.current !== sid) return
+            setSending(meta.busy)
+            if (!meta.busy) {
+              api.sessions.history(sid).then(data => {
+                if (activeSidRef.current === sid && data.messages.length) {
+                  setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
+                }
+              }).catch(() => {})
+            }
+          }).catch(() => {})
+        }
+        previouslyConnected = true
+      },
     )
   }
 
