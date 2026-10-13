@@ -6,7 +6,7 @@
 
 ## 1. 项目定位
 
-Ridge（原项目名 Ridge / WodeAgent）是一个面向学习与实验的 AI 编程代理框架。它围绕 **ReAct 循环 + 工具协议 + 上下文工程 + 子代理委派 + 团队协作 + TUI/Web 双前端 + 可观测性** 七条主线展开，使用 Python 3.12+ 实现，兼容 OpenAI / DeepSeek / 通义千问 / 智谱 GLM / Kimi / ModelScope / SiliconFlow / Ollama / vLLM 等多家 LLM 供应商。整套系统坚持"运行时核与 UI 解耦"的工程取向：CodeAgent 只负责跑模型与工具，所有交互均通过事件队列与回调注入完成，因此同一份 agent 内核可以被 prompt_toolkit + Rich 的 TUI 主入口、以及 FastAPI + WebSocket 的桌面/Web 应用同时驱动，且互不感知。
+Ridge（原项目名 MyCodeAgent / WodeAgent）是一个面向学习与实验的 AI 编程代理框架。它围绕 **ReAct 循环 + 工具协议 + 上下文工程 + 子代理委派 + 团队协作 + TUI/Web 双前端 + 可观测性** 七条主线展开，使用 Python 3.12+ 实现，兼容 OpenAI / DeepSeek / 通义千问 / 智谱 GLM / Kimi / ModelScope / SiliconFlow / Ollama / vLLM 等多家 LLM 供应商。整套系统坚持"运行时核与 UI 解耦"的工程取向：CodeAgent 只负责跑模型与工具，所有交互均通过事件队列与回调注入完成，因此同一份 agent 内核可以被 prompt_toolkit + Rich 的 TUI 主入口、以及 FastAPI + WebSocket 的桌面/Web 应用同时驱动，且互不感知。
 
 ---
 
