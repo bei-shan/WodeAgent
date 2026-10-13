@@ -15,6 +15,7 @@ import select
 import signal
 import struct
 import subprocess
+import tempfile
 import termios
 import threading
 import time
@@ -25,6 +26,8 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
     calls: list[str] = []
     forked = False
     fork_target: str | None = None
+    imported: bool = False
+    imported_payload: dict | None = None
 
     def log_message(self, format, *args):
         pass
@@ -42,7 +45,19 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/health":
             return self.respond({"status": "ok"})
         if self.path == "/api/sessions":
-            return self.respond([])
+            return self.respond([{
+                "id": "facefeed5678", "title": "Portable PTY", "busy": False,
+            }] if self.imported else [])
+        if self.path.endswith("/export"):
+            return self.respond({
+                "format": "ridgecode.portable-session", "version": 1,
+                "title": "Portable PTY", "cursor_id": "a1b2c3d4",
+                "messages": [{
+                    "id": "a1b2c3d4", "parent_id": None,
+                    "role": "user", "content": "PTY-portable-root",
+                }],
+                "labels": {},
+            })
         if self.path.endswith("/history"):
             return self.respond({"messages": [
                 {"role": "user", "content": "PTY-tree-root"},
@@ -73,6 +88,16 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
         self.calls.append("POST " + self.path)
         if self.path == "/api/sessions":
             return self.respond({"id": "deadbeef1234", "title": "PTY", "busy": False}, 201)
+        if self.path == "/api/sessions/import":
+            size = int(self.headers.get("Content-Length", "0"))
+            if size > 1_048_576:
+                return self.respond({"detail": "too large"}, 413)
+            payload = json.loads(self.rfile.read(size))
+            if payload.get("format") != "ridgecode.portable-session":
+                return self.respond({"detail": "invalid archive"}, 400)
+            type(self).imported_payload = payload
+            type(self).imported = True
+            return self.respond({"id": "facefeed5678", "title": "Portable PTY", "busy": False}, 201)
         if self.path.endswith("/activate"):
             return self.respond({"status": "active"})
         if self.path.endswith("/fork"):
@@ -90,6 +115,9 @@ class MockBackend(http.server.BaseHTTPRequestHandler):
 
 def main():
     root = Path(__file__).resolve().parents[1]
+    temporary = tempfile.TemporaryDirectory(prefix="pty-archive-", dir=str(root))
+    archive_file = Path(temporary.name) / "conversation.json"
+    archive_arg = str(archive_file.relative_to(root))
     backend = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockBackend)
     thread = threading.Thread(target=backend.serve_forever, daemon=True)
     thread.start()
@@ -169,13 +197,30 @@ def main():
             "Fork did not refresh selected branch history"
         )
 
+        type_command("/export " + archive_arg)
+        assert pump(b"Exported portable conversation", 5.0), "Export command not visible"
+        assert "GET /api/sessions/deadbeef1234/export" in MockBackend.calls
+        assert archive_file.exists(), "No archive written on terminal machine"
+        assert archive_file.stat().st_mode & 0o777 == 0o600, "Archive permissions too broad"
+        archived = json.loads(archive_file.read_text(encoding="utf-8"))
+        assert archived["messages"][0]["content"] == "PTY-portable-root"
+
+        type_command("/import " + archive_arg)
+        if not pump(b"Imported portable conversation", 5.0):
+            print("PTY tail:", repr(bytes(captured[-3000:])))
+            print("Fixture routes:", MockBackend.calls)
+            raise AssertionError("Import did not switch TUI to a new session")
+        assert "POST /api/sessions/import" in MockBackend.calls
+        assert MockBackend.imported_payload == archived
+        assert "POST /api/sessions/facefeed5678/activate" in MockBackend.calls
+
         os.write(master, b"\x03")  # Ctrl+C; idle UI must quit cleanly.
         try:
             proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             raise AssertionError("Ctrl+C did not shut down OpenTUI")
         assert proc.returncode == 0, "OpenTUI exited with error: " + str(proc.returncode)
-        print("PTY smoke: renderer, /help, /tree, /fork HTTP, Ctrl+C exit OK")
+        print("PTY smoke: help, tree, fork, portable export/import HTTP, Ctrl+C OK")
     finally:
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -189,6 +234,7 @@ def main():
             os.close(slave)
         backend.shutdown()
         backend.server_close()
+        temporary.cleanup()
 
 
 if __name__ == "__main__":
