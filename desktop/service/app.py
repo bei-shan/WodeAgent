@@ -151,6 +151,11 @@ def create_app(
         allow_headers=["*"],
     )
 
+    # Read the private .env even when a custom agent factory was injected.
+    # Environment variables always take precedence over dotenv defaults.
+    from core.env import load_env
+    load_env()
+
     # Optional local-only login protection. Defaults off for compatibility;
     # only a securely configured, high-entropy operator token enables it.
     configured_auth_token = os.getenv("WEB_AUTH_TOKEN", "").strip()
