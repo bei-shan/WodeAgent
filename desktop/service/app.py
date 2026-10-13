@@ -258,6 +258,8 @@ def create_app(
         session.session_id = sid
         ctrl._sessions.pop(new_sid, None)
         ctrl._sessions[sid] = session
+        from core.session_manager import SessionManager
+        SessionManager().delete_session(new_sid)
         return {"status": "activated", "id": sid}
 
     @app.delete("/api/sessions/{sid}")
@@ -274,7 +276,9 @@ def create_app(
         ws_path = Path(app.state.data_dir) / "sessions" / sid
         if ws_path.exists():
             shutil.rmtree(ws_path)
-        if not mem_deleted and not snap_path.exists():
+        from core.session_manager import SessionManager
+        disk_deleted = SessionManager().delete_session(sid)
+        if not mem_deleted and not disk_deleted:
             raise HTTPException(404, "Session not found")
         return {"status": "deleted"}
 
@@ -289,6 +293,8 @@ def create_app(
         if not new_title:
             raise HTTPException(400, "Title is required")
         session.title = new_title
+        from core.session_manager import SessionManager
+        SessionManager().rename_session(sid, new_title)
         return {"status": "renamed", "title": new_title}
 
     # In-memory pinned sessions set
@@ -553,10 +559,14 @@ def create_app(
             return
 
         # Bridge sync queue → async WebSocket.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        # Read concurrently: otherwise a disconnected socket can keep draining
+        # the session's single-consumer event queue indefinitely.
+        disconnected = asyncio.create_task(ws.receive_text())
         try:
             while True:
-                # Check for client disconnect (non-blocking).
+                if disconnected.done():
+                    break
                 try:
                     event: AgentEvent = await loop.run_in_executor(
                         None, session.events.get, True, 1.0  # block=True, timeout=1s
@@ -581,8 +591,9 @@ def create_app(
         except Exception:
             logger.exception("WebSocket error for session %s", sid[:8])
         finally:
-            # Don't delete session on disconnect — user may reconnect.
-            pass
+            disconnected.cancel()
+            await asyncio.gather(disconnected, return_exceptions=True)
+            # Session stays alive and the browser may reconnect.
 
     # ═══════════════════════════════════════════════════════════════
     # Files — session-scoped (each session may be in a worktree)
