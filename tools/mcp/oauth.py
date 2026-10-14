@@ -160,10 +160,15 @@ class LoopbackOAuthFlow:
             code = params.get("code", [None])[0]
             if not code or not state or state != self._state:
                 return
-            from mcp.client.auth import AuthorizationCodeResult
-            response = AuthorizationCodeResult(
-                code=code, state=state, iss=params.get("iss", [None])[0],
-            )
+            from importlib.metadata import version
+            if int(version("mcp").split(".", 1)[0]) >= 2:
+                from mcp.client.auth import AuthorizationCodeResult
+                response = AuthorizationCodeResult(
+                    code=code, state=state, iss=params.get("iss", [None])[0],
+                )
+            else:
+                # MCP SDK 1.x callback contract precedes issuer validation.
+                response = (code, state)
             if self._answer is not None and not self._answer.done():
                 self._answer.set_result(response)
             body = b"Authorization received. Return to Ridge Code."
