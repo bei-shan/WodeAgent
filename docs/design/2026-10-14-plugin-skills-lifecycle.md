@@ -95,6 +95,35 @@ registered in memory. Code components are selected at Agent creation;
 create a new session or restart the Agent after changing code trust.
 Skill enabled state is re-scanned when requested and on Agent prompt refresh.
 
+## Version provenance, updates, pinned integrity and rollback
+
+The Web plugin panel now displays the install origin (`local_zip` or
+`local_directory`) and the SHA-256 of the original imported ZIP. Operators
+can lock a ZIP installation, which blocks subsequent updates until it is
+explicitly unpinned. Updated ZIPs can be sent to
+`POST /api/plugins/{name}/update?sha256=<expected SHA-256>`.
+The optional expected hash rejects a replacement archive with a
+different digest **before any directory changes**.
+
+Updating validates the full archive in isolated temporary staging, rejects
+a different plugin name or unchanged manifest version, retains one prior
+version in project-private backups, and switches the active plugin directory
+through same-filesystem renames. A failed publish restores the prior
+version. On every update or rollback, **enabled=false** and
+**trusted=false** regardless of previous state. Create a new Agent session
+after updating code plugins; already initialized in-process code cannot
+be forcibly unloaded from a running turn.
+
+`PUT /api/plugins/{name}/pinned` accepts `{"pinned":true|false}`.
+`POST /api/plugins/{name}/rollback` restores the single retained prior
+revision. `DELETE /api/plugins/{name}` deletes this backup too.
+
+**SHA-256 verifies archive integrity, not publisher authenticity.** There
+are no remote marketplaces, automatic pulls, developer signatures, binary
+attestations, or isolated execution for trusted code in v0.1. Do not enable
+unreviewed third-party Python/Hook components; future code isolation will
+require a separate process/container boundary.
+
 ## Separation from MCP and limitations
 
 MCP server management remains separate: an MCP tool is an external
