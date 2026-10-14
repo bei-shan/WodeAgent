@@ -105,24 +105,29 @@ class SkillTool(Tool):
             if not re.match(r'^[a-z0-9]+(?:-[a-z0-9]+)*$', name.strip()):
                 return self.create_error_response(ErrorCode.INVALID_PARAM, "Skill name must be lowercase letters, digits, and hyphens only.", params_input=params_input)
 
-            # Write to .mycodeagent/skills/<name>/SKILL.md
-            skills_dir = self._project_root / ".mycodeagent" / "skills" / name.strip()
-            if skills_dir.exists():
-                return self.create_error_response(ErrorCode.CONFLICT, f"Skill '{name}' already exists.", params_input=params_input)
-
+            # Resolve writable skill storage through the shared catalog, not
+            # the isolated Web/Team tool execution workspace.
             try:
-                skills_dir.mkdir(parents=True, exist_ok=False)
-                frontmatter = f"---\nname: {name.strip()}\ndescription: \"{description}\"\n---\n"
-                (skills_dir / "SKILL.md").write_text(frontmatter + "\n" + content + "\n", encoding="utf-8")
-                # Refresh loader cache
-                self._skill_loader.scan()
+                target = self._skill_loader.create_skill(name.strip(), description, content)
                 return self.create_success_response(
-                    data={"name": name.strip(), "path": str(skills_dir)},
-                    text=f"Skill '{name}' created at {skills_dir}",
+                    data={"name": name.strip(), "path": str(target.parent)},
+                    text=f"Skill '{name}' created at {target.parent}",
                     params_input=params_input,
                 )
-            except OSError as exc:
-                return self.create_error_response(ErrorCode.INTERNAL_ERROR, f"Failed to create skill: {exc}", params_input=params_input)
+            except FileExistsError:
+                return self.create_error_response(
+                    ErrorCode.CONFLICT, f"Skill '{name}' already exists.",
+                    params_input=params_input,
+                )
+            except ValueError as exc:
+                return self.create_error_response(
+                    ErrorCode.INVALID_PARAM, str(exc), params_input=params_input,
+                )
+            except OSError:
+                return self.create_error_response(
+                    ErrorCode.INTERNAL_ERROR, "Failed to create skill.",
+                    params_input=params_input,
+                )
 
         # Default: load
         if not isinstance(name, str) or not name.strip():
