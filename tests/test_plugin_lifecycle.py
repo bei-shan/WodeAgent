@@ -329,3 +329,12 @@ def test_symlinked_skill_reference_is_not_read(tmp_path):
         "action": "read_resource", "name": "local", "resource": "leak.md",
     }))
     assert result["status"] == "error"
+
+
+def test_skill_list_response_retains_standard_timing_envelope(tmp_path):
+    from tools.builtin.skill import SkillTool
+    from tests.utils.test_helpers import parse_response
+    tool = SkillTool(project_root=tmp_path, skill_loader=SkillLoader(str(tmp_path)))
+    result = parse_response(tool.run({"action": "list"}))
+    assert result["status"] == "success"
+    assert result["data"]["skills"] == []
