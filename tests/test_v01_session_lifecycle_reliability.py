@@ -66,7 +66,8 @@ def test_interrupt_wakes_live_prompt_and_prevents_late_resolution(kind, expected
         worker.join(timeout=1)
 
 
-def test_interrupt_idle_session_is_rejected_and_next_turn_resets_signal():
+def test_interrupt_idle_session_is_rejected_and_next_turn_resets_signal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     session = AgentSession("123456789abc", lambda: None)
     calls = []
     session._agent = SimpleNamespace(interrupt=lambda: calls.append("stop"),
