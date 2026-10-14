@@ -11,6 +11,7 @@ read-only reference — user deletions in runtime don't affect the defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 import shutil
 from pathlib import Path
@@ -59,6 +60,7 @@ class SkillLoader:
         self._seed_defaults_if_empty()
 
         skills: Dict[str, SkillMeta] = {}
+        disabled = self._disabled_skill_names()
         max_mtime = 0.0
         count = 0
 
@@ -71,7 +73,7 @@ class SkillLoader:
                 continue
 
             meta = self._parse_skill_file(path)
-            if not meta:
+            if not meta or meta.name in disabled:
                 continue
 
             # Runtime entries override source entries with same name.
@@ -96,7 +98,9 @@ class SkillLoader:
     def refresh_if_stale(self) -> List[SkillMeta]:
         """Refresh on skill edits and plugin enable/disable state changes."""
         from core.plugin_loader import PluginCatalog
-        if PluginCatalog(self._project_root).manifests():
+        if PluginCatalog(self._project_root).manifests() or (
+            self._project_root / "skill_state.json"
+        ).exists():
             # Lightweight local metadata scan: plugin state is independent of
             # SKILL.md timestamps and must invalidate prompt discovery.
             return self.scan()
@@ -135,6 +139,21 @@ class SkillLoader:
         return "\n".join(lines) if lines else "(none)"
 
     # ── Internal ────────────────────────────────────────────────────
+
+    def _disabled_skill_names(self) -> set[str]:
+        """Honor the existing Skills enable/disable UI state in the Agent."""
+        path = self._project_root / "skill_state.json"
+        if not self._safe_skill_path(path):
+            return set()
+        try:
+            if path.stat().st_size > 128 * 1024:
+                return set()
+            data = json.loads(path.read_text(encoding="utf-8"))
+            disabled = data.get("disabled_skills", {}) if isinstance(data, dict) else {}
+            return {name for name, value in disabled.items()
+                    if isinstance(name, str) and value is True} if isinstance(disabled, dict) else set()
+        except (OSError, ValueError, TypeError):
+            return set()
 
     def _safe_skill_path(self, path: Path) -> bool:
         """Never follow symlinked skill entries or project-external paths."""
