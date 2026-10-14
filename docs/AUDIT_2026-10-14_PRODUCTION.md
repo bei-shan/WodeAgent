@@ -33,6 +33,10 @@ Docker Bash 原先通过 `subprocess.run(timeout=...)` 阻塞：用户 Stop 无�
 
 **安全约束**：`docker rm --force` 是尽力清理，daemon 不可达、宿主崩溃时仍可能留下容器；这不等于事务回滚，也不等于 Docker 模式已达到完整隔离等级。
 
+## 追加落地：交互式文件授权作用域
+
+本轮后续安全复核确认：之前 `PermissionGate` 的交互式授权仅按 canonical path 缓存，`Read` 许可可能被 `Write/Edit/MultiEdit` 复用。这属于权限提升风险，而非单纯代码风格问题。已将交互许可缓存细分为 `read` 和 `write` 能力，保留受信任调用方显式 `grant(path)` 的旧通配授权以维护兼容，增加真实 Read→Write 阻断测试。参见 [权限作用域设计](design/2026-10-14-operation-scoped-permissions.md)。
+
 ## 有顺序的后续 Backlog
 
 ### P0：v0.1 单用户发布闸门（必须完成）
