@@ -40,7 +40,7 @@ React Web (desktop/web/)              OpenTUI (tui-v2/)
 
 ## 当前结构性债务（不等同于可以删除）
 
-- 旧 Python Rich/prompt_toolkit TUI 已退役；OpenTUI 仍需真实 PTY 交互验收，旧专有命令需通过服务端 API 补齐。
+- 旧 Python Rich/prompt_toolkit TUI 已退役。OpenTUI 的基础启动、会话树和可移植归档已有真实 PTY/HTTP 测试；旧 `/style`、`/budget` 等专有命令仍需可复用服务端 API 后才能迁移。
 - Web `App.tsx`、`desktop/service/app.py`、`agents/codeAgent.py`、`core/team_engine/manager.py` 仍较大，应逐步拆分职责并保留回归测试。
 - 运行时协议、持久化格式和权限模型需要独立版本化，不宜在「文档清理」时顺手破坏兼容。
 
