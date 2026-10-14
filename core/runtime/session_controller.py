@@ -342,14 +342,18 @@ class AgentSession:
             persist_turn_outcome(self.session_id, outcome)
         except Exception:
             logger.exception("Unable to persist turn outcome for %s", self.session_id[:8])
-        # Publish terminal events only once persistence and state are ready.
-        # The worker becomes available before the event reaches the client.
-        with self._busy_lock:
-            self._busy = False
-        self.events.put(AgentEvent(SESSION_EVENT_TURN_FINISHED, outcome.to_dict()))
-        # Legacy consumers still recognize turn.completed; carry the same
-        # canonical status so they cannot confuse cancellation with success.
-        self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
+        # Publish both terminal events before the session becomes idle.
+        # A polling client seeing busy=False can then safely assume the
+        # terminal journal entries already exist. Even if publication fails,
+        # release the busy flag so the session cannot become stuck forever.
+        try:
+            self.events.put(AgentEvent(SESSION_EVENT_TURN_FINISHED, outcome.to_dict()))
+            # Legacy consumers still recognize turn.completed; carry the
+            # same canonical status as turn.finished.
+            self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
+        finally:
+            with self._busy_lock:
+                self._busy = False
 
     def close(self) -> None:
         """Release idle resources and wake outstanding interactive waiters."""
