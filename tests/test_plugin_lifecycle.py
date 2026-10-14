@@ -228,3 +228,23 @@ def test_api_rejects_archive_traversal_and_unknown_plugins(tmp_path, monkeypatch
         assert resp.status_code == 400
         assert client.put("/api/plugins/missing/enabled", json={"enabled": True}).status_code == 404
         assert client.delete("/api/plugins/missing").status_code == 404
+
+
+def test_existing_skill_toggle_controls_actual_agent_loader(tmp_path, monkeypatch):
+    from desktop.service.application.config_catalog import ConfigCatalogService
+
+    root = tmp_path / "skills/manual"
+    root.mkdir(parents=True)
+    (root / "SKILL.md").write_text(
+        "---\nname: manual\ndescription: Manual help\n---\n# Manual\n",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(str(tmp_path))
+    assert [m.name for m in loader.scan()] == ["manual"]
+    cfg = ConfigCatalogService(tmp_path)
+    assert cfg.enabled("skill", "manual")["enabled"] is True
+    assert cfg.toggle_enabled("skill", "manual")["enabled"] is False
+    assert loader.refresh_if_stale() == []
+    assert loader.get_skill("manual", refresh=True) is None
+    assert cfg.toggle_enabled("skill", "manual")["enabled"] is True
+    assert [m.name for m in loader.refresh_if_stale()] == ["manual"]
