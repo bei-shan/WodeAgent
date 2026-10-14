@@ -20,6 +20,26 @@ from core.runtime.cancellation import current_cancel_event
 
 logger = logging.getLogger(__name__)
 
+
+def _is_transport_disconnect(exc: Exception) -> bool:
+    """Recognize transport closure in both MCP Python SDK major versions.
+
+    SDK v2 converts dispatcher shutdown to MCPError(CONNECTION_CLOSED)
+    instead of raising an AnyIO ClosedResourceError. Ordinary remote
+    JSON-RPC errors must never be treated as disconnected transports.
+    """
+    if isinstance(exc, (
+        anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream,
+    )):
+        return True
+    try:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import CONNECTION_CLOSED
+    except ImportError:
+        return False  # v1 SDK uses the AnyIO exceptions above
+    return isinstance(exc, MCPError) and getattr(exc, "code", None) == CONNECTION_CLOSED
+
+
 # Per-call timeout for regular MCP tool invocations (seconds).
 _MCP_CALL_TIMEOUT = float(os.environ.get("MCP_CALL_TIMEOUT", "30"))
 # Longer timeout for list_tools (npx downloads can take tens of seconds).
@@ -255,8 +275,18 @@ class MCPClient:
         try:
             return await _do_call(session)
         except TimeoutError:
+            # A timeout does not tell us whether the remote mutation ran.
+            # Invalidate the potentially half-closed dispatcher so a new,
+            # explicitly requested tool call can use a fresh connection.
+            # Never replay the timed-out call.
+            try:
+                await self.close()
+            except Exception:
+                logger.warning("Unable to retire timed-out MCP transport", exc_info=True)
             raise
-        except (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream) as exc:
+        except Exception as exc:
+            if not _is_transport_disconnect(exc):
+                raise
             logger.warning("MCP transport dropped during '%s'; invalidating session", operation_name)
             await self.close()
             if not retry_on_disconnect:
@@ -267,7 +297,9 @@ class MCPClient:
             session = await self.connect()
             try:
                 return await _do_call(session)
-            except (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream) as retry_exc:
+            except Exception as retry_exc:
+                if not _is_transport_disconnect(retry_exc):
+                    raise
                 await self.close()
                 raise ConnectionError(
                     f"MCP transport closed during '{operation_name}' and reconnection failed"
