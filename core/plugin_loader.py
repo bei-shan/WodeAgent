@@ -171,6 +171,7 @@ class PluginCatalog:
                     "description": m.description,
                     "enabled": flags.get("enabled") is True,
                     "trusted": flags.get("trusted") is True,
+                    "trust_valid": self.trust_valid(m, flags),
                     "skills": len(self.skill_dirs_for(m)),
                     "has_code": bool(m.custom_features or m.hooks_config),
                     "source": flags.get("source", "local_directory"),
@@ -191,16 +192,67 @@ class PluginCatalog:
             self._write_state(state)
         return {"name": name, "enabled": bool(enabled)}
 
+    def _content_digest(self, manifest: PluginManifest) -> str:
+        """Fingerprint reviewed plugin source without executing any code.
+
+        Including all non-cache plugin assets prevents an attacker from
+        replacing imports, shell hooks or the manifest while retaining a
+        previous approval. Bytecode caches are ignored because Python creates
+        them during import; source-backed loads remain the supported mode.
+        """
+        directory = manifest.plugin_dir
+        if not _inside(self.root, directory):
+            raise ValueError("Unsafe plugin directory")
+        digest = hashlib.sha256()
+        total = 0
+        count = 0
+        for path in sorted(directory.rglob("*"), key=lambda x: x.as_posix()):
+            if not _inside(self.root, path):
+                raise ValueError("Plugin content includes an unsafe link")
+            relative = path.relative_to(directory)
+            if "__pycache__" in relative.parts or path.suffix in (".pyc", ".pyo"):
+                continue
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise ValueError("Plugin content includes a special file")
+            count += 1
+            if count > _MAX_FILES:
+                raise ValueError("Plugin content exceeds file count limit")
+            digest.update(relative.as_posix().encode("utf-8"))
+            digest.update(b"\\0")
+            with path.open("rb") as handle:
+                while chunk := handle.read(65536):
+                    total += len(chunk)
+                    if total > _MAX_EXTRACTED:
+                        raise ValueError("Plugin content exceeds size limit")
+                    digest.update(chunk)
+            digest.update(b"\\0")
+        return digest.hexdigest()
+
     def set_trusted(self, name: str, trusted: bool) -> dict:
-        """Explicit user trust, separate from enabling a data-only plugin."""
+        """Bind executable-code approval to the current on-disk source tree."""
         with _STATE_LOCK:
-            self._find(name)
+            manifest = self._find(name)
             state = self._state()
             flags = state.get(name, {})
             flags = flags if isinstance(flags, dict) else {}
-            state[name] = {**flags, "trusted": bool(trusted)}
+            fingerprint = self._content_digest(manifest) if trusted else None
+            state[name] = {
+                **flags, "trusted": bool(trusted), "trusted_digest": fingerprint,
+            }
             self._write_state(state)
         return {"name": name, "trusted": bool(trusted)}
+
+    def trust_valid(self, manifest: PluginManifest, flags: dict) -> bool:
+        expected = flags.get("trusted_digest")
+        if not (flags.get("trusted") is True
+                and isinstance(expected, str) and len(expected) == 64):
+            return False
+        try:
+            return hmac.compare_digest(expected, self._content_digest(manifest))
+        except (OSError, ValueError, RuntimeError):
+            return False
 
     def enabled_manifests(self) -> list[PluginManifest]:
         state = self._state()
@@ -211,9 +263,14 @@ class PluginCatalog:
         ]
 
     def code_trusted(self, name: str) -> bool:
-        flags = self._state().get(name)
-        return (isinstance(flags, dict) and flags.get("trusted") is True
-                and os.environ.get("RIDGE_ALLOW_PLUGIN_CODE", "").lower() in ("1", "true", "yes"))
+        if os.environ.get("RIDGE_ALLOW_PLUGIN_CODE", "").lower() not in ("1", "true", "yes"):
+            return False
+        try:
+            manifest = self._find(name)
+            flags = self._state().get(name)
+            return isinstance(flags, dict) and self.trust_valid(manifest, flags)
+        except (KeyError, ValueError):
+            return False
 
     def skill_dirs_for(self, m: PluginManifest) -> list[Path]:
         result = []
