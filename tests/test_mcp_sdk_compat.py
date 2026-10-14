@@ -1,10 +1,12 @@
-"""MCP v1 transport symbols are required by our current client adapter."""
+"""Pin MCP v2 and its supported Streamable HTTP entrypoint."""
 from importlib.metadata import version
 
 
 def test_sdk_version_and_streamable_transport_compatibility():
-    parts = version("mcp").split(".")
-    major, minor = int(parts[0]), int(parts[1])
-    assert major == 1 and minor >= 10
-    from mcp.client.streamable_http import streamablehttp_client
-    assert callable(streamablehttp_client)
+    assert int(version("mcp").split(".")[0]) == 2
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import stdio_client
+    assert callable(streamable_http_client)
+    assert callable(stdio_client)
+    assert ClientSession is not None

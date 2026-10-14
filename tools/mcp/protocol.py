@@ -99,10 +99,10 @@ def _summarize_non_text(result: Any) -> list[str]:
 
 
 def _get_structured_content(result: Any) -> Any:
-    if hasattr(result, "structuredContent"):
-        return getattr(result, "structuredContent")
     if hasattr(result, "structured_content"):
         return getattr(result, "structured_content")
+    if hasattr(result, "structuredContent"):
+        return getattr(result, "structuredContent")
     if isinstance(result, dict):
         return result.get("structuredContent") or result.get("structured_content")
     return None
@@ -204,10 +204,12 @@ def to_protocol_result(
     start_time: float,
 ) -> str:
     is_error = False
-    if hasattr(result, "isError"):
+    if hasattr(result, "is_error"):
+        is_error = bool(getattr(result, "is_error"))
+    elif hasattr(result, "isError"):
         is_error = bool(getattr(result, "isError"))
     elif isinstance(result, dict):
-        is_error = bool(result.get("isError"))
+        is_error = bool(result.get("is_error", result.get("isError", False)))
 
     if not is_error:
         return to_protocol_success(result, params_input, tool_name, start_time)
