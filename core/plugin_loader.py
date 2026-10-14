@@ -410,13 +410,11 @@ class PluginCatalog:
                 raise KeyError("No previous plugin revision")
             if not _inside(self.root, current.plugin_dir):
                 raise ValueError("Unsafe plugin path")
-            previous = PluginCatalog(backup.parent.parent.parent.parent).manifests()
-            del previous  # no trust in prior state; parse the file in-place
             source = backup / MANIFEST_FILE
             if not source.exists():
                 source = backup / ".claude-plugin/plugin.json"
             data = json.loads(source.read_text(encoding="utf-8"))
-            manifest = PluginManifest(data, backup.parent / name)
+            manifest = PluginManifest(data, current.plugin_dir)
             flags = self._state().get(name, {})
             flags = flags if isinstance(flags, dict) else {}
             staged = backup.parent / ".rollback-current"
@@ -449,6 +447,9 @@ class PluginCatalog:
             if not _inside(self.root, m.plugin_dir):
                 raise ValueError("Unsafe plugin path")
             shutil.rmtree(m.plugin_dir)
+            backup = self._backup_path(name).parent
+            if _inside(self.root, backup) and backup.is_dir():
+                shutil.rmtree(backup)
             state = self._state()
             state.pop(name, None)
             self._write_state(state)
