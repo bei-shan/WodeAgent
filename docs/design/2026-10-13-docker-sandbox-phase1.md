@@ -42,15 +42,17 @@ must be distinct from a workspace-path permission check.
 4. Run with `project_root` pointed at that workspace. Docker must already
    have the image: the executor sets `--pull=never` and never silently runs
    failed Docker commands on the host. The Web app remains **local-only** and
-   lacks authentication.
+   supports a single-operator local token, not hosted multi-tenant RBAC.
 
 The container CLI uses `docker run --rm` per command, `--network none`,
 read-only root filesystem, non-root `--user`, drops all Linux capabilities,
 sets `no-new-privileges`, bounds pids/memory/CPU, and provides an ephemeral
 `/tmp`. Only `/workspace` is bound from the host. The command is an argv
 element to `/bin/sh -lc` inside Docker, not interpolated into a host shell.
-Daemon-managed container names are random; on client timeout the executor
-requests `docker rm --force`. Docker daemon failures do not enable fallback.
+Daemon-managed container names are random. On user Stop, the Docker Bash tool
+propagates turn-scoped cancellation to the host-side CLI runner, terminates its
+process group and requests daemon cleanup with `docker rm --force`. Timeouts
+request the same cleanup. Docker daemon failures do not enable host fallback.
 
 All container commands are **fresh** processes: shell aliases, `cd`, env
 changes and temporary `/tmp` files do not persist between calls; file
@@ -58,9 +60,10 @@ modifications under `/workspace` do persist.
 
 ## Known remaining gaps
 
-- **No multi-user or Web authentication.** Existing web endpoints, WebSocket,
-  files, workspace upload and tools are not owner-scoped. Do not expose the
-  Web API to the Internet, a LAN, or untrusted browser origins.
+- **Not multi-user authentication.** Local Web token and origin checks are
+  single-operator protections, not tenant RBAC. API sessions and workspace
+  resources are not tenant-scoped. Do not expose the Web API to the Internet,
+  a LAN, or untrusted browser origins.
 - **Not a full OS confinement audit.** The Docker daemon, kernel, preloaded
   image, host filesystem mount and configuration are trusted. The workspace
   volume might contain symlinks, secrets, git credentials, hooks and user
@@ -70,9 +73,10 @@ modifications under `/workspace` do persist.
   mode rather than allowed through unisolated host code. It is possible for
   Python framework plugins that execute before the tool dispatcher to access
   the host; do not import untrusted plugin Python.
-- **Docker timeout cleanup is best effort.** Unexpected host crashes can
-  leave ephemeral containers behind; recovery/garbage collection and managed
-  per-session leases are planned.
+- **Docker cancellation and timeout cleanup are best effort.** They now
+  request daemon-side removal after CLI termination, but daemon or host
+  crashes can still leave containers behind; recovery/garbage collection and
+  managed per-session leases remain future work.
 - Container filesystem APIs, read-only source overlays, upload/download file
   exchange, user-scoped isolation, NetworkPolicy, seccomp/AppArmor profiles
   and container runtime hardening are next-stage work.
@@ -86,7 +90,7 @@ modifications under `/workspace` do persist.
 ## Acceptance test boundaries
 
 ```bash
-python -m pytest tests/test_sandbox_boundary.py tests/test_bash_tool.py -q
+python -m pytest tests/test_sandbox_boundary.py tests/test_sandbox_cancellation.py tests/test_bash_tool.py -q
 ```
 
 For host integration, manually verify a Docker-enabled Agent can run a
