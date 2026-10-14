@@ -330,7 +330,7 @@ test('Plugins panel safely installs, enables, and removes a project plugin', asy
     name: 'review-kit.zip', mimeType: 'application/zip',
     buffer: Buffer.from('mock zip bytes'),
   })
-  await expect(page.getByText('review-kit', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /review-kit/ })).toBeVisible()
   await page.getByRole('checkbox', { name: '启用 review-kit' }).check()
   await expect(page.getByRole('checkbox', { name: '启用 review-kit' })).toBeChecked()
   page.once('dialog', dialog => dialog.accept())
