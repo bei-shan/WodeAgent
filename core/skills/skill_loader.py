@@ -77,8 +77,14 @@ class SkillLoader:
             # Runtime entries override source entries with same name.
             existing = skills.get(meta.name)
             if existing is not None:
-                if str(self._runtime_dir) in str(meta.path):
-                    skills[meta.name] = meta  # runtime wins
+                if path.is_relative_to(self._runtime_dir):
+                    skills[meta.name] = meta  # explicit user runtime override
+                elif not Path(existing.path).is_relative_to(self._runtime_dir):
+                    if Path(existing.path).is_relative_to(self._source_dir):
+                        continue  # built-in source takes precedence over plugins
+                    if path.is_relative_to(self._source_dir):
+                        skills[meta.name] = meta
+                # Otherwise the first deterministic plugin wins
                 continue
             skills[meta.name] = meta
 
@@ -88,7 +94,12 @@ class SkillLoader:
         return self.list_skills(refresh=False)
 
     def refresh_if_stale(self) -> List[SkillMeta]:
-        """Refresh cache if skill files changed."""
+        """Refresh on skill edits and plugin enable/disable state changes."""
+        from core.plugin_loader import PluginCatalog
+        if PluginCatalog(self._project_root).manifests():
+            # Lightweight local metadata scan: plugin state is independent of
+            # SKILL.md timestamps and must invalidate prompt discovery.
+            return self.scan()
         if not self._skills:
             return self.scan()
         current_max_mtime, current_count = self._get_skills_state()
@@ -157,8 +168,23 @@ class SkillLoader:
                 dst = self._runtime_dir / rel
                 if not self._safe_skill_path(src_path) or not self._safe_skill_path(dst):
                     continue
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dst)
+                # Copy complete supporting assets, not just SKILL.md. A
+                # skill with scripts/references must remain functional after
+                # runtime seeding. Never follow source symlinks.
+                source_skill = src_path.parent
+                target_skill = dst.parent
+                for asset in sorted(source_skill.rglob("*")):
+                    if not self._safe_skill_path(asset):
+                        continue
+                    relative_asset = asset.relative_to(source_skill)
+                    destination = target_skill / relative_asset
+                    if not self._safe_skill_path(destination):
+                        continue
+                    if asset.is_dir():
+                        destination.mkdir(parents=True, exist_ok=True)
+                    elif asset.is_file() and not destination.exists():
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(asset, destination)
             except OSError:
                 pass
 
@@ -171,6 +197,11 @@ class SkillLoader:
         # Source dir — built-in defaults (reference)
         if self._source_dir.exists():
             paths.extend(self._source_dir.rglob("SKILL.md"))
+        # Enabled plugin skill trees are read in-place; they are never copied
+        # into writable runtime Skills, so uninstall/revoke takes effect.
+        from core.plugin_loader import PluginCatalog
+        for root in PluginCatalog(self._project_root).active_skill_dirs():
+            paths.extend(root.rglob("SKILL.md"))
         return sorted(p for p in paths if self._safe_skill_path(p))
 
     def _get_skills_state(self) -> Tuple[float, int]:
