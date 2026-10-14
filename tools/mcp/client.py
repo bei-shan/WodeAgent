@@ -35,6 +35,9 @@ class MCPClientConfig:
     args: Optional[list[str]] = None
     url: Optional[str] = None
     env: Optional[dict[str, str]] = None
+    oauth: Optional[dict[str, Any]] = None
+    project_root: Optional[str] = None
+    oauth_interactive: bool = False
 
 
 class MCPClient:
@@ -82,6 +85,8 @@ class MCPClient:
         session = None
         entered_transport = False
         entered_session = False
+        oauth_http_client = None
+        oauth_flow = None
         try:
             if self._config.transport == "stdio":
                 env = None
@@ -97,11 +102,22 @@ class MCPClient:
             else:
                 if not self._config.url:
                     raise ValueError("MCPClientConfig.url is required for http transport")
-                connection = streamablehttp_client(self._config.url)
+                if self._config.oauth is not None:
+                    from tools.mcp.oauth import make_oauth_http_client
+                    oauth_http_client, oauth_flow = make_oauth_http_client(
+                        self._config, interactive=self._config.oauth_interactive
+                    )
+                    await oauth_http_client.__aenter__()
+                    connection = streamablehttp_client(
+                        self._config.url, http_client=oauth_http_client
+                    )
+                else:
+                    connection = streamablehttp_client(self._config.url)
             self._conn = connection
             # asyncio.timeout is scoped to this task; asyncio.wait_for on
             # __aenter__ would create a child task and violate AnyIO ownership.
-            async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
+            connect_timeout = 240 if self._config.oauth_interactive else _MCP_CONNECT_TIMEOUT
+            async with asyncio.timeout(connect_timeout):
                 streams = await connection.__aenter__()
             entered_transport = True
             read, write, *_ = streams
@@ -145,6 +161,16 @@ class MCPClient:
                     await connection.__aexit__(None, None, None)
             except BaseException:
                 logger.debug("MCP transport close failed", exc_info=True)
+            if oauth_flow is not None:
+                try:
+                    await oauth_flow.close()
+                except Exception:
+                    logger.debug("OAuth callback cleanup failed", exc_info=True)
+            if oauth_http_client is not None:
+                try:
+                    await oauth_http_client.__aexit__(None, None, None)
+                except Exception:
+                    logger.debug("OAuth HTTP client cleanup failed", exc_info=True)
             self._session = None
             self._session_loop_id = None
             self._conn = None
@@ -170,8 +196,9 @@ class MCPClient:
                     self._own_connection(ready, shutdown), name="mcp-transport-owner"
                 )
             try:
+                timeout = 250 if self._config.oauth_interactive else _MCP_CONNECT_TIMEOUT * 2
                 return await asyncio.wait_for(
-                    asyncio.shield(self._owner_ready), timeout=_MCP_CONNECT_TIMEOUT * 2
+                    asyncio.shield(self._owner_ready), timeout=timeout
                 )
             except BaseException:
                 if self._owner_shutdown is not None:
