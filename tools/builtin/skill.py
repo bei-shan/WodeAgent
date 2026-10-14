@@ -2,7 +2,7 @@
 
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from core.skills.skill_loader import SkillLoader, _parse_frontmatter
@@ -40,7 +40,7 @@ class SkillTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description="'load' (default) to read a skill, 'create' to write a new skill, 'list' to show all skills",
+                description="'load' (default), 'read_resource' to read a skill reference, 'create', or 'list'",
                 required=False,
                 default="load",
             ),
@@ -49,6 +49,13 @@ class SkillTool(Tool):
                 type="string",
                 description="Skill name (required for load/create)",
                 required=True,
+            ),
+            ToolParameter(
+                name="resource",
+                type="string",
+                description="Relative resource path for read_resource (e.g. references/checklist.md)",
+                required=False,
+                default="",
             ),
             ToolParameter(
                 name="args",
@@ -128,6 +135,66 @@ class SkillTool(Tool):
                     ErrorCode.INTERNAL_ERROR, "Failed to create skill.",
                     params_input=params_input,
                 )
+
+        if action == "read_resource":
+            # Resource reads are scoped to a single *enabled* skill's own
+            # directory. They do not widen the sandbox of the Read tool.
+            resource = parameters.get("resource")
+            if not isinstance(name, str) or not name.strip():
+                return self.create_error_response(
+                    ErrorCode.INVALID_PARAM, "Skill name is required.",
+                    params_input=params_input,
+                )
+            if not isinstance(resource, str) or not resource:
+                return self.create_error_response(
+                    ErrorCode.INVALID_PARAM, "Relative resource path is required.",
+                    params_input=params_input,
+                )
+            rel = PurePosixPath(resource)
+            if (rel.is_absolute() or ".." in rel.parts or "\\\\" in resource
+                    or len(rel.parts) > 8 or resource.startswith(".")):
+                return self.create_error_response(
+                    ErrorCode.PERMISSION_DENIED, "Unsafe skill resource path.",
+                    params_input=params_input,
+                )
+            meta = self._skill_loader.get_skill(name.strip(), refresh=True)
+            if meta is None:
+                return self.create_error_response(
+                    ErrorCode.NOT_FOUND, "Skill is not available.",
+                    params_input=params_input,
+                )
+            base = Path(meta.path).parent
+            target = base.joinpath(*rel.parts)
+            if (not self._skill_loader._safe_skill_path(target)
+                    or not target.resolve().is_relative_to(base.resolve())):
+                return self.create_error_response(
+                    ErrorCode.PERMISSION_DENIED, "Skill resource escapes its directory.",
+                    params_input=params_input,
+                )
+            if target.suffix.lower() not in {".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".py", ".ts"}:
+                return self.create_error_response(
+                    ErrorCode.INVALID_PARAM, "Unsupported skill resource type.",
+                    params_input=params_input,
+                )
+            try:
+                if not target.is_file():
+                    raise FileNotFoundError()
+                if target.stat().st_size > 128 * 1024:
+                    return self.create_error_response(
+                        ErrorCode.INVALID_PARAM, "Skill resource exceeds 128 KiB.",
+                        params_input=params_input,
+                    )
+                data = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                return self.create_error_response(
+                    ErrorCode.NOT_FOUND, "Skill resource not found or unreadable.",
+                    params_input=params_input,
+                )
+            return self.create_success_response(
+                data={"name": meta.name, "resource": resource, "content": data},
+                text=f"Loaded resource for skill '{meta.name}'.",
+                params_input=params_input,
+            )
 
         # Default: load
         if not isinstance(name, str) or not name.strip():
