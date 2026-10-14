@@ -77,6 +77,7 @@ class AgentSession:
         self._agent_init_lock = threading.Lock()
         self._busy_lock = threading.Lock()
         self._busy = False
+        self._closed = False
         # Turn-scoped signal for interactive waiters. The Agent's own
         # interruption event is consulted separately by tool/LLM runtimes.
         self._interaction_cancelled = threading.Event()
@@ -112,7 +113,7 @@ class AgentSession:
         already busy (the caller should wait for ``turn.completed``).
         """
         with self._busy_lock:
-            if self._busy:
+            if self._busy or self._closed:
                 return False
             self._interaction_cancelled.clear()
             self._busy = True
@@ -351,15 +352,14 @@ class AgentSession:
         self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
 
     def close(self) -> None:
-        """Release agent resources (MCP clients, worktree, trace logger)."""
+        """Release idle resources and wake outstanding interactive waiters."""
+        self._interaction_cancelled.set()
+        self._release_interaction_waiters()
         if self._agent is not None and hasattr(self._agent, "close"):
             try:
                 self._agent.close()
             except Exception:
                 logger.exception("Error closing agent for session %s", self.session_id[:8])
-        # Unblock interactive waiters even when shutdown occurs mid-turn.
-        self._interaction_cancelled.set()
-        self._release_interaction_waiters()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -410,10 +410,20 @@ class SessionController:
             return self._sessions.get(session_id)
 
     def delete_session(self, session_id: str) -> bool:
+        """Delete an idle session only; never close a running Agent.
+
+        Mark the session closed under the same lock as send_message so a
+        previously acquired session reference cannot restart a deleted turn.
+        """
         with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if session is None:
-            return False
+            session = self._sessions.get(session_id)
+            if session is None:
+                return False
+            with session._busy_lock:
+                if session._busy:
+                    return False
+                session._closed = True
+                del self._sessions[session_id]
         session.close()
         logger.info("Session deleted: %s", session_id)
         return True
