@@ -70,6 +70,11 @@ export interface PluginInfo {
   trusted: boolean
   skills: number
   has_code: boolean
+  source?: string
+  sha256?: string | null
+  pinned?: boolean
+  rollback_available?: boolean
+  previous_version?: string | null
 }
 
 export interface SkillInfo {
@@ -206,6 +211,24 @@ export const plugins = {
     req<{name: string; trusted: boolean}>('PUT', `/plugins/${encodeURIComponent(name)}/trusted`, {trusted}),
   delete: (name: string) =>
     req<{status: string}>('DELETE', `/plugins/${encodeURIComponent(name)}`),
+  pin: (name: string, pinned: boolean) =>
+    req<{name: string; pinned: boolean}>('PUT', `/plugins/${encodeURIComponent(name)}/pinned`, {pinned}),
+  rollback: (name: string) =>
+    req<{status: string; name: string; version: string}>('POST', `/plugins/${encodeURIComponent(name)}/rollback`),
+  update: async (name: string, file: File, checksum?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    const query = checksum ? `?sha256=${encodeURIComponent(checksum)}` : ''
+    const response = await fetch(BASE + `/plugins/${encodeURIComponent(name)}/update${query}`, {
+      method: 'POST', body: form,
+    })
+    if (!response.ok) {
+      if (response.status === 401) window.dispatchEvent(new Event('wodeagent-auth-expired'))
+      const data = await response.json().catch(() => ({detail: response.statusText}))
+      throw new Error(data.detail || response.statusText)
+    }
+    return response.json() as Promise<{status: string; version: string}>
+  },
   install: async (file: File) => {
     const form = new FormData()
     form.append('file', file)

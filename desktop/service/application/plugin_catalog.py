@@ -49,6 +49,38 @@ class PluginCatalogService:
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
 
+    def update_zip(self, name: str, archive: bytes, sha256: str | None = None) -> dict:
+        try:
+            return self.catalog.update_zip(name, archive, expected_sha256=sha256)
+        except KeyError as exc:
+            raise NotFoundError("Plugin not found") from exc
+        except PermissionError as exc:
+            raise ForbiddenError("Unpin plugin before updating") from exc
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        except OSError as exc:
+            raise ForbiddenError("Unable to update plugin") from exc
+
+    def pin(self, name: str, pinned: bool) -> dict:
+        if type(pinned) is not bool:
+            raise InvalidInputError("pinned must be boolean")
+        try:
+            return self.catalog.set_pinned(name, pinned)
+        except KeyError as exc:
+            raise NotFoundError("Plugin not found") from exc
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+
+    def rollback(self, name: str) -> dict:
+        try:
+            return self.catalog.rollback(name)
+        except KeyError as exc:
+            raise NotFoundError("Previous plugin revision not found") from exc
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        except OSError as exc:
+            raise ForbiddenError("Unable to rollback plugin") from exc
+
     def delete(self, name: str) -> dict:
         try:
             return self.catalog.uninstall(name)

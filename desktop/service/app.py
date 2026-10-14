@@ -754,6 +754,22 @@ def create_app(
             raise PayloadTooLargeError("Plugin ZIP exceeds 2 MiB")
         return app.state.plugin_catalog.install(data)
 
+    @app.post("/api/plugins/{name}/update")
+    async def update_plugin(name: str, file: UploadFile = File(...), sha256: str | None = Query(None)):
+        # Identical read budget to initial install; no URL-based fetch.
+        data = await file.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise PayloadTooLargeError("Plugin ZIP exceeds 2 MiB")
+        return app.state.plugin_catalog.update_zip(name, data, sha256)
+
+    @app.put("/api/plugins/{name}/pinned")
+    async def pin_plugin(name: str, body: dict):
+        return app.state.plugin_catalog.pin(name, body.get("pinned"))
+
+    @app.post("/api/plugins/{name}/rollback")
+    async def rollback_plugin(name: str):
+        return app.state.plugin_catalog.rollback(name)
+
     @app.put("/api/plugins/{name}/enabled")
     async def enable_plugin(name: str, body: dict):
         return app.state.plugin_catalog.enable(name, body.get("enabled"))
