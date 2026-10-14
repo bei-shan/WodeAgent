@@ -23,7 +23,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
-      - run: bun install
+      - run: bun install --frozen-lockfile
+      - run: git diff --exit-code -- bun.lock
       - run: bun run typecheck
       - run: bun test
       - run: python3 test/pty_smoke.py
