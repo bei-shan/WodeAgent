@@ -158,7 +158,7 @@ def test_duplicate_install_and_name_mismatch_rejected(tmp_path):
     with pytest.raises(FileExistsError):
         catalog.install_zip(bundle())
     with pytest.raises(ValueError):
-        catalog.install_zip(bundle(manifest={"name": "other-name"}))
+        catalog.install_zip(bundle(manifest={"name": "Invalid_Name"}))
 
 
 def test_symlinked_plugin_directory_never_discovered(tmp_path):
