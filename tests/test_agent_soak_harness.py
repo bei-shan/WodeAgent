@@ -34,6 +34,14 @@ def test_invalid_budget_and_window_are_rejected():
         run_soak(iterations=2, max_fd_growth=-1)
     with pytest.raises(ValueError):
         run_soak(iterations=-1)
+    with pytest.raises(ValueError):
+        run_soak(duration_seconds=float("inf"))
+    with pytest.raises(ValueError):
+        run_soak(duration_seconds=float("nan"))
+    with pytest.raises(ValueError):
+        run_soak(duration_seconds=1, min_interval_seconds=float("inf"))
+    with pytest.raises(ValueError):
+        run_soak(duration_seconds=1, min_interval_seconds=-1)
 
 
 def test_snapshot_is_bounded_numeric_metrics_only():
@@ -41,3 +49,14 @@ def test_snapshot_is_bounded_numeric_metrics_only():
     assert set(data) == {"threads", "fds", "rss_bytes"}
     assert data["threads"] > 0
     assert all(v is None or isinstance(v, int) for v in data.values())
+
+
+def test_duration_mode_is_paced_and_bounded():
+    report = run_soak(
+        duration_seconds=0.06, min_interval_seconds=0.02,
+        max_rss_growth_mib=200,
+    )
+    assert report["result"] == "pass", report
+    assert report["duration_seconds"] >= 0.06
+    assert report["interval_seconds"] == 0.02
+    assert 1 <= report["cycles"] <= 4

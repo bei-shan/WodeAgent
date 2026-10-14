@@ -1,5 +1,23 @@
 # Agent resource stability / soak acceptance — v0.1
 
+## GitHub Actions manual acceptance evidence
+
+The workflow [Agent resource soak (manual)](../../.github/workflows/agent-resource-soak.yml)
+can be launched from GitHub **Actions → Agent resource soak (manual) → Run
+workflow** on a selected commit or branch. Choose 30 or 60 minutes. It
+uses a read-only repository token, an isolated Linux runner and the
+`FakeAgent` provider; no model credentials or remote MCP endpoints are
+required. The workflow stores `agent-soak-report.json` and
+`soak-environment.txt` as an artifact retained for 30 days. Preserve the
+workflow run URL, tested Git SHA and artifact together when accepting a
+release candidate.
+
+Duration-mode work is paced to at most one cycle per second by default
+to avoid filling ephemeral runner disk with unbounded session histories.
+Inputs reject nonfinite durations and runs over two hours. A manual
+workflow definition alone is **not** evidence that 30-minute execution
+has passed; sign off only when the actual run finished successfully.
+
 ## Offline repeatability
 
 Use a dedicated workstation or CI runner with Python dependencies installed:

@@ -1,0 +1,70 @@
+name: Agent resource soak (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "Offline FakeAgent soak duration (minutes)"
+        required: true
+        type: choice
+        default: "30"
+        options:
+          - "30"
+          - "60"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-resource-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    concurrency:
+      group: ridge-soak-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Record sanitized runtime and source version
+        shell: bash
+        run: |
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "runner_os=${RUNNER_OS}"
+            python --version
+            uname -a
+          } > soak-environment.txt
+      - name: Run 30/60 minute offline Agent resource soak
+        shell: bash
+        env:
+          DURATION_MINUTES: ${{ inputs.duration_minutes }}
+        run: |
+          case "${DURATION_MINUTES}" in
+            30|60) ;;
+            *) echo "Unsupported duration" >&2; exit 2;;
+          esac
+          seconds=$((DURATION_MINUTES * 60))
+          python scripts/agent_soak.py \
+            --duration-seconds "${seconds}" \
+            --min-interval-seconds 1.0 \
+            --max-fd-growth 12 \
+            --max-thread-growth 5 \
+            --max-rss-growth-mib 96 \
+            --json > agent-soak-report.json
+          python -m json.tool agent-soak-report.json
+      - name: Upload sanitized acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ridge-soak-${{ github.run_id }}
+          path: |
+            agent-soak-report.json
+            soak-environment.txt
+          if-no-files-found: warn
+          retention-days: 30
