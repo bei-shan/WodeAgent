@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import http.server
 import json
+import socket
 import threading
 import time
 
@@ -71,6 +72,16 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
             with type(self).lock:
                 type(self).count += 1
                 count = type(self).count
+            # Simulate a committed write whose response is lost while the
+            # underlying TCP socket disappears. The client must not repeat.
+            if message.get("params", {}).get("name") == "drop_after_commit":
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self.connection.close()
+                return
             value = str(message.get("params", {}).get("arguments", {}).get("value"))
             result = {
                 "content": [{"type": "text", "text": f"http:{value}:{count}"}],
@@ -192,3 +203,26 @@ def test_real_http_inflight_tool_receives_interrupt_and_releases_client():
         finally:
             c.close_sync()
         assert not c.is_connected
+
+
+def test_lost_reply_reports_uncertainty_then_explicit_new_call_recovers(monkeypatch):
+    # A remote tool may complete even when its HTTP response never arrives.
+    # The SDK itself may replay the POST internally; we cannot promise
+    # exactly-once semantics without SERVER-SIDE idempotency support.
+    monkeypatch.setattr(mcp_module, "_MCP_CALL_TIMEOUT", 0.35)
+    with live_server() as url:
+        c = MCPClient(MCPClientConfig(transport="http", url=url))
+        try:
+            c.list_tools_sync()
+            with pytest.raises(Exception):
+                c.call_tool_sync("drop_after_commit", {"value": "write-once"})
+            committed = MCPHandler.count
+            assert committed >= 1, "Remote tool was not dispatched"
+            # IMPORTANT: v1 and v2 SDK transports can retry internally.
+            # This integration test proves recovery and surfaces the
+            # ambiguity, not a false exactly-once guarantee.
+            result = _text(c.call_tool_sync("ping", {"value": "new-action"}))
+            assert result.startswith("http:new-action:")
+            assert MCPHandler.count >= committed + 1
+        finally:
+            c.close_sync()
