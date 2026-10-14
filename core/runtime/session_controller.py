@@ -190,9 +190,13 @@ class AgentSession:
                 return False
             self._interaction_cancelled.set()
             agent = self._agent
-        if agent is not None and hasattr(agent, "interrupt"):
-            agent.interrupt()
-        self._release_interaction_waiters()
+        try:
+            if agent is not None and hasattr(agent, "interrupt"):
+                agent.interrupt()
+        finally:
+            # A buggy third-party interrupt hook must not strand approval
+            # prompts for their full timeout or permit late authorization.
+            self._release_interaction_waiters()
         return True
 
     def _release_interaction_waiters(self) -> None:
