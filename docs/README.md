@@ -16,6 +16,11 @@
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
 | 本次仓库文档审计 | [审计记录](AUDIT_2026-10-13.md) |
 
+## 稳定版发布准备
+
+- [v0.1 准备清单](releases/v0.1-readiness.md)：自动化门禁、真实环境验收与当前阻塞项
+- [v0.1 会话运行时加固](design/2026-10-14-v01-lifecycle-stabilization.md)：取消交互、避免运行中删除、原子终止状态
+
 ## 重构设计资料
 
 - [2026-10-13 核心架构参考](design/2026-10-13-reference-agent-architecture.md)
