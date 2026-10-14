@@ -77,7 +77,13 @@ export default function PluginsPanel() {
           <label className="shrink-0 text-xs flex items-center gap-1.5 text-gray-700">
             <input type="checkbox" aria-label={`启用 ${plugin.name}`}
               checked={plugin.enabled} disabled={busy}
-              onChange={event => { void execute(() => api.plugins.enable(plugin.name, event.target.checked)) }} />
+              onChange={event => {
+                const enabled = event.target.checked
+                setItems(previous => previous.map(item =>
+                  item.name === plugin.name ? { ...item, enabled } : item
+                ))
+                void execute(() => api.plugins.enable(plugin.name, enabled))
+              }} />
             启用
           </label>
         </div>
@@ -88,6 +94,9 @@ export default function PluginsPanel() {
               aria-label={`信任 ${plugin.name}`} onChange={event => {
                 const next = event.target.checked
                 if (next && !window.confirm(`确认信任插件 ${plugin.name} 的可执行代码？仅在审查来源后进行此操作。`)) return
+                setItems(previous => previous.map(item =>
+                  item.name === plugin.name ? { ...item, trusted: next } : item
+                ))
                 void execute(() => api.plugins.trust(plugin.name, next))
               }} />
             信任代码
