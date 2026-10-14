@@ -310,7 +310,7 @@ class MCPClient:
 
                 def serve():
                     asyncio.set_event_loop(loop)
-                    started.set()
+                    loop.call_soon(started.set)
                     try:
                         loop.run_forever()
                     finally:
