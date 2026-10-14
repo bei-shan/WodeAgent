@@ -7,6 +7,8 @@ Existing .mycode/plugins directories start disabled until explicitly enabled.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import hmac
 import io
 import json
 import logging
@@ -163,6 +165,7 @@ class PluginCatalog:
             for m in self.manifests():
                 flags = states.get(m.name, {})
                 flags = flags if isinstance(flags, dict) else {}
+                backup = self._backup_path(m.name)
                 rows.append({
                     "name": m.name, "version": m.version,
                     "description": m.description,
@@ -170,6 +173,11 @@ class PluginCatalog:
                     "trusted": flags.get("trusted") is True,
                     "skills": len(self.skill_dirs_for(m)),
                     "has_code": bool(m.custom_features or m.hooks_config),
+                    "source": flags.get("source", "local_directory"),
+                    "sha256": flags.get("sha256"),
+                    "pinned": bool(flags.get("pinned")),
+                    "rollback_available": backup.is_dir() and _inside(self.root, backup),
+                    "previous_version": flags.get("previous_version"),
                 })
             return rows
 
@@ -281,9 +289,158 @@ class PluginCatalog:
                     os.replace(root, destination)
                     # TemporaryDirectory cleanup is harmless after rename.
                 state = self._state()
-                state[name] = {"enabled": False, "trusted": False}
+                state[name] = {
+                    "enabled": False, "trusted": False, "source": "local_zip",
+                    "sha256": hashlib.sha256(archive).hexdigest(),
+                    "pinned": False,
+                }
                 self._write_state(state)
         return {"status": "installed", "name": name, "enabled": False}
+
+    def _backup_path(self, name: str) -> Path:
+        return self.root / ".mycodeagent/plugins/backups" / name / "previous"
+
+    @staticmethod
+    def _check_digest(archive: bytes, expected_sha256: str | None) -> str:
+        digest = hashlib.sha256(archive).hexdigest()
+        if expected_sha256 is not None:
+            if (not isinstance(expected_sha256, str)
+                    or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256)
+                    or not hmac.compare_digest(digest, expected_sha256.lower())):
+                raise ValueError("Plugin ZIP SHA-256 checksum mismatch")
+        return digest
+
+    def set_pinned(self, name: str, pinned: bool) -> dict:
+        with _STATE_LOCK:
+            self._find(name)
+            state = self._state()
+            flags = state.get(name, {})
+            if not isinstance(flags, dict) or not flags.get("sha256"):
+                raise ValueError("Only verified ZIP installations can be pinned")
+            flags["pinned"] = bool(pinned)
+            state[name] = flags
+            self._write_state(state)
+        return {"name": name, "pinned": bool(pinned)}
+
+    def update_zip(
+        self, name: str, archive: bytes, *, expected_sha256: str | None = None,
+    ) -> dict:
+        """Staged, checksum-checked local update with one rollback slot.
+
+        Code trust is revoked and plugin is disabled on every replacement.
+        A pin blocks updates regardless of the manifest's version field.
+        """
+        import shutil
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise ValueError("Invalid plugin name")
+        if not isinstance(archive, bytes) or len(archive) > _MAX_ARCHIVE:
+            raise ValueError("Plugin archive must be at most 2 MiB")
+        digest = self._check_digest(archive, expected_sha256)
+        with _STATE_LOCK:
+            old = self._find(name)
+            state = self._state()
+            old_flags = state.get(name, {})
+            old_flags = old_flags if isinstance(old_flags, dict) else {}
+            if old_flags.get("pinned"):
+                raise PermissionError("Unpin plugin before updating")
+            destination = old.plugin_dir
+            backup = self._backup_path(name)
+            if (not _inside(self.root, destination) or
+                    not _inside(self.root, backup)):
+                raise ValueError("Unsafe plugin update path")
+            self.plugins_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix=".plugin-upgrade-", dir=self.plugins_dir,
+            ) as staging:
+                stage = Path(staging)
+                # Reuse the full ZIP path/size/manifest validation. No code
+                # can be imported or executed during this staging step.
+                temp_catalog = PluginCatalog(stage)
+                result = temp_catalog.install_zip(archive)
+                if result["name"] != name:
+                    raise ValueError("Plugin update must preserve package name")
+                staged = stage / PLUGINS_DIR / name
+                new_manifest = PluginManifest(
+                    json.loads((staged / MANIFEST_FILE).read_text(encoding="utf-8"))
+                    if (staged / MANIFEST_FILE).is_file() else
+                    json.loads((staged / ".claude-plugin/plugin.json").read_text(encoding="utf-8")),
+                    staged,
+                )
+                if new_manifest.version == old.version:
+                    raise ValueError("Plugin update requires a new manifest version")
+
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                rotated = backup.parent / "older"
+                if rotated.exists():
+                    shutil.rmtree(rotated)
+                if backup.exists():
+                    os.replace(backup, rotated)
+                try:
+                    os.replace(destination, backup)
+                    try:
+                        os.replace(staged, destination)
+                        state[name] = {
+                            "enabled": False, "trusted": False, "source": "local_zip",
+                            "sha256": digest, "pinned": False,
+                            "previous_version": old.version,
+                            "previous_sha256": old_flags.get("sha256"),
+                        }
+                        self._write_state(state)
+                    except BaseException:
+                        if destination.exists():
+                            shutil.rmtree(destination)
+                        os.replace(backup, destination)
+                        raise
+                except BaseException:
+                    if rotated.exists():
+                        os.replace(rotated, backup)
+                    raise
+                if rotated.exists():
+                    shutil.rmtree(rotated)
+        return {"status": "updated", "name": name, "version": new_manifest.version,
+                "enabled": False, "trusted": False, "sha256": digest}
+
+    def rollback(self, name: str) -> dict:
+        """Revert to the single retained previous revision, always disabled."""
+        import shutil
+        with _STATE_LOCK:
+            current = self._find(name)
+            backup = self._backup_path(name)
+            if not _inside(self.root, backup) or not backup.is_dir():
+                raise KeyError("No previous plugin revision")
+            if not _inside(self.root, current.plugin_dir):
+                raise ValueError("Unsafe plugin path")
+            previous = PluginCatalog(backup.parent.parent.parent.parent).manifests()
+            del previous  # no trust in prior state; parse the file in-place
+            source = backup / MANIFEST_FILE
+            if not source.exists():
+                source = backup / ".claude-plugin/plugin.json"
+            data = json.loads(source.read_text(encoding="utf-8"))
+            manifest = PluginManifest(data, backup.parent / name)
+            flags = self._state().get(name, {})
+            flags = flags if isinstance(flags, dict) else {}
+            staged = backup.parent / ".rollback-current"
+            if staged.exists():
+                shutil.rmtree(staged)
+            os.replace(current.plugin_dir, staged)
+            try:
+                os.replace(backup, current.plugin_dir)
+                new_state = self._state()
+                new_state[name] = {
+                    "enabled": False, "trusted": False, "source": "local_zip",
+                    "sha256": flags.get("previous_sha256"),
+                    "pinned": False, "previous_version": current.version,
+                    "previous_sha256": flags.get("sha256"),
+                }
+                self._write_state(new_state)
+                os.replace(staged, backup)
+            except BaseException:
+                if current.plugin_dir.exists():
+                    os.replace(current.plugin_dir, backup)
+                os.replace(staged, current.plugin_dir)
+                raise
+        return {"status": "rolled_back", "name": name,
+                "version": manifest.version, "enabled": False}
 
     def uninstall(self, name: str) -> dict:
         import shutil
