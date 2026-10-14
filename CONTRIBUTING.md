@@ -15,7 +15,7 @@
 ```bash
 python -m pytest tests/ -q
 cd desktop/web && npm ci && npm run build
-cd ../../tui-v2 && bun install && bun run typecheck && bun test
+cd ../../tui-v2 && bun install --frozen-lockfile && bun run typecheck && bun test
 ```
 
 完整测试需要相应依赖；Docker 集成场景使用仓库 CI 中独立的工作流命令。不能执行的测试应在 PR 中写明原因，不要宣称已通过。

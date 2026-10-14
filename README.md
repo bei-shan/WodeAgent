@@ -58,7 +58,7 @@ npm run dev
 
 ```bash
 cd tui-v2
-bun install
+bun install --frozen-lockfile
 bun run typecheck
 bun test
 bun run dev
