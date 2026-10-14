@@ -55,9 +55,11 @@ def test_token_store_preserves_fields_and_private_permissions(tmp_path):
         assert restored.access_token == token.access_token
         await store.set_tokens(OAuthToken(access_token="new-token", token_type="Bearer"))
         assert (await store.get_tokens()).access_token == "new-token"
+        from pydantic import AnyUrl
         info = OAuthClientInformationFull(
             client_id="test-oauth-client",
             client_secret="test-only-secret",
+            redirect_uris=[AnyUrl("http://127.0.0.1:8765/callback")],
         )
         await store.set_client_info(info)
         assert (await store.get_client_info()).client_id == "test-oauth-client"
@@ -118,8 +120,12 @@ def test_loopback_callback_requires_matching_state_and_no_url_echo(capsys):
         assert b"200 OK" in good
         assert b"short-lived-code" not in good
         code = await flow.callback()
-        assert code.code == "short-lived-code"
-        assert code.state == "expected"
+        from importlib.metadata import version
+        if int(version("mcp").split(".", 1)[0]) >= 2:
+            assert code.code == "short-lived-code"
+            assert code.state == "expected"
+        else:
+            assert code == ("short-lived-code", "expected")
         assert flow._server is None
     asyncio.run(run())
 
