@@ -79,8 +79,17 @@ def _build_client_config(project_root: str, spec: dict[str, Any]) -> MCPClientCo
     if transport == "http" or url:
         if not url:
             raise ValueError("MCP server config requires url for http transport")
-        return MCPClientConfig(transport="http", url=url, env=env)
+        oauth = spec.get("oauth")
+        if oauth is not None:
+            from tools.mcp.oauth import validate_oauth_config
+            validate_oauth_config(str(url), oauth)
+        return MCPClientConfig(
+            transport="http", url=url, env=env,
+            oauth=oauth, project_root=str(Path(project_root).resolve()),
+        )
 
+    if spec.get("oauth") is not None:
+        raise ValueError("OAuth applies only to HTTP MCP servers")
     env = _build_stdio_env(project_root, command, env)
 
     if not command:
