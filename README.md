@@ -66,7 +66,7 @@ bun run dev
 
 可以使用 `RIDGECODE_SERVER` 指定服务端地址；旧的 `WODEAGENT_SERVER` 继续作为兼容回退。启用服务端 `WEB_AUTH_TOKEN` 后，TUI 可使用 `RIDGECODE_AUTH_TOKEN` 设置相同令牌，通过 Bearer 请求头认证（兼容旧变量 `WODEAGENT_AUTH_TOKEN`）；具体限制见 TUI 文档。参见 [TUI v2 说明](tui-v2/README.md)。
 
-旧 Python Rich/prompt_toolkit TUI 已退役，OpenTUI 是唯一维护的交互式终端客户端。常用会话、模型与 Plan/Teams 命令已迁移；旧 CLI 独有的树形分支、快照导入导出等命令尚未迁移，详见 [终端迁移清单](docs/design/2026-10-13-tui-command-migration.md)。
+旧 Python Rich/prompt_toolkit TUI 已退役，OpenTUI 是唯一维护的交互式终端客户端。常用会话、模型与 Plan/Teams 命令，以及 `/tree`、`/fork` 和可移植会话 `/export`、`/import` 已迁移。可移植归档不包含工具执行环境或密钥，不能视为完整快照备份。仍未迁移的旧 CLI 命令详见 [终端迁移清单](docs/design/2026-10-13-tui-command-migration.md)。
 
 ## 架构概览
 

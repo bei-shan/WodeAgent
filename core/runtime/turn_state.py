@@ -45,21 +45,33 @@ def persist_turn_outcome(session_id: str, outcome: TurnOutcome) -> None:
     """Atomically persist the most recent terminal state next to the snapshot."""
     import json
     import os
+    import tempfile
     from pathlib import Path
     from core.session_manager import SessionManager
 
-    # Session IDs are generated hex tokens, never arbitrary file paths.
-    if not session_id or any(ch not in "0123456789abcdef" for ch in session_id):
+    # Session IDs are generated 12-char hex tokens, never arbitrary paths.
+    if len(session_id) != 12 or any(ch not in "0123456789abcdef" for ch in session_id):
         raise ValueError("Invalid session ID")
     folder = SessionManager()._dir
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"{session_id}.turn.json"
-    tmp = folder / f".{session_id}.{os.getpid()}.turn.tmp"
+    temp_path: str | None = None
     try:
-        tmp.write_text(json.dumps(outcome.to_dict(), ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, target)
+        # An independent temporary file avoids collisions between threads and
+        # processes writing the same session's terminal outcome.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=folder,
+            prefix=f".{session_id}.", suffix=".turn.tmp", delete=False,
+        ) as handle:
+            temp_path = handle.name
+            json.dump(outcome.to_dict(), handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target)
+        temp_path = None
     finally:
-        tmp.unlink(missing_ok=True)
+        if temp_path is not None:
+            Path(temp_path).unlink(missing_ok=True)
 
 
 def load_turn_outcome(session_id: str) -> TurnOutcome | None:
