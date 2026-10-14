@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -377,14 +378,17 @@ class SessionController:
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
         self._workspace_base = workspace_base
+        self._closing = False
 
     def create_session(self, agent_factory: Callable[[], Any]) -> str:
         """Create a new session.  Returns the session ID."""
         # Reserve the same ID in the persistent catalog before first turn.
         from core.session_manager import SessionManager
-        session_id = SessionManager().create_session()
-        session = AgentSession(session_id, agent_factory, workspace_base=self._workspace_base)
         with self._lock:
+            if self._closing:
+                raise RuntimeError("Session controller is shutting down")
+            session_id = SessionManager().create_session()
+            session = AgentSession(session_id, agent_factory, workspace_base=self._workspace_base)
             self._sessions[session_id] = session
         logger.info("Session created: %s", session_id)
         return session_id
@@ -400,6 +404,8 @@ class SessionController:
         if len(session_id) != 12 or any(c not in "0123456789abcdef" for c in session_id):
             raise ValueError("Invalid session ID")
         with self._lock:
+            if self._closing:
+                raise RuntimeError("Session controller is shutting down")
             session = self._sessions.get(session_id)
             if session is None:
                 session = AgentSession(
@@ -435,6 +441,49 @@ class SessionController:
     def list_sessions(self) -> list[str]:
         with self._lock:
             return list(self._sessions.keys())
+
+    def shutdown(self, grace_seconds: float = 2.0) -> dict[str, int]:
+        """Stop admitting turns, request cancellation and drain workers.
+
+        Closing an Agent while its thread still uses the MCP client, worktree
+        or trace writer is unsafe. Active sessions that ignore cancellation
+        are *not* closed. They retain their in-memory controller reference and
+        durable on-disk state until the process terminates.
+        """
+        if not 0 <= grace_seconds <= 30:
+            raise ValueError("grace_seconds must be between 0 and 30")
+        with self._lock:
+            self._closing = True
+            sessions = tuple(self._sessions.items())
+
+        # Quiesce admissions before requesting any cancellation.
+        for _sid, session in sessions:
+            with session._busy_lock:
+                session._closed = True
+
+        for sid, session in sessions:
+            if session.busy:
+                try:
+                    session.interrupt()
+                except Exception:
+                    logger.warning("Unable to request shutdown of session %s", sid[:8])
+
+        deadline = time.monotonic() + grace_seconds
+        closed = 0
+        pending = 0
+        for sid, session in sessions:
+            thread = session._thread
+            if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if self.delete_session(sid):
+                closed += 1
+            else:
+                pending += 1
+                logger.warning(
+                    "Session %s still running at shutdown deadline; Agent resources left open",
+                    sid[:8],
+                )
+        return {"closed": closed, "running": pending}
 
 
 # ═══════════════════════════════════════════════════════════════════════
