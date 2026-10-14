@@ -151,7 +151,7 @@ class SkillTool(Tool):
                     params_input=params_input,
                 )
             rel = PurePosixPath(resource)
-            if (rel.is_absolute() or ".." in rel.parts or "\\\\" in resource
+            if (rel.is_absolute() or ".." in rel.parts or "\\" in resource
                     or len(rel.parts) > 8 or resource.startswith(".")):
                 return self.create_error_response(
                     ErrorCode.PERMISSION_DENIED, "Unsafe skill resource path.",
