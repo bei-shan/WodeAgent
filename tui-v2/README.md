@@ -14,7 +14,7 @@ python -m uvicorn desktop.service.app:create_app --factory --host 127.0.0.1 --po
 
 ```bash
 cd tui-v2
-bun install
+bun install --frozen-lockfile
 bun run typecheck
 bun test
 bun run dev
