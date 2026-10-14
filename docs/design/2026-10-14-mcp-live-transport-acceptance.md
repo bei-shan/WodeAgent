@@ -28,3 +28,22 @@ but **does not provide exactly-once tool execution**. The caller receives
 an uncertain outcome; any operation that requires strict at-most-once must
 use server-supported idempotency keys or remote state reconciliation.
 Avoid issuing non-idempotent commands blindly after timeout or EOF.
+
+## SDK v2 closed-dispatcher recovery
+
+MCP Python SDK v2 may surface a transport shutdown as
+`MCPError(CONNECTION_CLOSED)`, rather than AnyIO's
+`ClosedResourceError`. Ridge now recognizes both representations,
+retires the failed owned transport, and reconnects for subsequent
+**explicitly requested** calls. Read-only metadata operations may be
+retried once. Write-capable tool calls are **never automatically
+replayed** after lost transport (the remote mutation may already have
+committed). A call timeout likewise retires the old dispatcher so the
+next separately requested operation can use a fresh transport.
+
+This does not provide exactly-once remote tool semantics, persistent
+remote transaction IDs or server-side idempotency. See
+`tests/test_mcp_http_live.py` for a lost-reply/explicit-recovery
+integration test, and `tests/test_mcp_v2_closed_dispatcher.py` for
+v1/v2 compatible disconnect, timeout and no-replay contracts.
+
