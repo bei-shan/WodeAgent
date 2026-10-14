@@ -77,6 +77,9 @@ class AgentSession:
         self._agent_init_lock = threading.Lock()
         self._busy_lock = threading.Lock()
         self._busy = False
+        # Turn-scoped signal for interactive waiters. The Agent's own
+        # interruption event is consulted separately by tool/LLM runtimes.
+        self._interaction_cancelled = threading.Event()
         self.last_turn = load_turn_outcome(session_id)
 
         # Bounded, replayable journal; each WebSocket has an independent cursor.
@@ -111,6 +114,7 @@ class AgentSession:
         with self._busy_lock:
             if self._busy:
                 return False
+            self._interaction_cancelled.clear()
             self._busy = True
 
         # Auto-name session from first user message.
@@ -123,13 +127,22 @@ class AgentSession:
             with self._busy_lock:
                 self._busy = False
             raise
+        # An interrupt may have arrived while the lazy Agent was initializing.
+        # Propagate it before the worker starts, rather than losing the request.
+        if self._interaction_cancelled.is_set() and hasattr(self._agent, "interrupt"):
+            self._agent.interrupt()
         self._thread = threading.Thread(
             target=self._run_turn,
             args=(content,),
             daemon=True,
             name=f"agent-{self.session_id[:8]}",
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception:
+            with self._busy_lock:
+                self._busy = False
+            raise
         return True
 
     def resolve_permission(self, request_id: str, decision: str) -> bool:
@@ -139,6 +152,8 @@ class AgentSession:
         ``False`` if it already timed out or doesn't exist.
         """
         with self._perm_lock:
+            if self._interaction_cancelled.is_set():
+                return False
             entry = self._pending_permissions.pop(request_id, None)
             self._pending_permission_events.pop(request_id, None)
         if entry is None:
@@ -151,6 +166,8 @@ class AgentSession:
     def answer_ask_user(self, request_id: str, answer: str) -> bool:
         """Unblock a pending AskUser request."""
         with self._ask_lock:
+            if self._interaction_cancelled.is_set():
+                return False
             entry = self._pending_ask_user.pop(request_id, None)
             self._pending_ask_events.pop(request_id, None)
         if entry is None:
@@ -161,11 +178,35 @@ class AgentSession:
         return True
 
     def interrupt(self) -> bool:
-        """Request the agent to stop.  Best-effort (not preemptive)."""
-        if self._agent is not None and hasattr(self._agent, "interrupt"):
-            self._agent.interrupt()
-            return True
-        return False
+        """Stop the turn and wake permission/AskUser waiters immediately.
+
+        This does not forcibly interrupt a third-party provider request, but
+        no UI approval can be granted after the cancellation was requested.
+        """
+        with self._busy_lock:
+            if not self._busy:
+                return False
+            self._interaction_cancelled.set()
+            agent = self._agent
+        if agent is not None and hasattr(agent, "interrupt"):
+            agent.interrupt()
+        self._release_interaction_waiters()
+        return True
+
+    def _release_interaction_waiters(self) -> None:
+        """Resolve all pending prompts with safe cancellation defaults."""
+        with self._perm_lock:
+            for event, result in self._pending_permissions.values():
+                result["decision"] = "denied"
+                event.set()
+            self._pending_permissions.clear()
+            self._pending_permission_events.clear()
+        with self._ask_lock:
+            for event, result in self._pending_ask_user.values():
+                result["answer"] = ""
+                event.set()
+            self._pending_ask_user.clear()
+            self._pending_ask_events.clear()
 
     @property
     def busy(self) -> bool:
@@ -316,19 +357,9 @@ class AgentSession:
                 self._agent.close()
             except Exception:
                 logger.exception("Error closing agent for session %s", self.session_id[:8])
-        # Unblock any remaining waiters.
-        with self._perm_lock:
-            for event, result in self._pending_permissions.values():
-                result.setdefault("decision", "denied")
-                event.set()
-            self._pending_permissions.clear()
-            self._pending_permission_events.clear()
-        with self._ask_lock:
-            for event, result in self._pending_ask_user.values():
-                result.setdefault("answer", "")
-                event.set()
-            self._pending_ask_user.clear()
-            self._pending_ask_events.clear()
+        # Unblock interactive waiters even when shutdown occurs mid-turn.
+        self._interaction_cancelled.set()
+        self._release_interaction_waiters()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -427,6 +458,8 @@ class _SessionPermissionBroker:
             "action": action,
         })
         with self._session._perm_lock:
+            if self._session._interaction_cancelled.is_set():
+                return "denied"
             self._session._pending_permissions[request_id] = (done, result)
             self._session._pending_permission_events[request_id] = prompt
 
@@ -439,6 +472,8 @@ class _SessionPermissionBroker:
                 self._session._pending_permission_events.pop(request_id, None)
             return "denied"
 
+        if self._session._interaction_cancelled.is_set():
+            return "denied"
         return result.get("decision", "denied")
 
 
@@ -461,6 +496,8 @@ class _SessionAskUserFunc:
             "prompt": prompt,
         })
         with self._session._ask_lock:
+            if self._session._interaction_cancelled.is_set():
+                return ""
             self._session._pending_ask_user[request_id] = (done, result)
             self._session._pending_ask_events[request_id] = question
 
@@ -472,4 +509,6 @@ class _SessionAskUserFunc:
                 self._session._pending_ask_events.pop(request_id, None)
             return ""
 
+        if self._session._interaction_cancelled.is_set():
+            return ""
         return result.get("answer", "")
