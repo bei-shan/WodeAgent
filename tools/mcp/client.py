@@ -282,7 +282,7 @@ class MCPClient:
             try:
                 await self.close()
             except Exception:
-                logger.warning("Unable to retire timed-out MCP transport", exc_info=True)
+                logger.warning("Unable to retire timed-out MCP transport")
             raise
         except Exception as exc:
             if not _is_transport_disconnect(exc):
