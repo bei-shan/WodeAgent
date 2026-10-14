@@ -45,6 +45,17 @@ _ALWAYS_DENY_PATTERNS: list[str] = [
 ]
 
 
+def _action_scope(action: str) -> str:
+    """Normalize operator-facing operation labels into permission capabilities."""
+    normalized = action.strip().casefold()
+    if normalized in ("读取", "read"):
+        return "read"
+    if normalized in ("写入", "编辑", "write", "edit"):
+        return "write"
+    # Unknown operations cannot borrow a read/write grant.
+    return normalized or "unknown"
+
+
 def _is_always_denied(resolved_path: str) -> bool:
     """Check whether *resolved_path* matches any permanent-deny pattern."""
     lower = resolved_path.lower().replace("\\", "/")
@@ -83,7 +94,7 @@ class PermissionGate:
         self._project_root = Path(project_root).resolve()
         self._interactive = bool(interactive)
         self._soft_sandbox = bool(soft_sandbox)
-        self._cache: dict[str, str] = {}  # canonical resolved_path → "granted" | "denied"
+        self._cache: dict[str | tuple[str, str], str] = {}  # path wildcard or (canonical path, action scope)
         self._cache_lock = threading.RLock()
         self._cache_size = max(1, int(cache_size))
         # Optional broker: callable(path, tool_name, action) -> "granted"|"denied"
@@ -119,13 +130,17 @@ class PermissionGate:
         except ValueError:
             return False
 
-    def check(self, resolved_path: str) -> str:
+    def check(self, resolved_path: str, *, action: str | None = None) -> str:
         """Return the access decision for *resolved_path*.
 
         Returns one of:
         - ``"granted"`` — allowed (inside root or previously approved)
         - ``"denied"``  — permanently denied or previously refused
         - ``"ask"``     — needs user confirmation
+
+        A supplied action requires a matching scoped grant. A legacy explicit
+        grant(path) remains a wildcard for backwards compatibility; a prompt
+        approval made by ask() does not authorize other actions on the path.
         """
         try:
             canonical = str(Path(resolved_path).resolve())
@@ -144,7 +159,12 @@ class PermissionGate:
             return "denied"
 
         with self._cache_lock:
-            cached = self._cache.get(canonical)
+            cached = (
+                self._cache.get((canonical, _action_scope(action)))
+                if action is not None else None
+            )
+            if cached is None:
+                cached = self._cache.get(canonical)  # Explicit legacy wildcard
         if cached is not None:
             return cached
 
@@ -164,7 +184,7 @@ class PermissionGate:
         When a broker is set (via ``self._broker``), delegates to it
         instead of calling ``input()`` directly.
         """
-        decision = self.check(resolved_path)
+        decision = self.check(resolved_path, action=action)
         if decision != "ask":
             return decision
         if not self._interactive:
@@ -174,10 +194,10 @@ class PermissionGate:
         if self._broker is not None:
             decision = self._broker(resolved_path, tool_name, action)
             if decision in ("granted", "denied"):
-                self._cache_decision(resolved_path, decision)
+                self._cache_decision(resolved_path, decision, action=action)
                 return decision
             # Broker returned something unexpected — fall through to deny.
-            self._cache_decision(resolved_path, "denied")
+            self._cache_decision(resolved_path, "denied", action=action)
             return "denied"
 
         # Build prompt.
@@ -198,7 +218,7 @@ class PermissionGate:
             answer = ""
 
         decision = "granted" if answer.strip().lower() in ("y", "yes") else "denied"
-        self._cache_decision(resolved_path, decision)
+        self._cache_decision(resolved_path, decision, action=action)
 
         if decision == "granted":
             logger.info("User granted access to %s", resolved_path)
@@ -208,7 +228,7 @@ class PermissionGate:
         return decision
 
     def grant(self, resolved_path: str) -> None:
-        """Pre-authorise *resolved_path* (no prompt)."""
+        """Explicitly pre-authorise *resolved_path* for every operation (legacy API)."""
         self._cache_decision(resolved_path, "granted")
 
     def clear_cache(self) -> None:
@@ -220,15 +240,18 @@ class PermissionGate:
     # Internal
     # ------------------------------------------------------------------
 
-    def _cache_decision(self, resolved_path: str, decision: str) -> None:
+    def _cache_decision(self, resolved_path: str, decision: str, *, action: str | None = None) -> None:
         canonical = str(Path(resolved_path).resolve())
         if _is_always_denied(str(resolved_path)) or _is_always_denied(canonical):
             return
+        key: str | tuple[str, str] = (
+            (canonical, _action_scope(action)) if action is not None else canonical
+        )
         with self._cache_lock:
-            if canonical not in self._cache and len(self._cache) >= self._cache_size:
+            if key not in self._cache and len(self._cache) >= self._cache_size:
                 first_key = next(iter(self._cache))
                 del self._cache[first_key]
-            self._cache[canonical] = decision
+            self._cache[key] = decision
 
     def _try_relpath(self, resolved_path: str) -> Optional[str]:
         """Return a relative path if inside project root, else None."""
