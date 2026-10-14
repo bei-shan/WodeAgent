@@ -294,3 +294,46 @@ test('local token login gates the chat before session API calls', async ({ page 
   })
   expect(saved).not.toContain('secret-for-test')
 })
+
+test('Plugins panel safely installs, enables, and removes a project plugin', async ({ page }) => {
+  await mockBackend(page)
+  let installed = false
+  let enabled = false
+  await page.route('**/api/plugins**', async route => {
+    const path = new URL(route.request().url()).pathname
+    const method = route.request().method()
+    let status = 200
+    let result: unknown = {}
+    if (path === '/api/plugins' && method === 'GET') {
+      result = installed ? [{
+        name: 'review-kit', version: '1.1', description: 'Review guidance',
+        enabled, trusted: false, skills: 1, has_code: false,
+      }] : []
+    } else if (path === '/api/plugins/install' && method === 'POST') {
+      installed = true
+      status = 201
+      result = { status: 'installed', name: 'review-kit', enabled: false }
+    } else if (path === '/api/plugins/review-kit/enabled' && method === 'PUT') {
+      enabled = route.request().postDataJSON().enabled
+      result = { name: 'review-kit', enabled }
+    } else if (path === '/api/plugins/review-kit' && method === 'DELETE') {
+      installed = false
+      result = { status: 'deleted' }
+    }
+    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(result) })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '插件', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '插件管理' })).toBeVisible()
+  await expect(page.getByText('尚未安装插件')).toBeVisible()
+  await page.locator('#plugin-upload').setInputFiles({
+    name: 'review-kit.zip', mimeType: 'application/zip',
+    buffer: Buffer.from('mock zip bytes'),
+  })
+  await expect(page.getByRole('heading', { name: /review-kit/ })).toBeVisible()
+  await page.getByRole('checkbox', { name: '启用 review-kit' }).check()
+  await expect(page.getByRole('checkbox', { name: '启用 review-kit' })).toBeChecked()
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: '卸载插件' }).click()
+  await expect(page.getByText('尚未安装插件')).toBeVisible()
+})

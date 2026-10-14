@@ -237,6 +237,30 @@ class HookManager:
         """Re-read hook configuration from disk."""
         self._load_config()
 
+    def register_plugin_hooks(self, hooks: dict[str, Any]) -> None:
+        """Add trusted plugin hooks in memory without touching user config.
+
+        Plugins are executed in deterministic discovery order, after the
+        user's hooks. No persistent keys remain after a plugin is disabled.
+        """
+        if not isinstance(hooks, dict):
+            return
+        for event, attr in (
+            ("SessionStart", "session_start"),
+            ("PreToolUse", "pre_tool_use"),
+            ("PostToolUse", "post_tool_use"),
+            ("SessionEnd", "session_end"),
+        ):
+            raw = hooks.get(event, [])
+            if not isinstance(raw, list):
+                continue
+            try:
+                parsed = self._parse_matchers(raw)
+            except (TypeError, ValueError, OverflowError):
+                logger.warning("Ignoring malformed plugin %s hook", event)
+                continue
+            getattr(self._config, attr).extend(parsed)
+
     # ------------------------------------------------------------------
     # Internal — configuration loading
     # ------------------------------------------------------------------

@@ -16,6 +16,10 @@
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
 | 本次仓库文档审计 | [审计记录](AUDIT_2026-10-13.md) |
 
+## Skills 与插件
+
+- [插件与 Skills 加载设计](design/2026-10-14-plugin-skills-lifecycle.md)：ZIP 安装、启用/信任、动态发现、资源安全与当前限制
+
 ## 稳定版发布准备
 
 - [v0.1 准备清单](releases/v0.1-readiness.md)：自动化门禁、真实环境验收与当前阻塞项

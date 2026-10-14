@@ -102,6 +102,12 @@ Web (desktop/web)          OpenTUI (tui-v2)
 
 这不表示已经验证所有第三方 MCP Server 的 OAuth、SSE 续传或跨网络故障场景。工具取消为尽力而为，远端已执行的副作用不能自动回滚。详见 [MCP SDK 版本说明](docs/design/2026-10-13-mcp-sdk-version-compat.md)。
 
+## 项目插件与 Skills
+
+现支持在 Web **「插件」** 页面上传本地 ZIP 插件、启用/禁用、卸载，以及对包含 Python Feature / Hook 的插件单独设置代码信任。项目原有的 Skill、MCP、Feature 是三种不同的扩展层：插件包可以声明 Skills，但不会自动执行第三方脚本或联网安装包。
+
+插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。执行插件自定义代码需要同时设置显式信任与服务端 `RIDGE_ALLOW_PLUGIN_CODE=1`，此时是宿主机内执行代码，**不属于沙箱**。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
+
 ## 可选 Langfuse / OpenTelemetry 追踪
 
 本地 JSONL/HTML Trace 默认保持独立。远程追踪**默认关闭**，仅导出 Agent turn、模型调用和工具调用的层级、耗时、状态、工具/模型名称和 Token 计数，不导出提示词、文件内容、工具参数/输出或异常堆栈。安装可选依赖：

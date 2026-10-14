@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
 import TracePanel from './components/TracePanel'
+import PluginsPanel from './components/PluginsPanel'
 import { createSessionEventHandler } from './state/sessionEvents'
 import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
@@ -66,7 +67,7 @@ function AppCore() {
   const [newTeamName, setNewTeamName] = useState('')
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'mcp'|'hooks'|'trace'>('sessions')
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'trace'>('sessions')
   const [moreOpen, setMoreOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
@@ -242,6 +243,7 @@ function AppCore() {
     { key: 'sessions' as const, icon: Icons.chat, label: '会话' },
     { key: 'files' as const, icon: Icons.folder, label: '文件' },
     { key: 'skills' as const, icon: Icons.skill, label: '技能' },
+    { key: 'plugins' as const, icon: Icons.settings, label: '插件' },
     { key: 'mcp' as const, icon: Icons.settings, label: 'MCP' },
     { key: 'hooks' as const, icon: Icons.clock, label: 'Hooks' },
     { key: 'trace' as const, icon: Icons.brain, label: 'Trace' },
@@ -411,6 +413,8 @@ function AppCore() {
         {sidebarTab === 'skills' && (
           <SkillsPanel skills={skillsList} onRefresh={async () => { try { setSkillsList(await api.skills.list()) } catch {} }} />
         )}
+
+        {sidebarTab === 'plugins' && <PluginsPanel />}
 
         {/* ── MCP management panel ── */}
         {sidebarTab === 'mcp' && (

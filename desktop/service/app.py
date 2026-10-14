@@ -196,6 +196,8 @@ def create_app(
     app.state.project_root = os.path.abspath(project_root)
     app.state.config_catalog = ConfigCatalogService(app.state.project_root)
     app.state.skill_catalog = SkillCatalogService(app.state.project_root)
+    from desktop.service.application.plugin_catalog import PluginCatalogService
+    app.state.plugin_catalog = PluginCatalogService(app.state.project_root)
     app.state._started_at = time.time()
 
     # ── Lifespan ──────────────────────────────────────────────────
@@ -704,6 +706,34 @@ def create_app(
     @app.post("/api/skills/validate")
     async def validate_skill(body: SkillCreate):
         return app.state.skill_catalog.validate(body.name, body.description, body.content)
+
+    # ── Installable project plugins ───────────────────────────────
+
+    @app.get("/api/plugins")
+    async def list_plugins():
+        return app.state.plugin_catalog.list()
+
+    @app.post("/api/plugins/install", status_code=201)
+    async def install_plugin(file: UploadFile = File(...)):
+        # The handler never consumes an unbounded body and never fetches a
+        # plugin from a user-supplied URL. Auth middleware protects the route.
+        data = await file.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise PayloadTooLargeError("Plugin ZIP exceeds 2 MiB")
+        return app.state.plugin_catalog.install(data)
+
+    @app.put("/api/plugins/{name}/enabled")
+    async def enable_plugin(name: str, body: dict):
+        return app.state.plugin_catalog.enable(name, body.get("enabled"))
+
+    @app.put("/api/plugins/{name}/trusted")
+    async def trust_plugin(name: str, body: dict):
+        # This is still gated by RIDGE_ALLOW_PLUGIN_CODE on the backend.
+        return app.state.plugin_catalog.trust(name, body.get("trusted"))
+
+    @app.delete("/api/plugins/{name}")
+    async def uninstall_plugin(name: str):
+        return app.state.plugin_catalog.delete(name)
 
     # ── Enable/disable state ───────────────────────────────────────
 

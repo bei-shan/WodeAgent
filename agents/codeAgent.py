@@ -71,6 +71,9 @@ class CodeAgent(Agent):
         super().__init__(name, llm, system_prompt=system_prompt, config=config)
         self.project_root = project_root
         self._original_project_root = project_root
+        # Keep the shared project skill/plugin catalog stable when a Web
+        # session rebinds only its tools to a per-session workspace.
+        self._skill_catalog_root = str(Path(project_root).resolve())
         self.tool_registry = tool_registry
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
         if self._sandbox_mode not in {"local_trusted", "docker"}:
@@ -162,7 +165,7 @@ class CodeAgent(Agent):
         )
 
         # Skills
-        self._skill_loader = SkillLoader(self.project_root)
+        self._skill_loader = SkillLoader(self._skill_catalog_root)
         self._skills_prompt = ""
         self._refresh_skills_prompt()
 
@@ -513,7 +516,9 @@ class CodeAgent(Agent):
         if hasattr(self, "context_builder"):
             self.context_builder.project_root = self.project_root
         if hasattr(self, "_skill_loader"):
-            self._skill_loader = SkillLoader(self.project_root)
+            self._skill_loader = SkillLoader(
+                getattr(self, "_skill_catalog_root", self.project_root)
+            )
             self._refresh_skills_prompt()
             if hasattr(self, "context_builder"):
                 self.context_builder.set_skills_prompt(self._skills_prompt)
