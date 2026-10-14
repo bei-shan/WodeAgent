@@ -85,6 +85,7 @@ def run_soak(
             while ((iterations > 0 and cycles < iterations) or
                    (iterations == 0 and time.monotonic() - started < duration_seconds)):
                 sid = controller.create_session(FakeAgent)
+                cycles += 1
                 session = controller.get_session(sid)
                 try:
                     if not session.send_message(f"soak turn {cycles}"):
@@ -102,14 +103,15 @@ def run_soak(
                         continue
                     latest = session.events.latest_seq
                     # Two independent consumers can replay identical events.
-                    if (latest < 2 or
-                            session.events.read_after(0).latest_seq !=
-                            session.events.read_after(0).latest_seq):
+                    first = session.events.read_after(0)
+                    second = session.events.read_after(0)
+                    if (latest < 2 or first.events != second.events
+                            or not first.events
+                            or first.events[-1].event.type != "turn.completed"):
                         errors.append("event_replay_failure")
                 finally:
                     if not controller.delete_session(sid):
                         errors.append("session_close_failed")
-                cycles += 1
                 if cycles % 10 == 0:
                     last = snapshot()
                     peak_threads = max(peak_threads, last["threads"])
