@@ -127,6 +127,18 @@ cd tui-v2 && bun install && bun run typecheck && bun test
 
 阅读 [文档导航](docs/README.md) 查看最新架构与历史设计的区别；[CONTRIBUTING.md](CONTRIBUTING.md) 介绍开发约定；[品牌与旧命名兼容说明](docs/REBRANDING.md) 记录改名边界和后续迁移工作。
 
+## v0.1 发布准备
+
+已增加不联网、不读取密钥的 [本地环境预检](scripts/v01_preflight.py)，可以分别检查 Python、Web 和 Bun/OpenTUI 环境：
+
+```bash
+python scripts/v01_preflight.py --target core
+python scripts/v01_preflight.py --target web --json
+python scripts/v01_preflight.py --target tui --json
+```
+
+**v0.1.0 尚未正式发布**：自动化测试通过不代表真实模型与长期运行场景已验收。发布前检查项、人工验收、已知问题与回退说明见 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md)。
+
 ## 当前限制
 
 - Web 主要定位可信本机单用户场景；没有提供多租户 RBAC 或安全的公网托管方案。
