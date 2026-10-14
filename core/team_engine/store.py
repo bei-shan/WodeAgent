@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -283,12 +284,13 @@ class TeamStore:
         work_dir.mkdir(parents=True, exist_ok=True)
         path = self._work_items_path(team_name, owner_name)
         lock_path = self._work_items_lock_path(team_name, owner_name)
+        # Publish one complete snapshot under the writer lock. A previous
+        # append/truncate implementation exposed partial JSON to readers.
         with self.lock(lock_path):
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(item, ensure_ascii=False))
-                f.write("\n")
-        max_items = int(os.getenv("TEAM_MAX_WORK_ITEMS", "5000"))
-        self._trim_jsonl(path, max_items)
+            rows = self._read_jsonl(path)
+            rows.append(item)
+            max_items = max(1, int(os.getenv("TEAM_MAX_WORK_ITEMS", "5000")))
+            self._write_jsonl(path, rows[-max_items:])
         return item
 
     def list_work_items(
@@ -486,7 +488,22 @@ class TeamStore:
 
     @staticmethod
     def _write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
-        with path.open("w", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row, ensure_ascii=False))
-                f.write("\n")
+        """Publish an entire work queue atomically for lock-free readers."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=".work-items-", suffix=".tmp", delete=False,
+            ) as f:
+                tmp = Path(f.name)
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False))
+                    f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            tmp = None
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
