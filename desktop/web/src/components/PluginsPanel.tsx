@@ -74,6 +74,11 @@ export default function PluginsPanel() {
             <p className="text-xs text-gray-500 mt-1">
               {plugin.skills} 个 Skill 目录 {plugin.has_code ? '· 包含可执行 Hook / Python 扩展' : '· 仅声明式组件'}
             </p>
+            <p className="text-xs text-gray-400 mt-1 break-all">
+              来源：{plugin.source || 'local_directory'}
+              {plugin.sha256 ? ` · ZIP SHA-256: ${plugin.sha256.slice(0, 16)}…` : ''}
+              {plugin.previous_version ? ` · 上一版 v${plugin.previous_version}` : ''}
+            </p>
           </div>
           <label className="shrink-0 text-xs flex items-center gap-1.5 text-gray-700">
             <input type="checkbox" aria-label={`启用 ${plugin.name}`}
@@ -103,11 +108,44 @@ export default function PluginsPanel() {
             信任代码
           </label>
         </div>}
-        <button type="button" disabled={busy}
-          onClick={() => {
-            if (window.confirm(`确定卸载插件 ${plugin.name}？`)) void execute(() => api.plugins.delete(plugin.name))
-          }}
-          className="text-xs text-red-600 hover:underline disabled:opacity-50">卸载插件</button>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          {plugin.sha256 && <label className="flex items-center gap-1.5 text-gray-700">
+            <input type="checkbox" aria-label={`锁定 ${plugin.name} 版本`}
+              checked={!!plugin.pinned} disabled={busy}
+              onChange={event => {
+                const pinned = event.target.checked
+                setItems(previous => previous.map(item =>
+                  item.name === plugin.name ? { ...item, pinned } : item
+                ))
+                void execute(() => api.plugins.pin(plugin.name, pinned))
+              }} />
+            锁定版本
+          </label>}
+          <label className={`text-blue-600 cursor-pointer ${busy || plugin.pinned ? 'opacity-50 pointer-events-none' : ''}`}>
+            更新 ZIP
+            <input type="file" accept=".zip,application/zip" className="sr-only"
+              aria-label={`更新 ${plugin.name} ZIP`} disabled={busy || !!plugin.pinned}
+              onChange={event => {
+                const file = event.target.files?.[0]
+                event.currentTarget.value = ''
+                if (!file) return
+                if (file.size > 2 * 1024 * 1024) { setError('ZIP 不能超过 2 MiB'); return }
+                if (!window.confirm(`更新 ${plugin.name} 后会禁用插件并撤销代码信任，确定继续？`)) return
+                void execute(() => api.plugins.update(plugin.name, file))
+              }} />
+          </label>
+          {plugin.rollback_available && <button type="button" disabled={busy}
+            onClick={() => {
+              if (window.confirm(`回退 ${plugin.name} 到上一个版本？插件将保持禁用。`)) {
+                void execute(() => api.plugins.rollback(plugin.name))
+              }
+            }} className="text-blue-600 hover:underline disabled:opacity-50">回退上一版</button>}
+          <button type="button" disabled={busy}
+            onClick={() => {
+              if (window.confirm(`确定卸载插件 ${plugin.name}？`)) void execute(() => api.plugins.delete(plugin.name))
+            }}
+            className="text-red-600 hover:underline disabled:opacity-50">卸载插件</button>
+        </div>
       </article>)}
     </div>
   </section>
