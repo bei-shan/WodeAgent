@@ -269,3 +269,63 @@ def test_skill_tool_create_uses_shared_catalog_when_workspace_is_rebound(tmp_pat
     assert loader.get_skill("generated-review", refresh=True) is not None
     assert "---" in skill_file.read_text()
     assert parse_response(tool.run({"name": "generated-review"}))["status"] == "success"
+
+
+@pytest.mark.parametrize("resource", [
+    "../SKILL.md", "/etc/passwd", "references/../../secret.md",
+    "references\\\\escape.md", ".hidden.md",
+])
+def test_skill_resource_reader_denies_unsafe_paths(tmp_path, resource):
+    from tools.builtin.skill import SkillTool
+    from tests.utils.test_helpers import parse_response
+
+    catalog = PluginCatalog(tmp_path)
+    catalog.install_zip(bundle())
+    catalog.set_enabled("review-kit", True)
+    tool = SkillTool(project_root=tmp_path, skill_loader=SkillLoader(str(tmp_path)))
+    result = parse_response(tool.run({
+        "action": "read_resource", "name": "review", "resource": resource,
+    }))
+    assert result["status"] == "error", result
+
+
+def test_read_plugin_skill_reference_works_from_isolated_web_workspace(tmp_path):
+    from tools.builtin.skill import SkillTool
+    from tests.utils.test_helpers import parse_response
+
+    catalog = PluginCatalog(tmp_path)
+    catalog.install_zip(bundle())
+    catalog.set_enabled("review-kit", True)
+    loader = SkillLoader(str(tmp_path))
+    isolated = tmp_path / ".mycodeagent/sessions/abcdef123456"
+    isolated.mkdir(parents=True)
+    tool = SkillTool(project_root=isolated, skill_loader=loader)
+    result = parse_response(tool.run({
+        "action": "read_resource", "name": "review",
+        "resource": "references/checklist.md",
+    }))
+    assert result["status"] == "success", result
+    assert result["data"]["content"] == "DO NOT DROP RESOURCE"
+    catalog.set_enabled("review-kit", False)
+    result = parse_response(tool.run({
+        "action": "read_resource", "name": "review",
+        "resource": "references/checklist.md",
+    }))
+    assert result["status"] == "error"
+
+
+def test_symlinked_skill_reference_is_not_read(tmp_path):
+    from tools.builtin.skill import SkillTool
+    from tests.utils.test_helpers import parse_response
+    builtin = tmp_path / "skills/local"
+    builtin.mkdir(parents=True)
+    (builtin / "SKILL.md").write_text(
+        "---\nname: local\ndescription: Local skill\n---\n")
+    external = tmp_path.parent / (tmp_path.name + "-outside-resource.md")
+    external.write_text("PRIVATE")
+    (builtin / "leak.md").symlink_to(external)
+    tool = SkillTool(project_root=tmp_path, skill_loader=SkillLoader(str(tmp_path)))
+    result = parse_response(tool.run({
+        "action": "read_resource", "name": "local", "resource": "leak.md",
+    }))
+    assert result["status"] == "error"
