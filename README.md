@@ -96,6 +96,12 @@ Web (desktop/web)          OpenTUI (tui-v2)
 
 设计细节参见 [架构参考方案](docs/design/2026-10-13-reference-agent-architecture.md)、[TS TUI 分层设计](docs/design/2026-10-13-tui-v2-layered-architecture.md) 和 [工作区安全说明](docs/design/2026-10-13-descriptor-anchored-workspaces.md)。`docs/` 内一些较早的设计材料为历史记录，不应视为当前功能承诺。
 
+## MCP SDK 与连接稳定性
+
+默认使用 MCP Python SDK **2.x**；HTTP 采用新版 Streamable HTTP 客户端，同时保留独立 CI 通道测试 MCP 1.x 的兼容性。MCP stdio 子进程和 HTTP 会话由同一异步所有者管理，同一客户端连续同步工具调用会复用连接，不再每次启动新的 MCP Server。测试包含本地真实 stdio 和 Streamable HTTP 服务，覆盖初始化、调用、资源关闭及超时／取消。
+
+这不表示已经验证所有第三方 MCP Server 的 OAuth、SSE 续传或跨网络故障场景。工具取消为尽力而为，远端已执行的副作用不能自动回滚。详见 [MCP SDK 版本说明](docs/design/2026-10-13-mcp-sdk-version-compat.md)。
+
 ## 可选 Langfuse / OpenTelemetry 追踪
 
 本地 JSONL/HTML Trace 默认保持独立。远程追踪**默认关闭**，仅导出 Agent turn、模型调用和工具调用的层级、耗时、状态、工具/模型名称和 Token 计数，不导出提示词、文件内容、工具参数/输出或异常堆栈。安装可选依赖：
