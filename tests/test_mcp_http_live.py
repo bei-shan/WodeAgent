@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import http.server
 import json
+import socket
 import threading
 import time
 
@@ -71,6 +72,16 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
             with type(self).lock:
                 type(self).count += 1
                 count = type(self).count
+            # Simulate a committed write whose response is lost while the
+            # underlying TCP socket disappears. The client must not repeat.
+            if message.get("params", {}).get("name") == "drop_after_commit":
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self.connection.close()
+                return
             value = str(message.get("params", {}).get("arguments", {}).get("value"))
             result = {
                 "content": [{"type": "text", "text": f"http:{value}:{count}"}],
@@ -192,3 +203,25 @@ def test_real_http_inflight_tool_receives_interrupt_and_releases_client():
         finally:
             c.close_sync()
         assert not c.is_connected
+
+
+def test_lost_reply_does_not_reexecute_remote_side_effect_and_next_call_recovers(monkeypatch):
+    # A remote tool may complete even when its HTTP response never arrives.
+    # The SDK may surface a protocol error, EOF, or local timeout.
+    monkeypatch.setattr(mcp_module, "_MCP_CALL_TIMEOUT", 0.35)
+    with live_server() as url:
+        c = MCPClient(MCPClientConfig(transport="http", url=url))
+        try:
+            c.list_tools_sync()
+            with pytest.raises(Exception):
+                c.call_tool_sync("drop_after_commit", {"value": "write-once"})
+            committed = MCPHandler.count
+            assert committed == 1, "Client automatically replayed a committed tool"
+            # A new explicit user action can proceed after the failed call.
+            result = _text(c.call_tool_sync("ping", {"value": "new-action"}))
+            assert result == "http:new-action:2"
+            assert MCPHandler.count == 2
+            methods = [method for verb, method in MCPHandler.calls if verb == "POST"]
+            assert methods.count("tools/call") == 2
+        finally:
+            c.close_sync()
