@@ -95,6 +95,7 @@ class SkillTool(Tool):
                 data={"skills": [{"name": s.name, "description": s.description} for s in skills]},
                 text="Available skills:\n" + ("\n".join(lines) if lines else "(none)"),
                 params_input=params_input,
+                time_ms=int((time.monotonic() - start_time) * 1000),
             )
 
         if action == "create":
@@ -120,6 +121,7 @@ class SkillTool(Tool):
                     data={"name": name.strip(), "path": str(target.parent)},
                     text=f"Skill '{name}' created at {target.parent}",
                     params_input=params_input,
+                    time_ms=int((time.monotonic() - start_time) * 1000),
                 )
             except FileExistsError:
                 return self.create_error_response(
@@ -194,6 +196,7 @@ class SkillTool(Tool):
                 data={"name": meta.name, "resource": resource, "content": data},
                 text=f"Loaded resource for skill '{meta.name}'.",
                 params_input=params_input,
+                time_ms=int((time.monotonic() - start_time) * 1000),
             )
 
         # Default: load
