@@ -20,6 +20,10 @@ cd ../../tui-v2 && bun install && bun run typecheck && bun test
 
 完整测试需要相应依赖；Docker 集成场景使用仓库 CI 中独立的工作流命令。不能执行的测试应在 PR 中写明原因，不要宣称已通过。
 
+## v0.1 发布门禁
+
+运行 `python scripts/v01_preflight.py --target core` 检查本地 Python 依赖。Web/TUI 环境使用 `--target web`、`--target tui`，`--json` 可供 CI 使用。发布前需按 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md) 记录自动化和真实环境验收结果；未完成门禁时不创建正式标签。
+
 ## PR 约定
 
 1. 明确问题、影响模块和行为变化；拆分纯文档变更与功能性迁移。
