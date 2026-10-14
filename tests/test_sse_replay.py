@@ -109,7 +109,7 @@ def test_sse_auth_and_invalid_cursor_rejected_without_streaming(tmp_path, monkey
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("WEB_AUTH_TOKEN", "test-long-local-token-123456789012345")
     app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost:8000") as client:
         assert client.get("/api/sessions/nope/events").status_code == 401
         headers = {"Authorization": "Bearer test-long-local-token-123456789012345"}
         assert client.get("/api/sessions/nope/events", headers=headers).status_code == 404
