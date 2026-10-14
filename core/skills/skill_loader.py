@@ -145,7 +145,7 @@ class SkillLoader:
         if not isinstance(name, str) or not _SKILL_NAME_PATTERN.fullmatch(name):
             raise ValueError("Invalid skill name")
         if (not isinstance(description, str) or not description.strip()
-                or "\\n" in description or "\\r" in description):
+                or "\n" in description or "\r" in description):
             raise ValueError("Invalid skill description")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Skill content is required")
@@ -162,9 +162,9 @@ class SkillLoader:
                 prefix=".skill-", suffix=".tmp", delete=False,
             ) as handle:
                 temp = Path(handle.name)
-                handle.write("---\\nname: " + name + "\\ndescription: " +
+                handle.write("---\nname: " + name + "\ndescription: " +
                              json.dumps(description, ensure_ascii=False) +
-                             "\\n---\\n\\n" + content.strip() + "\\n")
+                             "\n---\n\n" + content.strip() + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             if not self._safe_skill_path(target):
