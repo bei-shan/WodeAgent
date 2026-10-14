@@ -206,13 +206,14 @@ class MCPClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _call_with_retry(self, operation_name: str, coro_factory, timeout: float) -> Any:
-        """Execute *coro_factory(session)* with a single retry on transport
-        error, wrapped in ``asyncio.wait_for``.
+    async def _call_with_retry(
+        self, operation_name: str, coro_factory, timeout: float,
+        *, retry_on_disconnect: bool = True,
+    ) -> Any:
+        """Retry disconnects only on read-only operations, never tools.
 
-        Raises:
-            TimeoutError: if the operation exceeds *timeout* seconds.
-            ConnectionError: if the transport is closed and the retry also fails.
+        A write-capable MCP tool might complete remotely before its reply
+        is lost. Replaying it automatically would duplicate side effects.
         """
         async def _do_call(session):
             try:
@@ -227,16 +228,22 @@ class MCPClient:
             return await _do_call(session)
         except TimeoutError:
             raise
-        except anyio.ClosedResourceError:
-            logger.debug("MCP transport closed during '%s', reconnecting...", operation_name)
+        except (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream) as exc:
+            logger.warning("MCP transport dropped during '%s'; invalidating session", operation_name)
             await self.close()
+            if not retry_on_disconnect:
+                raise ConnectionError(
+                    f"MCP tool '{operation_name}' outcome unknown after transport loss; "
+                    "request was not replayed. Check remote state before retrying."
+                ) from exc
             session = await self.connect()
             try:
                 return await _do_call(session)
-            except anyio.ClosedResourceError:
+            except (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream) as retry_exc:
+                await self.close()
                 raise ConnectionError(
                     f"MCP transport closed during '{operation_name}' and reconnection failed"
-                )
+                ) from retry_exc
 
     # ------------------------------------------------------------------
     # MCP operations
@@ -254,6 +261,7 @@ class MCPClient:
             f"call_tool:{name}",
             lambda s: s.call_tool(name, arguments),
             timeout=_MCP_CALL_TIMEOUT,
+            retry_on_disconnect=False,
         )
 
     async def list_resources(self) -> Any:

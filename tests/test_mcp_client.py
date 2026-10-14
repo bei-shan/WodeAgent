@@ -141,7 +141,7 @@ class TestMCPClientReconnect(unittest.TestCase):
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")
     def test_call_tool_retries_on_closed_resource(self, mock_session_cls, mock_stdio):
-        """call_tool reconnects and retries once on ClosedResourceError."""
+        """Unknown-outcome tool calls are never implicitly replayed."""
         import anyio
 
         mock_read = AsyncMock()
@@ -160,9 +160,15 @@ class TestMCPClientReconnect(unittest.TestCase):
 
         mock_session_cls.side_effect = [bad_session, good_session]
 
-        result = self.client.call_tool_sync("test_tool", {"arg": "val"})
+        with self.assertRaisesRegex(ConnectionError, "outcome unknown.*not replayed"):
+            self.client.call_tool_sync("test_tool", {"arg": "val"})
+        self.assertEqual(bad_session.call_tool.await_count, 1)
+        self.assertEqual(good_session.call_tool.await_count, 0)
+        self.assertFalse(self.client.is_connected)
+        # A later explicitly initiated tool request can reconnect.
+        result = self.client.call_tool_sync("test_tool", {"arg": "confirmed"})
         self.assertIsNotNone(result)
-        # Both sessions should have been attempted
+        self.assertEqual(good_session.call_tool.await_count, 1)
         self.assertEqual(mock_session_cls.call_count, 2)
 
     @patch("tools.mcp.client.stdio_client")
