@@ -140,7 +140,7 @@ class ReadTool(Tool):
             resolved = str(target.resolve())
             gate = getattr(self, "_permission_gate", None)
             if gate is not None:
-                decision = gate.check(resolved)
+                decision = gate.check(resolved, action="读取")
                 if decision == "granted":
                     pass  # 已授权，继续执行
                 elif decision == "ask":
