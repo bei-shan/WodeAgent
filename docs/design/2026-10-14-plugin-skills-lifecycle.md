@@ -51,6 +51,13 @@ feature.py                    # optional code; stays inert by default
 `name` must be kebab-case. Component paths must be relative with no
 traversal or symlinks. Skills use frontmatter with `name` and
 `description`, and are *loaded on demand* by the standard `Skill` tool.
+The standard `Skill` tool also supports
+`{"action":"read_resource","name":"review","resource":"references/checklist.md"}`
+for on-demand, text-only bundled reference access. It rejects absolute and
+parent paths, symlinks, unsupported types and files over 128 KiB. This
+allows isolated Web sessions to use reference material without broadening
+the ordinary workspace Read tool's filesystem permissions.
+
 The plugin's Skill resources remain at their original plugin folder (not
 injected into a writable runtime copy). Project runtime Skills override
 source/plugin names; built-in source Skills override plugin names.
