@@ -99,6 +99,18 @@ plugin trust. The Web service must remain local-only or protected by
 its configured authentication; **plugin management is not safe as an
 unauthenticated public upload endpoint**.
 
+The legacy Web Skills enabled switch writes `skill_state.json`. The
+Agent's SkillLoader now honors these disable flags on refresh and when the
+Skill tool loads a named skill. The Skill tool's `create` action is routed
+through the shared SkillLoader with atomic writes, instead of silently
+writing to an isolated Web session workspace where the shared catalog
+cannot see it.
+
+An independent Agent Teams regression also closes a race in `TeamStore`:
+work-item JSONL snapshots are written to unique temporary files and
+atomically replaced while holding the per-owner writer lock. Concurrent
+readers now see complete work-item records, not half-written JSON lines.
+
 Existing bundled source Skills now seed **complete** resource directories
 with symlinks skipped, keeping references and scripts intact. The Web
 Agent keeps the shared project Skill/Plugin catalog across session
