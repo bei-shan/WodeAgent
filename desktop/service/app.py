@@ -439,6 +439,38 @@ def create_app(
     # WebSocket — event stream
     # ═══════════════════════════════════════════════════════════
 
+    @app.get("/api/sessions/{sid}/events")
+    async def session_sse_events(
+        request: Request, sid: str, after: str | None = Query(None),
+    ):
+        """SSE with Last-Event-ID replay; complements the WebSocket endpoint."""
+        from desktop.service.sse_stream import parse_event_cursor, follow_events
+
+        session = app.state.controller.get_session(sid)
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        raw_header = request.headers.get("last-event-id")
+        raw = raw_header if raw_header is not None else after
+        try:
+            cursor, reset_reason = parse_event_cursor(raw, session.events, busy=session.busy)
+        except ValueError as exc:
+            raise InvalidInputError("Invalid event cursor") from exc
+        # Unsequenced prompts are only restored for a fresh subscriber.
+        pending = tuple(session.pending_prompts()) if raw is None else ()
+        return StreamingResponse(
+            follow_events(
+                session.events, cursor=cursor, reset_reason=reset_reason,
+                events=_STREAM_EVENTS, sanitize=_sanitize_payload,
+                disconnected=request.is_disconnected, pending=pending,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
     @app.websocket("/api/sessions/{sid}/stream")
     async def event_stream(ws: WebSocket, sid: str):
         """Stream agent events to the frontend in real time."""

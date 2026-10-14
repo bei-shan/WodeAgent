@@ -258,6 +258,40 @@ export const teams = {
  * Reconnect with bounded backoff. Disconnecting intentionally clears timers
  * and prevents a stale session's events from leaking into a new one.
  */
+/** Optional browser SSE transport. Native EventSource automatically resends
+ * Last-Event-ID after network loss; the server checks its journal epoch. */
+export function connectSseStream(
+  sessionId: string,
+  onEvent: (e: AgentEvent) => void,
+  onDisconnect: () => void,
+  onConnect?: () => void,
+  replayFromStart = false,
+): () => void {
+  const suffix = replayFromStart ? '?after=0' : ''
+  const source = new EventSource(
+    `/api/sessions/${encodeURIComponent(sessionId)}/events${suffix}`,
+  )
+  let closed = false
+  let lastSeq: number | null = replayFromStart ? 0 : null
+  source.onopen = () => { if (!closed) onConnect?.() }
+  source.onmessage = msg => {
+    if (closed) return
+    try {
+      const event = JSON.parse(msg.data) as AgentEvent
+      if (event.type === 'stream.reset' && typeof event.payload?.resume_from === 'number') {
+        lastSeq = event.payload.resume_from
+      }
+      if (typeof event.seq === 'number') {
+        if (lastSeq !== null && event.seq <= lastSeq) return
+        lastSeq = event.seq
+      }
+      onEvent(event)
+    } catch { /* Malformed network frame: retain connection. */ }
+  }
+  source.onerror = () => { if (!closed) onDisconnect() }
+  return () => { closed = true; source.close() }
+}
+
 export function connectStream(
   sessionId: string,
   onEvent: (e: AgentEvent) => void,
@@ -265,6 +299,9 @@ export function connectStream(
   onConnect?: () => void,
   replayFromStart = false,
 ): () => void {
+  if (import.meta.env.VITE_STREAM_TRANSPORT === 'sse') {
+    return connectSseStream(sessionId, onEvent, onDisconnect, onConnect, replayFromStart)
+  }
   let ws: WebSocket | null = null
   // Existing session: tail after loading the saved history.
   // New session: start at zero so events emitted while connecting are replayed.
