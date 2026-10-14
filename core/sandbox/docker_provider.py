@@ -6,6 +6,7 @@ Docker image is preloaded; no daemon-triggered pull or credential propagation.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import secrets
@@ -13,7 +14,10 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Callable
+
+from core.runtime.process_execution import run_process
 
 
 class SandboxUnavailable(RuntimeError):
@@ -26,6 +30,7 @@ class CommandResult:
     stderr: str
     exit_code: int | None
     timed_out: bool = False
+    interrupted: bool = False
 
 
 class DockerCommandProvider:
@@ -53,7 +58,10 @@ class DockerCommandProvider:
             raise SandboxUnavailable("Invalid configured Docker image name")
         if not re.fullmatch(r"[1-9][0-9]*(?:[kKmMgG])?", memory):
             raise SandboxUnavailable("Invalid Docker memory limit")
-        if cpus <= 0 or cpus > 8 or pids_limit < 1 or pids_limit > 512:
+        if (isinstance(cpus, bool) or not isinstance(cpus, (int, float))
+                or not math.isfinite(cpus) or not 0 < cpus <= 8
+                or isinstance(pids_limit, bool) or not isinstance(pids_limit, int)
+                or not 1 <= pids_limit <= 512):
             raise SandboxUnavailable("Docker resource limits out of range")
         binary = docker_binary or shutil.which("docker")
         if not binary:
@@ -64,6 +72,7 @@ class DockerCommandProvider:
         self.cpus = cpus
         self.pids_limit = pids_limit
         self._run = runner or subprocess.run
+        self._runner_injected = runner is not None
 
     def command_argv(self, command: str, directory: str = ".") -> tuple[list[str], str]:
         if not isinstance(command, str) or not command.strip():
@@ -108,30 +117,70 @@ class DockerCommandProvider:
         ]
         return argv, name
 
-    def execute(self, command: str, directory: str = ".", timeout_seconds: float = 120) -> CommandResult:
-        if timeout_seconds <= 0 or timeout_seconds > 600:
+    def _force_remove(self, container_name: str) -> None:
+        """Clean up daemon-managed containers even when the Docker CLI dies."""
+        try:
+            self._run(
+                [self.docker_binary, "rm", "--force", container_name],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # Cleanup is best effort, but host execution is never a fallback.
+            pass
+
+    def execute(
+        self,
+        command: str,
+        directory: str = ".",
+        timeout_seconds: float = 120,
+        *,
+        cancel_event: Event | None = None,
+    ) -> CommandResult:
+        """Execute with a bounded deadline and turn-scoped cooperative stop.
+
+        The default subprocess path polls cancellation and kills the Docker CLI
+        process group. The daemon container is separately force-removed on a
+        timeout or interrupt; killing the CLI alone would leave work running.
+        An injected runner retains the legacy synchronous testing seam.
+        """
+        if (isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds)
+                or not 0 < timeout_seconds <= 600):
             raise ValueError("Command timeout is out of range")
         argv, container_name = self.command_argv(command, directory)
+        if cancel_event is not None and cancel_event.is_set():
+            return CommandResult("", "", None, interrupted=True)
         try:
-            result = self._run(
-                argv, capture_output=True, text=True, timeout=timeout_seconds,
-                check=False,
+            if self._runner_injected:
+                # Deterministic fake runners used by the CLI argument tests.
+                result = self._run(
+                    argv, capture_output=True, text=True,
+                    timeout=timeout_seconds, check=False,
+                )
+                if cancel_event is not None and cancel_event.is_set():
+                    self._force_remove(container_name)
+                    return CommandResult("", "", None, interrupted=True)
+                return CommandResult(
+                    stdout=result.stdout or "",
+                    stderr=result.stderr or "",
+                    exit_code=result.returncode,
+                )
+
+            result = run_process(
+                argv, shell=False, cwd=str(self.workspace), env=os.environ.copy(),
+                timeout=timeout_seconds, cancel_event=cancel_event,
             )
+            if result.timed_out or result.interrupted:
+                self._force_remove(container_name)
             return CommandResult(
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
+                stdout=result.stdout, stderr=result.stderr,
                 exit_code=result.returncode,
+                timed_out=result.timed_out,
+                interrupted=result.interrupted,
             )
         except subprocess.TimeoutExpired as exc:
-            # Killing only the Docker client is insufficient: remove the
-            # daemon-managed container too, with an independent short limit.
-            try:
-                self._run(
-                    [self.docker_binary, "rm", "--force", container_name],
-                    capture_output=True, text=True, timeout=10, check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            self._force_remove(container_name)
             stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
             return CommandResult(stdout, stderr, None, timed_out=True)
