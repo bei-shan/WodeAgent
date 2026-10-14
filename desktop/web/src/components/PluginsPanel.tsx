@@ -28,6 +28,7 @@ export default function PluginsPanel() {
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
+      try { setItems(await api.plugins.list()) } catch { /* keep diagnostic */ }
     } finally {
       setBusy(false)
     }
