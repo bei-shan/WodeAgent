@@ -38,7 +38,7 @@ def test_close_during_tool_call_stops_background_loop_after_last_user():
     try:
         client.close_sync()
         assert owner.is_alive(), "loop stopped while an in-flight tool needed it"
-        with pytest.raisesRegex(RuntimeError, "closing"):
+        with pytest.raises(RuntimeError, match="closing"):
             client.list_tools_sync()
     finally:
         release.set()
