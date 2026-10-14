@@ -94,6 +94,9 @@ export default function PluginsPanel() {
           </label>
         </div>
         {plugin.has_code && <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {plugin.trusted && !plugin.trust_valid && <p role="alert" className="mb-2 font-semibold">
+            插件文件在授权后发生变化（或使用旧版授权记录），代码执行授权已失效，请审查文件后取消并重新信任。
+          </p>}
           插件代码可能访问本地文件与执行命令。信任状态与启用状态独立，且服务端仍须显式设置 RIDGE_ALLOW_PLUGIN_CODE=1；未经信任时只加载 Skills。
           <label className="flex items-center gap-2 mt-2">
             <input type="checkbox" checked={plugin.trusted} disabled={busy}

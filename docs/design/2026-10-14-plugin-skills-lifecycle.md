@@ -90,6 +90,21 @@ sets `trusted=true` and (2) the operator sets
 `RIDGE_ALLOW_PLUGIN_CODE=1` on the backend. Such code is still arbitrary
 host-level code in the current process and **is not sandboxed**.
 Only enable the code gate for reviewed, locally trusted plugins.
+The trust decision is now bound to a SHA-256 fingerprint of the installed
+manifest, declared source files and other non-bytecode plugin resources. If
+a file is edited, added or replaced after consent, the next plugin discovery
+fails closed even when the old `trusted=true` flag remains set. The Web UI
+shows the stale approval state; disable trust, review the changed content,
+then explicitly trust again. Legacy unbound trust flags also fail closed.
+Generated `__pycache__` bytecode is not part of the fingerprint.
+
+**This is an integrity check, not an OS filesystem protection or a
+sandbox.** An already initialized Agent feature can remain in memory,
+and a malicious local actor with write access to the project can race
+file checks. Recreate sessions when revoking trust; for unreviewed code,
+leave `RIDGE_ALLOW_PLUGIN_CODE` disabled. Plugin-defined capability lists
+would be only advisory until executable extensions run in isolated workers.
+
 No hook config is written into `.mycode/hooks.json`; trusted hooks are
 registered in memory. Code components are selected at Agent creation;
 create a new session or restart the Agent after changing code trust.
