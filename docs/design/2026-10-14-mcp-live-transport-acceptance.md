@@ -18,3 +18,13 @@ inspect remote state before initiating a retry. The client discards the
 broken session so subsequent user-initiated actions can reconnect. Read-only
 MCP queries still retry once after connection loss. Timeout cancellation is
 not evidence that the remote side effect was rolled back.
+
+### SDK-level internal retry limitation
+
+The real HTTP lost-reply fixture demonstrates that MCP SDK v1/v2 may
+reissue transport requests internally after an HTTP disconnect. Preventing
+OUR application-layer replay reduces one source of duplicate side effects,
+but **does not provide exactly-once tool execution**. The caller receives
+an uncertain outcome; any operation that requires strict at-most-once must
+use server-supported idempotency keys or remote state reconciliation.
+Avoid issuing non-idempotent commands blindly after timeout or EOF.
