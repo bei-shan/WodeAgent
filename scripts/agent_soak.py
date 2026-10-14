@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import sys
 import tempfile
@@ -60,13 +61,18 @@ def run_soak(
     *, duration_seconds: float = 1800.0, iterations: int = 0,
     max_fd_growth: int = 12, max_thread_growth: int = 5,
     max_rss_growth_mib: float = 96.0,
+    min_interval_seconds: float = 1.0,
 ) -> dict:
-    if duration_seconds < 0 or iterations < 0 or (
-        duration_seconds == 0 and iterations == 0
-    ):
-        raise ValueError("Specify a positive duration or iteration count")
-    if any(x < 0 for x in (max_fd_growth, max_thread_growth, max_rss_growth_mib)):
-        raise ValueError("Resource growth limits must not be negative")
+    if (not math.isfinite(duration_seconds) or duration_seconds < 0
+            or duration_seconds > 7200 or iterations < 0
+            or (duration_seconds == 0 and iterations == 0)):
+        raise ValueError("Specify a finite duration of 0..7200s or positive iteration count")
+    if (not math.isfinite(min_interval_seconds)
+            or not 0 <= min_interval_seconds <= 10):
+        raise ValueError("min_interval_seconds must be between 0 and 10")
+    if (not math.isfinite(max_rss_growth_mib)
+            or any(x < 0 for x in (max_fd_growth, max_thread_growth, max_rss_growth_mib))):
+        raise ValueError("Resource growth limits must be finite and nonnegative")
 
     from core.runtime.session_controller import SessionController
     from tests.test_web_service import FakeAgent
@@ -119,6 +125,12 @@ def run_soak(
                         peak_fd = max(peak_fd or 0, last["fds"])
                     if last["rss_bytes"] is not None:
                         peak_rss = max(peak_rss or 0, last["rss_bytes"])
+                if iterations == 0:
+                    # Avoid an unbounded burst of disposable persisted
+                    # sessions (and associated disk pressure) in 30m runs.
+                    remaining = duration_seconds - (time.monotonic() - started)
+                    if remaining > 0:
+                        time.sleep(min(min_interval_seconds, remaining))
         finally:
             closed = controller.shutdown(grace_seconds=2)
             if closed["running"] or controller.list_sessions():
@@ -146,6 +158,7 @@ def run_soak(
         "result": "pass" if not errors else "fail",
         "mode": "offline_fake_provider",
         "duration_seconds": round(time.monotonic() - started, 2),
+        "interval_seconds": min_interval_seconds if iterations == 0 else 0,
         "cycles": cycles,
         "start": baseline, "end": last,
         "peak": {"fds": peak_fd, "threads": peak_threads, "rss_bytes": peak_rss},
@@ -159,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration-seconds", type=float, default=1800)
     parser.add_argument("--iterations", type=int, default=0)
+    parser.add_argument("--min-interval-seconds", type=float, default=1.0)
     parser.add_argument("--max-fd-growth", type=int, default=12)
     parser.add_argument("--max-thread-growth", type=int, default=5)
     parser.add_argument("--max-rss-growth-mib", type=float, default=96)
@@ -170,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             max_fd_growth=args.max_fd_growth,
             max_thread_growth=args.max_thread_growth,
             max_rss_growth_mib=args.max_rss_growth_mib,
+            min_interval_seconds=args.min_interval_seconds,
         )
     except ValueError as exc:
         parser.error(str(exc))
