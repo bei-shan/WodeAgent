@@ -31,6 +31,13 @@ React Web (desktop/web/)              OpenTUI (tui-v2/)
 | `tools/` 与 `core/sandbox/` | 工具注册、权限、执行与实验性隔离 | 权限拒绝、路径边界和竞态测试优先 |
 | `core/team_engine/` | 多 Agent 协作、任务板与持久化 | 避免与 session 层形成双向依赖 |
 
+## 扩展组件
+
+- `core/skills/skill_loader.py`：内置与用户 Skills，以及启用的插件 Skills（只读、按需加载）
+- `core/plugin_loader.py`：本地项目插件 ZIP 清单、生命周期、启用和显式代码信任
+- `core/features/`：内置 AgentFeature 及经双重授权的 Python 插件扩展；插件命令 Hook 不覆盖用户 hooks.json
+- `tools/mcp/`：独立的 MCP 传输/工具协议与权限边界，不等同于插件代码
+
 ## 安全边界
 
 - Web 的 `WEB_AUTH_TOKEN` 是本地单用户鉴权；Web 登录与 TUI Bearer 认证机制不同，不构成多租户权限体系。
