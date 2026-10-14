@@ -101,8 +101,13 @@ class SessionService:
         return {"status": "activated", "id": sid}
 
     def delete(self, sid: str) -> dict:
-        self._require_known(sid)
-        mem_deleted = self.controller.delete_session(sid)
+        live = self._require_known(sid)
+        # Never delete snapshots/workspace while the Agent could still write
+        # to them. Controller performs its own atomic busy/closed check to
+        # cover a message starting between lookup and deletion.
+        mem_deleted = self.controller.delete_session(sid) if live is not None else False
+        if live is not None and not mem_deleted:
+            raise ConflictError("Cannot delete a running session; interrupt it and wait for turn.finished")
         disk_deleted = self.catalog.delete_session(sid)
         if not mem_deleted and not disk_deleted:
             raise NotFoundError("Session not found")
