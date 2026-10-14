@@ -5,10 +5,22 @@ on:
     branches: [main]
     paths:
       - "tui-v2/**"
+      - "desktop/service/**"
+      - "core/runtime/**"
+      - "core/events.py"
+      - "core/session_manager.py"
+      - "core/context_engine/history_manager.py"
+      - "requirements.txt"
       - ".github/workflows/tui-v2.yml"
   pull_request:
     paths:
       - "tui-v2/**"
+      - "desktop/service/**"
+      - "core/runtime/**"
+      - "core/events.py"
+      - "core/session_manager.py"
+      - "core/context_engine/history_manager.py"
+      - "requirements.txt"
       - ".github/workflows/tui-v2.yml"
 
 jobs:
