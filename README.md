@@ -102,6 +102,10 @@ Web (desktop/web)          OpenTUI (tui-v2)
 
 这不表示已经验证所有第三方 MCP Server 的 OAuth、SSE 续传或跨网络故障场景。工具取消为尽力而为，远端已执行的副作用不能自动回滚。详见 [MCP SDK 版本说明](docs/design/2026-10-13-mcp-sdk-version-compat.md)。
 
+## HTTP MCP OAuth 登录
+
+已支持在项目 MCP 配置中显式声明 HTTP OAuth，并通过 `python scripts/mcp_oauth_login.py --server <name>` 在本地启动授权。使用 MCP 官方 SDK 的 PKCE、授权发现和令牌刷新。**这不是 Web 多用户 OAuth/OIDC 登录**；令牌保存在本机权限受限但未加密的项目缓存。配置与限制见 [MCP OAuth 文档](docs/design/2026-10-14-mcp-http-oauth.md)。
+
 ## 项目插件与 Skills
 
 现支持在 Web **「插件」** 页面上传本地 ZIP 插件、启用/禁用、卸载，以及对包含 Python Feature / Hook 的插件单独设置代码信任。项目原有的 Skill、MCP、Feature 是三种不同的扩展层：插件包可以声明 Skills，但不会自动执行第三方脚本或联网安装包。
