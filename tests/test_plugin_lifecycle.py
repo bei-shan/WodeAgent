@@ -248,3 +248,24 @@ def test_existing_skill_toggle_controls_actual_agent_loader(tmp_path, monkeypatc
     assert loader.get_skill("manual", refresh=True) is None
     assert cfg.toggle_enabled("skill", "manual")["enabled"] is True
     assert [m.name for m in loader.refresh_if_stale()] == ["manual"]
+
+
+def test_skill_tool_create_uses_shared_catalog_when_workspace_is_rebound(tmp_path):
+    from tools.builtin.skill import SkillTool
+    from tests.utils.test_helpers import parse_response
+
+    workspace = tmp_path / ".mycodeagent/sessions/deadbeef1234"
+    workspace.mkdir(parents=True)
+    loader = SkillLoader(str(tmp_path))
+    tool = SkillTool(project_root=workspace, skill_loader=loader)
+    response = parse_response(tool.run({
+        "action": "create", "name": "generated-review",
+        "description": "Review generated source", "content": "# Good review",
+    }))
+    assert response["status"] == "success", response
+    skill_file = tmp_path / ".mycodeagent/skills/generated-review/SKILL.md"
+    assert skill_file.is_file()
+    assert not (workspace / ".mycodeagent/skills/generated-review").exists()
+    assert loader.get_skill("generated-review", refresh=True) is not None
+    assert "---" in skill_file.read_text()
+    assert parse_response(tool.run({"name": "generated-review"}))["status"] == "success"
