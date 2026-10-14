@@ -11,7 +11,10 @@ from typing import Any, Optional
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+# Both SDK majors retain ClientSession and stdio. Streamable HTTP's
+# deprecated spelling was removed in v2, while its two-stream return
+# contract works with our read/write-only consumer.
+from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 import anyio
 from core.runtime.cancellation import current_cancel_event
 
