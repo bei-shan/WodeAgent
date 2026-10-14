@@ -161,3 +161,35 @@ def test_shutdown_validates_grace_period(tmp_path, monkeypatch):
     for bad in (-0.01, 30.1):
         with pytest.raises(ValueError):
             ctrl.shutdown(grace_seconds=bad)
+
+
+def test_bad_interrupt_hook_still_denies_pending_permission():
+    session = AgentSession("0123456789ab", lambda: None)
+    class Broken:
+        def interrupt(self):
+            raise RuntimeError("untrusted interrupt hook error")
+
+    session._agent = Broken()
+    session._busy = True
+    answer = []
+    worker = threading.Thread(
+        target=lambda: answer.append(
+            _SessionPermissionBroker(session)("/sensitive", "Write", "write")
+        )
+    )
+    worker.start()
+    try:
+        deadline = time.monotonic() + 2
+        while not session.pending_prompts() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert session.pending_prompts()
+        with pytest.raises(RuntimeError, match="interrupt hook"):
+            session.interrupt()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+        assert answer == ["denied"]
+        assert session.pending_prompts() == []
+    finally:
+        session._interaction_cancelled.set()
+        session._release_interaction_waiters()
+        worker.join(timeout=1)
