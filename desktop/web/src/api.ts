@@ -68,6 +68,7 @@ export interface PluginInfo {
   description: string
   enabled: boolean
   trusted: boolean
+  trust_valid?: boolean
   skills: number
   has_code: boolean
   source?: string
