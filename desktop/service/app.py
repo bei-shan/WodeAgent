@@ -211,9 +211,15 @@ def create_app(
     @app.on_event("shutdown")
     async def _shutdown():
         ctrl: SessionController = app.state.controller
-        for sid in ctrl.list_sessions():
-            ctrl.delete_session(sid)
-        logger.info("Service shut down")
+        # Do not close shared MCP clients or delete worktrees while a worker
+        # is executing. Keep the event loop responsive during the bounded drain.
+        result = await asyncio.to_thread(ctrl.shutdown, grace_seconds=2.0)
+        if result["running"]:
+            logger.warning(
+                "Service shutdown: %s session(s) did not stop within grace period",
+                result["running"],
+            )
+        logger.info("Service shut down; closed %s idle session(s)", result["closed"])
 
     # ═══════════════════════════════════════════════════════════════
     # Single-user local authentication
