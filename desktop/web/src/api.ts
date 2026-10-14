@@ -62,6 +62,16 @@ export interface McpStatus {
   connect_mode: string;
 }
 
+export interface PluginInfo {
+  name: string
+  version: string
+  description: string
+  enabled: boolean
+  trusted: boolean
+  skills: number
+  has_code: boolean
+}
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -186,6 +196,28 @@ export const skills = {
   toggleEnabled: (name: string) =>
     req<{ name: string; enabled: boolean }>('PUT', `/skills/${encodeURIComponent(name)}/enabled`),
 };
+
+// ── Project plugins ────────────────────────────────────────────────
+export const plugins = {
+  list: () => req<PluginInfo[]>('GET', '/plugins'),
+  enable: (name: string, enabled: boolean) =>
+    req<{name: string; enabled: boolean}>('PUT', `/plugins/${encodeURIComponent(name)}/enabled`, {enabled}),
+  trust: (name: string, trusted: boolean) =>
+    req<{name: string; trusted: boolean}>('PUT', `/plugins/${encodeURIComponent(name)}/trusted`, {trusted}),
+  delete: (name: string) =>
+    req<{status: string}>('DELETE', `/plugins/${encodeURIComponent(name)}`),
+  install: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch(BASE + '/plugins/install', {method: 'POST', body: form})
+    if (!response.ok) {
+      if (response.status === 401) window.dispatchEvent(new Event('wodeagent-auth-expired'))
+      const data = await response.json().catch(() => ({detail: response.statusText}))
+      throw new Error(data.detail || response.statusText)
+    }
+    return response.json() as Promise<{status: string; name: string; enabled: boolean}>
+  },
+}
 
 // ── MCP servers ──────────────────────────────────────────────────────
 
