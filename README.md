@@ -110,6 +110,8 @@ Web (desktop/web)          OpenTUI (tui-v2)
 
 现支持在 Web **「插件」** 页面上传本地 ZIP 插件、启用/禁用、卸载，以及对包含 Python Feature / Hook 的插件单独设置代码信任。项目原有的 Skill、MCP、Feature 是三种不同的扩展层：插件包可以声明 Skills，但不会自动执行第三方脚本或联网安装包。
 
+插件管理现在支持本地 ZIP 的 **SHA-256 校验、版本锁定、显式更新和上一版回滚**；更新或回滚会自动禁用插件并撤销代码信任。校验和不能替代发布者签名，当前不会自动下载远程插件。详见 [插件升级与回退说明](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
+
 插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。执行插件自定义代码需要同时设置显式信任与服务端 `RIDGE_ALLOW_PLUGIN_CODE=1`，此时是宿主机内执行代码，**不属于沙箱**。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
 
 ## 可选 Langfuse / OpenTelemetry 追踪
