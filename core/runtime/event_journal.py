@@ -12,6 +12,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 
@@ -43,6 +44,8 @@ class EventJournal:
         if capacity < 1:
             raise ValueError("capacity must be >= 1")
         self.capacity = capacity
+        # Distinguish cursors across process restarts; sequence alone resets.
+        self.stream_id = uuid.uuid4().hex
         self._entries: deque[SequencedEvent] = deque(maxlen=capacity)
         self._condition = threading.Condition()
         self._latest = 0
