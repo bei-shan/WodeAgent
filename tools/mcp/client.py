@@ -56,35 +56,32 @@ class MCPClient:
         self._conn = None
         self._session: Optional[ClientSession] = None
         self._session_loop_id: int | None = None  # detect stale sessions
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # compatibility for external inspection
+        self._connection_guard = asyncio.Lock()
+        self._owner_task: asyncio.Task | None = None
+        self._owner_ready: asyncio.Future | None = None
+        self._owner_shutdown: asyncio.Event | None = None
+        self._sync_loop: asyncio.AbstractEventLoop | None = None
+        self._sync_thread: threading.Thread | None = None
+        self._sync_guard = threading.Lock()
+        self._sync_pending = 0
 
     # ------------------------------------------------------------------
-    # Connection lifecycle
+    # Connection lifecycle — one owner task per live transport
     # ------------------------------------------------------------------
 
-    async def connect(self) -> ClientSession:
-        """Establish (or return existing) connection. Thread-safe via lock.
+    async def _own_connection(self, ready: asyncio.Future, shutdown: asyncio.Event) -> None:
+        """Enter and exit SDK task groups in the SAME asyncio task.
 
-        Detects stale sessions created under a different asyncio event loop
-        (common when ``_run_sync`` creates a fresh loop for each sync call)
-        and transparently reconnects.
+        AnyIO transport cancel scopes must not be entered from a different
+        task than the one performing __aexit__. Calls from other tasks use
+        the initialized session but never own its context managers.
         """
-        # If the cached session belongs to a different (now-closed) event loop,
-        # it's stale — discard it so we reconnect in the current loop.
-        current_loop_id = id(asyncio.get_running_loop())
-        if self._session is not None and self._session_loop_id != current_loop_id:
-            self._session = None
-            self._conn = None
-
-        # Fast path: already connected in this loop — no lock needed.
-        if self._session is not None:
-            return self._session
-
-        with self._lock:
-            # Double-check: another thread may have connected while we waited.
-            if self._session is not None and self._session_loop_id == id(asyncio.get_running_loop()):
-                return self._session
-
+        connection = None
+        session = None
+        entered_transport = False
+        entered_session = False
+        try:
             if self._config.transport == "stdio":
                 env = None
                 if self._config.env is not None:
@@ -95,79 +92,115 @@ class MCPClient:
                     args=self._config.args or [],
                     env=env,
                 )
-                self._conn = stdio_client(params)
+                connection = stdio_client(params)
             else:
                 if not self._config.url:
                     raise ValueError("MCPClientConfig.url is required for http transport")
-                self._conn = streamablehttp_client(self._config.url)
-
-            try:
-                read, write, *_ = await asyncio.wait_for(
-                    self._conn.__aenter__(),
-                    timeout=_MCP_CONNECT_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                self._conn = None
-                raise TimeoutError(
-                    f"MCP transport open timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
-                )
-            except Exception:
-                self._conn = None
-                raise
-
+                connection = streamablehttp_client(self._config.url)
+            self._conn = connection
+            # asyncio.timeout is scoped to this task; asyncio.wait_for on
+            # __aenter__ would create a child task and violate AnyIO ownership.
+            async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
+                streams = await connection.__aenter__()
+            entered_transport = True
+            read, write, *_ = streams
             session = ClientSession(read, write)
+            await session.__aenter__()
+            entered_session = True
             try:
-                await session.__aenter__()
-                try:
-                    await asyncio.wait_for(
-                        session.initialize(),
-                        timeout=_MCP_CONNECT_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    raise TimeoutError(
-                        f"MCP session initialize timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
-                    )
-            except Exception:
-                try:
-                    await session.__aexit__(None, None, None)
-                finally:
-                    self._session = None
-                try:
-                    await self._conn.__aexit__(None, None, None)
-                finally:
-                    self._conn = None
-                raise
-
+                await asyncio.wait_for(session.initialize(), timeout=_MCP_CONNECT_TIMEOUT)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"MCP session initialize timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
+                ) from exc
             self._session = session
             self._session_loop_id = id(asyncio.get_running_loop())
+            if not ready.done():
+                ready.set_result(session)
+            await shutdown.wait()
+        except BaseException as exc:
+            if not ready.done():
+                if isinstance(exc, asyncio.CancelledError):
+                    ready.cancel()
+                elif isinstance(exc, TimeoutError) and not isinstance(exc, asyncio.TimeoutError):
+                    ready.set_exception(exc)
+                elif isinstance(exc, asyncio.TimeoutError):
+                    ready.set_exception(TimeoutError(
+                        f"MCP transport open timed out after {_MCP_CONNECT_TIMEOUT:.0f}s"
+                    ))
+                else:
+                    ready.set_exception(exc)
+            else:
+                logger.debug("MCP transport closed", exc_info=True)
+        finally:
+            # The cleanup always runs in the task that entered both contexts.
+            try:
+                if entered_session:
+                    await session.__aexit__(None, None, None)
+            except BaseException:
+                logger.debug("MCP session close failed", exc_info=True)
+            try:
+                if entered_transport:
+                    await connection.__aexit__(None, None, None)
+            except BaseException:
+                logger.debug("MCP transport close failed", exc_info=True)
+            self._session = None
+            self._session_loop_id = None
+            self._conn = None
+
+    async def connect(self) -> ClientSession:
+        """Open the connection once for this loop and safely share requests."""
+        loop_id = id(asyncio.get_running_loop())
+        if self._session is not None and self._session_loop_id != loop_id:
+            raise RuntimeError("MCP session belongs to another event loop; close it there first")
+        if self._session is not None:
             return self._session
+        async with self._connection_guard:
+            if self._session is not None:
+                return self._session
+            if self._owner_task is not None and self._owner_task.done():
+                self._owner_task = None
+            if self._owner_task is None:
+                ready = asyncio.get_running_loop().create_future()
+                shutdown = asyncio.Event()
+                self._owner_ready = ready
+                self._owner_shutdown = shutdown
+                self._owner_task = asyncio.create_task(
+                    self._own_connection(ready, shutdown), name="mcp-transport-owner"
+                )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(self._owner_ready), timeout=_MCP_CONNECT_TIMEOUT * 2
+                )
+            except BaseException:
+                if self._owner_shutdown is not None:
+                    self._owner_shutdown.set()
+                if self._owner_task is not None:
+                    await asyncio.gather(self._owner_task, return_exceptions=True)
+                self._owner_task = None
+                raise
 
     async def close(self) -> None:
-        """Close session and transport. Thread-safe via lock.
-
-        Does NOT reconnect if the session was created under a different
-        event loop — it simply discards the stale session and exits.
-        """
-        with self._lock:
-            in_current_loop = (
-                self._session_loop_id is not None
-                and self._session_loop_id == id(asyncio.get_running_loop())
-            )
-            if self._session is not None:
-                if in_current_loop:
-                    try:
-                        await self._session.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                self._session = None
-                self._session_loop_id = None
-            if self._conn is not None:
-                if in_current_loop:
-                    try:
-                        await self._conn.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                self._conn = None
+        """Close this transport on its owner loop, never on a foreign loop."""
+        if self._session_loop_id is not None and (
+            self._session_loop_id != id(asyncio.get_running_loop())
+        ):
+            raise RuntimeError("MCP transport must be closed on the owning loop")
+        async with self._connection_guard:
+            owner = self._owner_task
+            if owner is None:
+                return
+            if self._owner_shutdown is not None:
+                self._owner_shutdown.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(owner), timeout=5.0)
+            except asyncio.TimeoutError:
+                owner.cancel()
+                await asyncio.gather(owner, return_exceptions=True)
+            finally:
+                self._owner_task = None
+                self._owner_shutdown = None
+                self._owner_ready = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -256,26 +289,55 @@ class MCPClient:
     # ------------------------------------------------------------------
 
     def _run_sync(self, coro):
-        """Run a coroutine synchronously in a fresh event loop.
+        """Execute on this client's persistent background event loop.
 
-        Each call creates its own event loop so that sync methods from
-        different threads don't contend for the same asyncio loop (which
-        would fail with "event loop is already running").  The lock in
-        ``connect()`` / ``close()`` serializes actual state mutations;
-        the loop itself is thread-local.
+        SDK transports own AnyIO task groups: a loop that disappears after
+        every call destroys the server subprocess and loses session state.
+        Different caller threads submit work to the SAME live loop.
         """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
-        raise RuntimeError(
-            "MCPClient sync methods cannot run inside an active event loop."
-        )
+            pass
+        else:
+            coro.close()
+            raise RuntimeError("MCPClient sync methods cannot run inside an active event loop.")
+
+        with self._sync_guard:
+            if self._sync_loop is None or not self._sync_loop.is_running():
+                loop = asyncio.new_event_loop()
+                started = threading.Event()
+
+                def serve():
+                    asyncio.set_event_loop(loop)
+                    loop.call_soon(started.set)
+                    try:
+                        loop.run_forever()
+                    finally:
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        loop.close()
+                        asyncio.set_event_loop(None)
+
+                thread = threading.Thread(
+                    target=serve, daemon=True, name="mcp-session-loop"
+                )
+                thread.start()
+                if not started.wait(timeout=5):
+                    coro.close()
+                    raise RuntimeError("MCP session event loop did not start")
+                self._sync_loop = loop
+                self._sync_thread = thread
+            self._sync_pending += 1
+            future = asyncio.run_coroutine_threadsafe(coro, self._sync_loop)
+        try:
+            return future.result()
+        finally:
+            with self._sync_guard:
+                self._sync_pending -= 1
 
     def connect_sync(self) -> ClientSession:
         return self._run_sync(self.connect())
@@ -317,7 +379,23 @@ class MCPClient:
         return self._run_sync(self.list_tools())
 
     def close_sync(self) -> None:
-        return self._run_sync(self.close())
+        with self._sync_guard:
+            loop = self._sync_loop
+        if loop is None:
+            return
+        try:
+            self._run_sync(self.close())
+        finally:
+            with self._sync_guard:
+                if self._sync_pending == 0 and self._sync_loop is loop:
+                    self._sync_loop = None
+                    thread = self._sync_thread
+                    self._sync_thread = None
+                    loop.call_soon_threadsafe(loop.stop)
+                else:
+                    thread = None
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=5)
 
     # ------------------------------------------------------------------
     # Introspection (lock-free reads)

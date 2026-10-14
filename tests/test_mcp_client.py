@@ -210,11 +210,8 @@ class TestMCPClientThreadSafety(unittest.TestCase):
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")
     def test_concurrent_connect_only_one_session(self, mock_session_cls, mock_stdio):
-        """Multiple threads calling connect_sync concurrently each get a valid
-        session.  Since ``_run_sync`` creates a fresh event loop per call, each
-        thread establishes its own connection (stale-session detection forces
-        reconnect across loops). In the async API within a single loop, only
-        one connection would be created."""
+        """Multiple concurrent sync callers share one persistent transport,
+        rather than spawning one MCP server per new event loop."""
         mock_read = AsyncMock()
         mock_write = AsyncMock()
         mock_conn_ctx = AsyncMock()
@@ -247,6 +244,8 @@ class TestMCPClientThreadSafety(unittest.TestCase):
         # Each thread gets its own session due to fresh event loops.
         # All sessions are valid (not None).
         self.assertTrue(all(s is not None for s in sessions))
+        self.assertEqual(mock_session_cls.call_count, 1)
+        self.assertTrue(all(s is sessions[0] for s in sessions))
 
     @patch("tools.mcp.client.stdio_client")
     @patch("tools.mcp.client.ClientSession")

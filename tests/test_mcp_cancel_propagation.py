@@ -88,15 +88,21 @@ def test_mcp_two_agents_have_independent_events():
     client = MCPClient(MCPClientConfig(transport="stdio", command="echo"))
     interrupt_one = threading.Event()
     interrupt_two = threading.Event()
-    started = threading.Barrier(2, timeout=3)
+    # Concurrent async requests now share a real MCP event loop. Never
+    # block that event loop with threading.Barrier.wait().
+    both_started = asyncio.Event()
+    arrivals = 0
     states = []
 
     async def fake_call(name, args):
+        nonlocal arrivals
+        arrivals += 1
+        if arrivals == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=3)
         if name == "fast":
-            started.wait()
             await asyncio.sleep(0.2)
             return "ok"
-        started.wait()
         await asyncio.sleep(10)
     client.call_tool = fake_call
 
