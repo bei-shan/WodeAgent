@@ -65,6 +65,7 @@ class MCPClient:
         self._sync_thread: threading.Thread | None = None
         self._sync_guard = threading.Lock()
         self._sync_pending = 0
+        self._sync_stop_when_idle = False
 
     # ------------------------------------------------------------------
     # Connection lifecycle — one owner task per live transport
@@ -312,6 +313,9 @@ class MCPClient:
             raise RuntimeError("MCPClient sync methods cannot run inside an active event loop.")
 
         with self._sync_guard:
+            if self._sync_stop_when_idle:
+                coro.close()
+                raise RuntimeError("MCP client is closing; wait for pending tool calls")
             if self._sync_loop is None or not self._sync_loop.is_running():
                 loop = asyncio.new_event_loop()
                 started = threading.Event()
@@ -344,8 +348,16 @@ class MCPClient:
         try:
             return future.result()
         finally:
+            loop_to_stop = None
             with self._sync_guard:
                 self._sync_pending -= 1
+                if self._sync_pending == 0 and self._sync_stop_when_idle:
+                    loop_to_stop = self._sync_loop
+                    self._sync_loop = None
+                    self._sync_thread = None
+                    self._sync_stop_when_idle = False
+            if loop_to_stop is not None:
+                loop_to_stop.call_soon_threadsafe(loop_to_stop.stop)
 
     def connect_sync(self) -> ClientSession:
         return self._run_sync(self.connect())
@@ -387,6 +399,12 @@ class MCPClient:
         return self._run_sync(self.list_tools())
 
     def close_sync(self) -> None:
+        """Shutdown transport and stop the loop after ALL in-flight calls drain.
+
+        Previously close_sync() left an idle daemon loop alive if another
+        thread was still completing a tool call. The last caller now owns
+        stopping the loop; no new calls are admitted while it is draining.
+        """
         with self._sync_guard:
             loop = self._sync_loop
         if loop is None:
@@ -395,11 +413,16 @@ class MCPClient:
             self._run_sync(self.close())
         finally:
             with self._sync_guard:
-                if self._sync_pending == 0 and self._sync_loop is loop:
-                    self._sync_loop = None
-                    thread = self._sync_thread
-                    self._sync_thread = None
-                    loop.call_soon_threadsafe(loop.stop)
+                if self._sync_loop is loop:
+                    self._sync_stop_when_idle = True
+                    if self._sync_pending == 0:
+                        self._sync_loop = None
+                        thread = self._sync_thread
+                        self._sync_thread = None
+                        self._sync_stop_when_idle = False
+                        loop.call_soon_threadsafe(loop.stop)
+                    else:
+                        thread = None  # last in-flight caller stops the loop
                 else:
                     thread = None
             if thread is not None and thread is not threading.current_thread():
