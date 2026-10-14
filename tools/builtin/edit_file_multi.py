@@ -207,7 +207,7 @@ class MultiEditTool(Tool):
                 resolved = str(abs_path.resolve())
                 gate = getattr(self, "_permission_gate", None)
                 if gate is not None:
-                    decision = gate.check(resolved)
+                    decision = gate.check(resolved, action="编辑")
                     if decision == "granted":
                         pass
                     elif decision == "ask":
