@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sandbox.docker_provider import DockerCommandProvider, SandboxUnavailable
+from core.runtime.cancellation import current_cancel_event
 from tools.builtin.bash import BashTool
 from tools.base import ErrorCode
 
@@ -51,7 +52,10 @@ class SandboxBashTool(BashTool):
                 params_input=parameters,
             )
         try:
-            result = self.provider.execute(command, directory=directory, timeout_seconds=timeout_ms / 1000)
+            result = self.provider.execute(
+                command, directory=directory, timeout_seconds=timeout_ms / 1000,
+                cancel_event=current_cancel_event(),
+            )
         except (PermissionError, ValueError, FileNotFoundError) as exc:
             return self.create_error_response(
                 error_code=ErrorCode.ACCESS_DENIED,
@@ -76,6 +80,12 @@ class SandboxBashTool(BashTool):
             "truncated": truncated, "command": command,
             "directory": directory, "sandbox": "docker",
         }
+        if result.interrupted:
+            return self.create_error_response(
+                error_code=ErrorCode.INTERRUPTED,
+                message="Docker command interrupted; container cleanup requested.",
+                params_input=parameters, time_ms=elapsed,
+            )
         if result.timed_out:
             return self.create_error_response(
                 error_code=ErrorCode.TIMEOUT,

@@ -1,5 +1,7 @@
 """Actual Docker containment smoke test; opt-in for trusted CI runners only."""
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -41,3 +43,30 @@ else:
     )
     assert net.exit_code == 0, net.stderr
     assert "DENIED" in net.stdout
+
+
+def test_running_container_is_stopped_on_turn_cancel(tmp_path):
+    """On a real daemon, stop must end the tool before its 60s timeout."""
+    root = tmp_path / "project"
+    root.mkdir()
+    started = root / "started.txt"
+    cancelled = threading.Event()
+    provider = DockerCommandProvider(root)
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(provider.execute(
+            "printf ready > started.txt; sleep 60",
+            timeout_seconds=65, cancel_event=cancelled,
+        )),
+    )
+    worker.start()
+    deadline = time.monotonic() + 15
+    while not started.exists() and time.monotonic() < deadline and worker.is_alive():
+        time.sleep(0.05)
+    try:
+        assert started.exists(), "container did not start in time"
+    finally:
+        cancelled.set()
+        worker.join(timeout=15)
+    assert not worker.is_alive(), "cancel failed to stop Docker command"
+    assert results and results[0].interrupted and not results[0].timed_out

@@ -1,6 +1,6 @@
 # 文档导航
 
-> **状态说明（2026-10-13）**：本页是 Ridge Code 文档的阅读入口。架构和操作说明优先看当前源码、测试及 CI；带日期的设计稿是当时的设计决策，不代表现行 API 或安全保证。
+> **状态说明（2026-10-14）**：本页是 Ridge Code 文档的阅读入口。架构和操作说明优先看当前源码、测试及 CI；带日期的设计稿是当时的设计决策，不代表现行 API 或安全保证。
 
 ## 现在应该读什么
 
@@ -14,7 +14,8 @@
 | Docker 隔离 | [实验性 Docker 沙箱](design/2026-10-13-docker-sandbox-phase1.md) |
 | 工作区访问安全 | [Descriptor-anchored workspace](design/2026-10-13-descriptor-anchored-workspaces.md) |
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
-| 本次仓库文档审计 | [审计记录](AUDIT_2026-10-13.md) |
+| 生产化缺口与优先级 | [2026-10-14 生产审计与 Backlog](AUDIT_2026-10-14_PRODUCTION.md) |
+| 仓库历史清理 | [2026-10-13 审计记录](AUDIT_2026-10-13.md) |
 
 ## Skills 与插件
 
