@@ -57,6 +57,9 @@ class ToolRegistry:
         self._config = config or active_config() or _config
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
+        # Optional session-owned deferred catalog; never stores executors.
+        self._discovery_state = None
+        self._discovery_guard: Callable[[str], bool] | None = None
         # When set, deny schema AND execution for all other tools, including
         # dynamically registered plugins or MCP functions.
         self._sandbox_allowed_tools: frozenset[str] | None = None
@@ -95,6 +98,44 @@ class ToolRegistry:
     def _tool_allowed(self, name: str) -> bool:
         return self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools
 
+    def enable_deferred_discovery(
+        self, state, *, can_execute: Callable[[str], bool] | None = None,
+    ) -> None:
+        """Install exactly one session's discovery policy at the execution boundary."""
+        if self._discovery_state is not None:
+            raise RuntimeError("Deferred discovery already configured for this registry")
+        if self._sandbox_allowed_tools is not None:
+            raise PermissionError("Deferred discovery is unavailable in isolated sandbox mode")
+        if "ToolSearch" not in self._tools:
+            raise ValueError("Register ToolSearch before enabling deferred discovery")
+        self._discovery_state = state
+        self._discovery_guard = can_execute
+
+    def _discovery_mode_allowed(self, name: str) -> bool:
+        if self._discovery_guard is None:
+            return True
+        try:
+            return bool(self._discovery_guard(name))
+        except Exception:
+            # Mode and capability lookup are security-sensitive.
+            return False
+
+    def activate_discovered_tools(self) -> None:
+        """Publish pending search results only when building the next model step.
+
+        A ToolSearch call in a multi-call response must not make a guessed
+        tool executable in that same response, before the model has seen its
+        validated schema. Revoked or broken registrations are never activated.
+        """
+        state = self._discovery_state
+        if state is None or not state.pending_names():
+            return
+        available = {
+            spec["function"]["name"]
+            for spec in self.get_openai_tools(include_deferred=True)
+        }
+        state.activate_pending(lambda name: name in available and self._discovery_mode_allowed(name))
+
     def register_tool(self, tool: Tool):
         """
         注册Tool对象
@@ -108,7 +149,11 @@ class ToolRegistry:
         if tool.name in self._functions:
             raise ValueError(f"Tool name '{tool.name}' is already registered as a function")
         if tool.name in self._tools:
+            if tool.name == "ToolSearch" and self._discovery_state is not None:
+                raise PermissionError("Cannot replace the active ToolSearch control tool")
             logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
+            if self._discovery_state is not None:
+                self._discovery_state.invalidate(tool.name)
 
         self._tools[tool.name] = tool
         logger.info("工具 '%s' 已注册。", tool.name)
@@ -128,6 +173,8 @@ class ToolRegistry:
             raise ValueError(f"Tool name '{name}' is already registered as an object")
         if name in self._functions:
             logger.warning("工具 '%s' 已存在，将被覆盖。", name)
+            if self._discovery_state is not None:
+                self._discovery_state.invalidate(name)
 
         self._functions[name] = {
             "description": description,
@@ -137,6 +184,10 @@ class ToolRegistry:
 
     def unregister(self, name: str):
         """注销工具"""
+        if name == "ToolSearch" and self._discovery_state is not None:
+            raise PermissionError("Cannot remove ToolSearch while discovery is enabled")
+        if self._discovery_state is not None:
+            self._discovery_state.invalidate(name)
         if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
             raise PermissionError("Cannot remove the approved sandbox tool")
         if name in self._tools:
@@ -148,7 +199,7 @@ class ToolRegistry:
         else:
             logger.warning("工具 '%s' 不存在。", name)
 
-    def get_openai_tools(self) -> list[dict[str, Any]]:
+    def get_openai_tools(self, *, include_deferred: bool = False) -> list[dict[str, Any]]:
         """
         构建 OpenAI function calling 所需的 tools 列表。
 
@@ -157,8 +208,13 @@ class ToolRegistry:
         """
         tools: list[dict[str, Any]] = []
 
-        for tool in self._tools.values():
+        for tool in tuple(self._tools.values()):
             if not self._tool_allowed(tool.name) or not self._circuit_breaker.is_available(tool.name):
+                continue
+            if not self._discovery_mode_allowed(tool.name):
+                continue
+            if (not include_deferred and self._discovery_state is not None
+                    and not self._discovery_state.is_visible(tool.name)):
                 continue
             try:
                 params = tool.get_parameters()
@@ -187,8 +243,13 @@ class ToolRegistry:
                 },
             })
 
-        for name, info in self._functions.items():
+        for name, info in tuple(self._functions.items()):
             if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
+                continue
+            if not self._discovery_mode_allowed(name):
+                continue
+            if (not include_deferred and self._discovery_state is not None
+                    and not self._discovery_state.is_visible(name)):
                 continue
             tools.append({
                 "type": "function",
@@ -305,6 +366,28 @@ class ToolRegistry:
                     "code": ErrorCode.ACCESS_DENIED.value,
                     "message": "Tool blocked by Docker sandbox policy.",
                 },
+                "stats": {"time_ms": 0},
+                "context": {"cwd": ".", "params_input": parameters},
+            }, ensure_ascii=False)
+
+        # The same dynamic mode policy used for catalog filtering must also
+        # guard direct registry dispatch, even without Agent pre-hooks.
+        if not self._discovery_mode_allowed(name):
+            message = f"Tool '{name}' is not permitted in the current Agent mode."
+            return json.dumps({
+                "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                "error": {"code": ErrorCode.PERMISSION_DENIED.value, "message": message},
+                "stats": {"time_ms": 0},
+                "context": {"cwd": ".", "params_input": parameters},
+            }, ensure_ascii=False)
+
+        # Deferred discovery is enforced independently of the LLM tool list.
+        # Unadvertised tool calls from stale contexts/plugins cannot execute.
+        if self._discovery_state is not None and not self._discovery_state.is_visible(name):
+            message = f"Tool '{name}' requires discovery via ToolSearch before execution."
+            return json.dumps({
+                "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                "error": {"code": "DISCOVERY_REQUIRED", "message": message},
                 "stats": {"time_ms": 0},
                 "context": {"cwd": ".", "params_input": parameters},
             }, ensure_ascii=False)
@@ -679,33 +762,51 @@ class ToolRegistry:
         descriptions = []
 
         # Tool对象描述
-        for tool in self._tools.values():
-            if self._tool_allowed(tool.name):
+        for tool in tuple(self._tools.values()):
+            if (self._tool_allowed(tool.name)
+                    and self._discovery_mode_allowed(tool.name)
+                    and (self._discovery_state is None
+                         or self._discovery_state.is_visible(tool.name))):
                 descriptions.append(f"- {tool.name}: {tool.description}")
 
         # 函数工具描述
-        for name, info in self._functions.items():
-            if self._tool_allowed(name):
+        for name, info in tuple(self._functions.items()):
+            if (self._tool_allowed(name)
+                    and self._discovery_mode_allowed(name)
+                    and (self._discovery_state is None
+                         or self._discovery_state.is_visible(name))):
                 descriptions.append(f"- {name}: {info['description']}")
 
         return "\n".join(descriptions) if descriptions else "暂无可用工具"
 
     def list_tools(self) -> list[str]:
         """列出所有工具名称"""
-        return [name for name in [*self._tools, *self._functions] if self._tool_allowed(name)]
+        return [name for name in [*tuple(self._tools), *tuple(self._functions)] if self._tool_allowed(name)]
 
     def get_disabled_tools(self) -> list[str]:
         """获取当前被熔断禁用的工具列表。"""
         return self._circuit_breaker.get_disabled_tools()
 
     def get_all_tools(self) -> list[Tool]:
-        """获取所有Tool对象"""
-        return [tool for tool in self._tools.values() if self._tool_allowed(tool.name)]
+        """获取所有Tool对象（internal view, including deferred definitions）."""
+        return [tool for tool in tuple(self._tools.values()) if self._tool_allowed(tool.name)]
+
+    def get_prompt_tools(self) -> list[Tool]:
+        """Only tools currently visible to the model may inject usage notes."""
+        return [
+            tool for tool in self.get_all_tools()
+            if self._discovery_mode_allowed(tool.name)
+            and (self._discovery_state is None or self._discovery_state.is_visible(tool.name))
+            and self._circuit_breaker.is_available(tool.name)
+        ]
 
     def clear(self):
         """清空所有工具"""
         if self._sandbox_allowed_tools is not None:
             raise PermissionError("Cannot clear registry while sandbox policy is active")
+        if self._discovery_state is not None:
+            for name in self.list_tools():
+                self._discovery_state.invalidate(name)
         self._tools.clear()
         self._functions.clear()
         logger.info("所有工具已清空。")

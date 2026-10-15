@@ -23,6 +23,7 @@ class PlanModeFeature(AgentFeature):
     PLAN_MODE_TOOLS = {
         "Read", "Grep", "Glob", "LS", "TodoWrite",
         "TaskOutput", "EnterPlanMode", "ExitPlanMode", "AskUser",
+        "ToolSearch",
     }
 
     def init(self, agent: "CodeAgent") -> None:

@@ -77,7 +77,15 @@ class MCPFeature(AgentFeature):
                 pass
 
         # Sync MCP prompt to context builder
-        if agent._mcp_tools_prompt:
+        if getattr(agent.config, "tool_deferred_discovery_enabled", False):
+            # Never leak deferred tool descriptions into the context. The
+            # ToolSearch result and subsequent schema are the disclosure path.
+            if getattr(agent, "_tool_discovery_state", None) is not None:
+                agent.context_builder.set_mcp_tools_prompt(
+                    "Additional MCP, team and plugin tools are deferred. "
+                    "Use ToolSearch to discover them before invocation."
+                )
+        elif agent._mcp_tools_prompt:
             agent.context_builder.set_mcp_tools_prompt(agent._mcp_tools_prompt)
 
         return blocks
