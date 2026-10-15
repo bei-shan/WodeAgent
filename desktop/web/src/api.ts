@@ -180,6 +180,7 @@ export const files = {
 // ── Info ─────────────────────────────────────────────────────────────
 
 export const info = {
+  terminalCapabilities: () => req<{ enabled: boolean; backend: string; interactive: boolean }>('GET', '/sandbox/terminal-capabilities'),
   models: () => req<ModelInfo[]>('GET', '/models'),
   tools:  () => req<ToolInfo[]>('GET', '/tools'),
   mcpStatus: () => req<McpStatus>('GET', '/mcp/status'),
