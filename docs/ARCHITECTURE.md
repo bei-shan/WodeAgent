@@ -42,7 +42,7 @@ React Web (desktop/web/)              OpenTUI (tui-v2/)
 
 - Web 的 `WEB_AUTH_TOKEN` 是本地单用户鉴权；Web 登录与 TUI Bearer 认证机制不同，不构成多租户权限体系。
 - TypeScript TUI 设置 `RIDGECODE_AUTH_TOKEN`（兼容 `WODEAGENT_AUTH_TOKEN`）匹配服务端令牌；参见 `tui-v2/README.md`。
-- Docker 沙箱为显式启用的实验性能力。默认本机执行模式不能视为强隔离。
+- Docker / BoxLite micro-VM 均为显式启用的实验性执行后端，仅隔离 Agent 可见的 Bash 调用；默认本机执行模式不能视为强隔离。参见 [BoxLite 后端](design/2026-10-15-boxlite-vm-provider.md)。
 - 旧目录 `.mycode/`、`.mycodeagent/` 和既有 Python 导入路径暂时保留兼容。
 
 ## 当前结构性债务（不等同于可以删除）
