@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -52,6 +51,7 @@ class BoxliteSessionPool:
         self._pending: set[str] = set()
         self._lock = threading.RLock()
         self._closed = False
+        self._poisoned = False  # uncertain SDK disposal must not free capacity
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
         self._thread = threading.Thread(
@@ -106,20 +106,24 @@ class BoxliteSessionPool:
     async def _stop_box(self, box: Any) -> None:
         await box.__aexit__(None, None, None)
 
-    def _dispose(self, box: Any) -> None:
+    def _dispose(self, box: Any) -> bool:
         try:
             self._invoke(self._stop_box(box), timeout=10)
+            return True
         except Exception:
-            # Fail closed: do not return a failed VM to the warm pool.
-            pass
+            # An unconfirmed VM shutdown may still consume host resources.
+            # Never admit new guests on this pool until operator restart.
+            with self._lock:
+                self._poisoned = True
+            return False
 
     def acquire(self, scope: str) -> str:
         if not isinstance(scope, str) or not 1 <= len(scope) <= 128 or "\x00" in scope:
             raise ValueError("Session scope must be an opaque nonempty identifier")
         evicted: Any = None
         with self._lock:
-            if self._closed:
-                raise SandboxUnavailable("BoxLite pool is closed")
+            if self._closed or self._poisoned:
+                raise SandboxUnavailable("BoxLite pool unavailable or cleanup unconfirmed")
             lease = self._leases.get(scope)
             if lease is not None:
                 if lease.active:
@@ -138,8 +142,10 @@ class BoxliteSessionPool:
                 victim, unused = min(warm, key=lambda item: item[1].last_used)
                 evicted = self._leases.pop(victim).box
             self._pending.add(scope)
-        if evicted is not None:
-            self._dispose(evicted)
+        if evicted is not None and not self._dispose(evicted):
+            with self._lock:
+                self._pending.discard(scope)
+            raise SandboxUnavailable("Old VM cleanup unconfirmed; capacity cannot be reused")
         box = None
         try:
             box = self._invoke(self._start_box(), timeout=90)
@@ -167,7 +173,7 @@ class BoxliteSessionPool:
     ) -> CommandResult:
         with self._lock:
             lease = self._leases.get(scope)
-            if self._closed or lease is None or not lease.active or lease.executing:
+            if self._closed or self._poisoned or lease is None or not lease.active or lease.executing:
                 raise SandboxUnavailable("No exclusive active VM lease for this session")
             lease.executing = True
             box = lease.box
