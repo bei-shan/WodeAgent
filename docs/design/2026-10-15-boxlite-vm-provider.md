@@ -72,6 +72,7 @@ isolation path for current v0.1 candidates.
 
 ```bash
 python -m pytest tests/test_sandbox_boxlite.py tests/test_sandbox_boundary.py -q
+AGENT_BOXLITE_INTEGRATION=1 python -m pytest tests/test_sandbox_boxlite_integration.py -q
 ```
 
 CI uses a fake BoxLite SDK to exercise backend selection, path traversal,
