@@ -39,3 +39,7 @@ class VCRService:
             tool_choice=tool_choice,
             fallback=fallback,
         )
+
+    def close(self, agent) -> None:
+        """Owned manager is process-local and has no external close action."""
+        pass
