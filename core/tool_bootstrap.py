@@ -119,19 +119,11 @@ class ToolBootstrap:
 
                 try:
                     tool_instance = self._instantiate(obj)
-                    owner_lookup = getattr(self._registry, "owner_of", None)
-                    existing_owner = (
-                        owner_lookup(tool_instance.name) if callable(owner_lookup) else None
+                    # Restore built-in dependency and permission-gate wiring
+                    # when the caller provided a legacy-named tool before init.
+                    self._registry.register_tool(
+                        tool_instance, owner="builtin", replace_legacy_at_boot=True,
                     )
-                    if isinstance(existing_owner, str) and existing_owner != "builtin":
-                        # Explicitly injected host tools retain their owner's
-                        # adapter; a bootstrap scan must not hijack its name.
-                        logger.info(
-                            "Preserving pre-registered tool %s owned by %s",
-                            tool_instance.name, existing_owner,
-                        )
-                        continue
-                    self._registry.register_tool(tool_instance, owner="builtin")
                     registered.append(tool_instance.name)
                     logger.debug("Auto-registered tool: %s", tool_instance.name)
                 except Exception as exc:
