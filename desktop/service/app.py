@@ -165,6 +165,14 @@ def create_app(
     from core.env import load_env
     load_env()
 
+    # Old local workspace / filesystem routes are fundamentally single-user.
+    # Disallow accidentally exposing them as a hosted OIDC service.
+    if os.getenv("RIDGE_DEPLOYMENT_MODE", "local").strip().lower() == "hosted":
+        raise RuntimeError(
+            "Legacy local Agent API cannot run in hosted mode; "
+            "use desktop.service.hosted_app:create_hosted_app instead"
+        )
+
     # Optional local-only login protection. Defaults off for compatibility;
     # only a securely configured, high-entropy operator token enables it.
     configured_auth_token = os.getenv("WEB_AUTH_TOKEN", "").strip()
