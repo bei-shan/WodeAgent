@@ -35,7 +35,7 @@ def test_streaming_model_delivers_one_delta_and_intercept_order():
     features = (Interceptor("outer", log), Interceptor("inner", log))
     resp = ModelGateway(provider).invoke(
         messages=[{"role": "user", "content": "hi"}], tools_schema=[],
-        tool_choice="auto", features=iter(features),
+        tool_choice="auto", interceptors=iter(features),
         agent=object(), on_delta=lambda kind, text: deltas.append((kind, text)),
     )
     assert resp["message"] == "streamed"
@@ -47,7 +47,7 @@ def test_streaming_model_delivers_one_delta_and_intercept_order():
 def test_streaming_disabled_uses_single_nonstream_call():
     provider = Provider()
     result = ModelGateway(provider, streaming=False).invoke(
-        messages=[], tools_schema=None, tool_choice="none", features=[],
+        messages=[], tools_schema=None, tool_choice="none", interceptors=[],
         agent=object(), on_delta=lambda *_: None,
     )
     assert result["message"] == "plain"
@@ -59,7 +59,7 @@ def test_provider_without_streaming_support_uses_invoke_raw():
         def invoke_raw(self, messages, *, tools, tool_choice):
             return "legacy"
     value = ModelGateway(Legacy()).invoke(
-        messages=[], tools_schema=[], tool_choice="auto", features=[],
+        messages=[], tools_schema=[], tool_choice="auto", interceptors=[],
         agent=object(), on_delta=lambda *_: None,
     )
     assert value == "legacy"
@@ -75,7 +75,7 @@ def test_partial_stream_error_never_replays_nonstream():
     seen = []
     with pytest.raises(RuntimeError, match="disconnect"):
         ModelGateway(provider).invoke(
-            messages=[], tools_schema=[], tool_choice="auto", features=[],
+            messages=[], tools_schema=[], tool_choice="auto", interceptors=[],
             agent=object(), on_delta=lambda kind, text: seen.append(text),
         )
     assert seen == ["partial"] and provider.calls == [("stream",)]
