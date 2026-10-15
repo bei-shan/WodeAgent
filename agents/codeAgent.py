@@ -598,7 +598,7 @@ class CodeAgent(Agent):
         # durable hosted Session/Worker/Sandbox resource authorization contract.
         # Refuse hosted turns until the scoped runner is connected, rather
         # than accidentally executing the local SessionManager path.
-        if self._hosted_tool_authority is not None:
+        if getattr(self, "_hosted_tool_authority", None) is not None:
             raise PermissionError("Hosted Agent turns require an authenticated fenced worker runner")
         from core.runtime.config_scope import scoped_config
         with scoped_config(self.config):
