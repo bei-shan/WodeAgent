@@ -378,3 +378,69 @@ test('safe code blocks render in the conversation with copy controls', async ({ 
   await expect(page.locator('.answer-code-block code')).toHaveText('print(1 + 1)')
   await expect(page.getByRole('button', { name: '复制代码' })).toBeVisible()
 })
+
+
+test('markdown reply renders headings, lists, safe links and highlighted code', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByPlaceholder('问任何问题').fill('总结')
+  await page.getByPlaceholder('问任何问题').press('Enter')
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'llm.delta', {
+    kind: 'content', text: '# 修复报告\n\n- **已完成**\n- `safe`\n\n[安全](https://example.org)\n\n[不安全](javascript:alert(1))\n\n```ts\nconst result = 42\n```',
+  })
+  await expect(page.getByRole('heading', { name: '修复报告' })).toBeVisible()
+  await expect(page.getByText('已完成')).toBeVisible()
+  await expect(page.getByRole('link', { name: '安全', exact: true })).toHaveAttribute('href', 'https://example.org')
+  await expect(page.getByRole('link', { name: '不安全' })).toHaveCount(0)
+  await expect(page.locator('.answer-code-block code')).toContainText('const result = 42')
+  await expect(page.locator('.syntax-keyword')).toContainText('const')
+})
+
+test('execution inspector shows real tool events and sandbox output only', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'tool.started', { tool_call_id: 'shell-1', tool: 'Bash', input: { command: 'echo sandbox-pass' } })
+  await emit(page, 'tool.completed', {
+    tool_call_id: 'shell-1', tool: 'Bash', status: 'success',
+    output: JSON.stringify({ status: 'success', data: { sandbox: 'docker', stdout: 'sandbox-pass', stderr: '', exit_code: 0 } }),
+  })
+  await page.getByRole('button', { name: /执行详情/ }).click()
+  await expect(page.getByText('Agent 执行详情')).toBeVisible()
+  await expect(page.getByText('Step 1 · Bash')).toBeVisible()
+  await page.getByRole('button', { name: 'Sandbox 输出' }).click()
+  await expect(page.getByText('sandbox-pass', { exact: true })).toBeVisible()
+  await expect(page.getByText('退出码 0')).toBeVisible()
+  await page.getByRole('button', { name: '关闭执行详情' }).click()
+  await expect(page.getByText('Agent 执行详情')).toHaveCount(0)
+})
+
+test('file snapshot Diff only compares re-read workspace content', async ({ page }) => {
+  await mockBackend(page)
+  let reads = 0
+  await page.route('**/api/sessions/*/files/content?*', route => {
+    reads++
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        path: 'hello.py',
+        content: reads === 1 ? '1\tprint("before")' : '1\tprint("after")',
+        truncated: false,
+      }),
+    })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.getByRole('button', { name: '文件', exact: true }).click()
+  await page.getByRole('button', { name: /hello.py/ }).click()
+  await expect(page.getByText('print("before")', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: '对比最新' }).click()
+  await expect(page.getByLabel('文件快照对比')).toBeVisible()
+  await expect(page.locator('.diff-added')).toContainText('print("after")')
+  await expect(page.locator('.diff-removed')).toContainText('print("before")')
+  await page.getByRole('button', { name: '更新基线' }).click()
+  await page.getByRole('button', { name: '对比最新' }).click()
+  await expect(page.getByText('与记录的基线相同，尚无变化。')).toBeVisible()
+})
