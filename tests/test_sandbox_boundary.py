@@ -14,6 +14,7 @@ import pytest
 
 from core.config import Config
 from core.sandbox.docker_provider import DockerCommandProvider, SandboxUnavailable
+from core.sandbox.docker_lifecycle import DockerLeaseManager
 from core.sandbox.command_tool import SandboxBashTool
 from tools.registry import ToolRegistry
 from tools.builtin.read_file import ReadTool
@@ -21,7 +22,8 @@ from tools.builtin.read_file import ReadTool
 
 def _provider(workspace: Path, runner=None):
     return DockerCommandProvider(
-        workspace, docker_binary="/usr/bin/docker", runner=runner
+        workspace, docker_binary="/usr/bin/docker", runner=runner,
+        lease_manager=DockerLeaseManager("/usr/bin/docker", b"x" * 32),
     )
 
 
