@@ -119,6 +119,15 @@ class ToolBootstrap:
 
                 try:
                     tool_instance = self._instantiate(obj)
+                    existing_owner = self._registry.owner_of(tool_instance.name)
+                    if existing_owner is not None and existing_owner != "builtin":
+                        # Explicitly injected host tools retain their owner's
+                        # adapter; a bootstrap scan must not hijack its name.
+                        logger.info(
+                            "Preserving pre-registered tool %s owned by %s",
+                            tool_instance.name, existing_owner,
+                        )
+                        continue
                     self._registry.register_tool(tool_instance, owner="builtin")
                     registered.append(tool_instance.name)
                     logger.debug("Auto-registered tool: %s", tool_instance.name)
