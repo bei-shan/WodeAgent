@@ -32,7 +32,6 @@ skills/
   review/
     SKILL.md
     references/checklist.md
-feature.py                    # optional code; stays inert by default
 ```
 
 ```json
@@ -42,8 +41,7 @@ feature.py                    # optional code; stays inert by default
   "description": "Reviews source code",
   "features": {
     "skills": ["skills"],
-    "hooks": {},
-    "custom_features": []
+    "hooks": {}
   }
 }
 ```
@@ -84,31 +82,25 @@ All newly installed and previously present plugins start **disabled**
 unless explicitly enabled. State lives in
 `.mycodeagent/plugins/state.json` and is written by atomic rename.
 
-An **enabled** plugin contributes its declared Skills. Its Python features
-and command Hooks remain inert unless **both** (1) the user explicitly
-sets `trusted=true` and (2) the operator sets
-`RIDGE_ALLOW_PLUGIN_CODE=1` on the backend. Such code is still arbitrary
-host-level code in the current process and **is not sandboxed**.
-Only enable the code gate for reviewed, locally trusted plugins.
-The trust decision is now bound to a SHA-256 fingerprint of the installed
-manifest, declared source files and other non-bytecode plugin resources. If
-a file is edited, added or replaced after consent, the next plugin discovery
-fails closed even when the old `trusted=true` flag remains set. The Web UI
-shows the stale approval state; disable trust, review the changed content,
-then explicitly trust again. Legacy unbound trust flags also fail closed.
-Generated `__pycache__` bytecode is not part of the fingerprint.
+An **enabled** plugin contributes its declared Skills. The old Python
+`custom_features` extension declaration is **rejected** at manifest
+installation or directory discovery, even for trusted plugins; no arbitrary
+project Python, JS or TS is imported by the plugin loader.
 
-**This is an integrity check, not an OS filesystem protection or a
-sandbox.** An already initialized Agent feature can remain in memory,
-and a malicious local actor with write access to the project can race
-file checks. Recreate sessions when revoking trust; for unreviewed code,
-leave `RIDGE_ALLOW_PLUGIN_CODE` disabled. Plugin-defined capability lists
-would be only advisory until executable extensions run in isolated workers.
+Command Hooks require **both** (1) a user-issued `trusted=true` decision
+bound to the SHA-256 fingerprint of the current plugin tree, and (2) the
+backend operator's `RIDGE_ALLOW_TRUSTED_HOOKS=1` flag. The removed
+`RIDGE_ALLOW_PLUGIN_CODE` flag grants nothing. These Hooks execute host
+commands in trusted **local** mode, not inside a sandbox, and must not run
+inside hosted tenants. They are registered in the in-memory HookManager,
+not copied into `.mycode/hooks.json`.
 
-No hook config is written into `.mycode/hooks.json`; trusted hooks are
-registered in memory. Code components are selected at Agent creation;
-create a new session or restart the Agent after changing code trust.
-Skill enabled state is re-scanned when requested and on Agent prompt refresh.
+The fingerprint covers the installed manifest and all non-bytecode assets.
+Changing files after review invalidates approval, even if an old trusted
+boolean remains. The trust digest is an integrity gate **not** OS-level
+protection against a malicious local actor racing filesystem access;
+recreate local sessions when changing Hook approvals. Only explicitly
+reviewed local command Hooks should receive this opt-in.
 
 ## Version provenance, updates, pinned integrity and rollback
 
