@@ -138,3 +138,68 @@ operations immediately when the delegation expires.
 **Go/No-Go unchanged**: production IdP lifecycle, live staging revocation,
 backup/restore, actual Agent isolation and incident handling still need
 independent evidence.
+
+
+## Reproducible acceptance evidence runner (safe by default)
+
+GitHub Actions [Release acceptance evidence](../../.github/workflows/release-acceptance.yml)
+runs on relevant pull requests and pushes to main. Its required jobs execute:
+
+- **component**: selected offline E2B, Redis fencing, guest file, artifact, hosted identity and staging contract tests (no cloud services).
+- **docker**: real Docker sandbox integration on a runner with Docker.
+- **redis**: real Redis 7 service and the E2B atomic Lua reservation/execution fencing acceptance, against disposable test keys.
+
+The report job uploads \`ridge-acceptance-report\` with
+\`summary.json\` and \`summary.md\`, bound to the checked-out **40-character
+commit SHA**. Component, Docker and Redis must all return actual non-skipped
+tests and valid JUnit evidence; otherwise the report check fails. When
+available, individual jobs upload minimal redacted gate JSON records.
+Missing, skipped, mismatched-SHA or malformed records are **BLOCKED**, not
+PASS. Raw subprocess stdout/stderr, API tokens, E2B sandbox IDs, Redis
+passwords and session snapshots are deliberately not published to Actions
+artifacts.
+
+Run this locally in a clean Python 3.12 environment:
+
+\`\`\`bash
+python -m pip install -r requirements.txt -r requirements-hosted.txt
+python scripts/release_acceptance.py --scope component
+python scripts/release_acceptance.py --scope summary
+\`\`\`
+
+To exercise local Redis and Docker, provision an isolated Redis test instance
+and a live Docker daemon before running:
+
+\`\`\`bash
+E2B_REDIS_URL=redis://127.0.0.1:6379/0 python scripts/release_acceptance.py --scope redis
+python scripts/release_acceptance.py --scope docker
+python scripts/release_acceptance.py --scope summary --require-component-gates
+\`\`\`
+
+The Redis test uses a freshly generated isolated key prefix and removes only
+that test prefix. **Never run destructive testing against production Redis.**
+
+### Explicit optional test scopes
+
+Open **Actions → Release acceptance evidence → Run workflow**. All external
+and billable options default to false:
+
+| Option | Required operator configuration | Evidence semantics |
+|---|---|---|
+| \`run_e2b\` **AND** \`approve_e2b_billing\` | Environment \`staging-acceptance\`, secret \`RIDGE_E2B_TEST_API_KEY\`; isolated E2B project, spending cap | **Real, billable** E2B SDK integration; blocked on absent credential or skipped test |
+| \`run_staging\` | Environment variable \`RIDGE_STAGING_BASE_URL\` (HTTPS only); secrets \`RIDGE_STAGING_TOKEN_A\` and \`RIDGE_STAGING_TOKEN_B\` from distinct OIDC tenants | \`PASS_METADATA_ONLY\` means only hosted session metadata isolation |
+| \`run_soak\` | 30-minute runner time budget | **Offline fake-model** soak; not production Agent load |
+| BoxLite | Operator-hosted KVM/HVF machine, locally set \`RIDGE_BOXLITE_HARDWARE_APPROVED=1\` and install BoxLite runtime | Run \`python scripts/release_acceptance.py --scope boxlite\`; standard shared GitHub runner does not claim real hardware |
+
+Ensure approval policies on \`staging-acceptance\` require human review before
+any billable E2B run. For manual local E2B acceptance, pass
+\`--approve-e2b-billing\` in addition to provisioning \`E2B_API_KEY\`; setting
+an environment variable alone is not sufficient.
+
+The evidence report's decision is **unconditionally NO-GO for public
+multi-tenant Agent execution** until end-to-end hosted Agent identity,
+multi-Gateway failover, real 24-hour mixed-tenant staging loads, security and
+operator sign-off are implemented **and separately proven**. A full set of
+green infrastructure jobs only establishes that those *specific scopes*
+passed on the recorded commit. It does not promote metadata-only staging
+or offline soaking into a production release.
