@@ -64,6 +64,8 @@ class ToolRegistry:
         self._registration_lock = threading.RLock()
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
+        # Registration provenance belongs to the session registry, not plugins.
+        self._tool_owners: dict[str, str] = {}
         # Optional session-owned deferred catalog; never stores executors.
         self._discovery_state = None
         self._discovery_guard: Callable[[str], bool] | None = None
@@ -143,7 +145,7 @@ class ToolRegistry:
         }
         state.activate_pending(lambda name: name in available and self._discovery_mode_allowed(name))
 
-    def register_tool(self, tool: Tool):
+    def register_tool(self, tool: Tool, *, owner: str = "legacy"):
         """
         注册Tool对象
 
@@ -151,6 +153,12 @@ class ToolRegistry:
             tool: Tool实例
         """
         with self._registration_lock:
+            self._validate_owner(owner)
+            previous = self._tool_owners.get(tool.name)
+            if previous is not None and previous != owner:
+                raise PermissionError(
+                    f"Tool '{tool.name}' belongs to '{previous}', not '{owner}'"
+                )
             if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
                 raise PermissionError("Cannot replace an approved sandbox tool")
             # One public name must resolve to exactly one execution adapter.
@@ -164,9 +172,13 @@ class ToolRegistry:
                     self._discovery_state.invalidate(tool.name)
 
             self._tools[tool.name] = tool
+            self._tool_owners[tool.name] = owner
             logger.info("工具 '%s' 已注册。", tool.name)
 
-    def register_function(self, name: str, description: str, func: Callable[[str], str]):
+    def register_function(
+        self, name: str, description: str, func: Callable[[str], str], *,
+        owner: str = "legacy",
+    ):
         """
         直接注册函数作为工具（简便方式）
 
@@ -176,6 +188,12 @@ class ToolRegistry:
             func: 工具函数，接受字符串参数，返回字符串结果
         """
         with self._registration_lock:
+            self._validate_owner(owner)
+            previous = self._tool_owners.get(name)
+            if previous is not None and previous != owner:
+                raise PermissionError(
+                    f"Tool '{name}' belongs to '{previous}', not '{owner}'"
+                )
             if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
                 raise PermissionError("Cannot override an approved sandbox tool")
             if name in self._tools:
@@ -189,11 +207,18 @@ class ToolRegistry:
                 "description": description,
                 "func": func
             }
+            self._tool_owners[name] = owner
             logger.info("工具 '%s' 已注册。", name)
 
-    def unregister(self, name: str):
+    def unregister(self, name: str, *, owner: str = "legacy"):
         """注销工具"""
         with self._registration_lock:
+            self._validate_owner(owner)
+            actual = self._tool_owners.get(name)
+            if actual is not None and actual != owner:
+                raise PermissionError(
+                    f"Tool '{name}' belongs to '{actual}', not '{owner}'"
+                )
             if name == "ToolSearch" and self._discovery_state is not None:
                 raise PermissionError("Cannot remove ToolSearch while discovery is enabled")
             if self._discovery_state is not None:
@@ -201,13 +226,71 @@ class ToolRegistry:
             if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
                 raise PermissionError("Cannot remove the approved sandbox tool")
             if name in self._tools:
+                del self._tool_owners[name]
                 del self._tools[name]
                 logger.info("工具 '%s' 已注销。", name)
             elif name in self._functions:
+                del self._tool_owners[name]
                 del self._functions[name]
                 logger.info("工具 '%s' 已注销。", name)
             else:
                 logger.warning("工具 '%s' 不存在。", name)
+
+    @staticmethod
+    def _validate_owner(owner: str) -> None:
+        if not isinstance(owner, str) or not 1 <= len(owner) <= 128 or not owner.strip():
+            raise ValueError("Tool registration owner must be a non-empty name (max 128 chars)")
+
+    def owner_of(self, name: str) -> str | None:
+        """Read the current registration provenance (not a permission grant)."""
+        with self._registration_lock:
+            return self._tool_owners.get(name)
+
+    def replace_owned_tools(self, owner: str, tools: list[Tool]) -> None:
+        """Atomically swap one source's entire inventory after discovery succeeds.
+
+        Reconnection never leaves a stale suffix or partially published MCP
+        tool set. A source cannot replace another source's published name.
+        The model-step seal still rejects old adapter identities.
+        """
+        self._validate_owner(owner)
+        new_tools = tuple(tools)
+        names = [tool.name for tool in new_tools]
+        if len(set(names)) != len(names) or any(
+            not isinstance(name, str) or not name for name in names
+        ):
+            raise ValueError("Owned inventory contains invalid or duplicate tool names")
+        with self._registration_lock:
+            if self._sandbox_allowed_tools is not None:
+                raise PermissionError("Cannot replace tools under sandbox policy")
+            for name in names:
+                previous = self._tool_owners.get(name)
+                if previous is not None and previous != owner:
+                    raise PermissionError(
+                        f"Tool '{name}' belongs to '{previous}', not '{owner}'"
+                    )
+                if name == "ToolSearch" and self._discovery_state is not None:
+                    raise PermissionError("Cannot replace active ToolSearch")
+            previous_names = [
+                name for name, registered_owner in self._tool_owners.items()
+                if registered_owner == owner
+            ]
+            for name in previous_names:
+                if name == "ToolSearch" and self._discovery_state is not None:
+                    raise PermissionError("Cannot remove active ToolSearch")
+                if self._discovery_state is not None:
+                    self._discovery_state.invalidate(name)
+            for name in previous_names:
+                self._tools.pop(name, None)
+                self._functions.pop(name, None)
+                self._tool_owners.pop(name, None)
+            for tool in new_tools:
+                self._tools[tool.name] = tool
+                self._tool_owners[tool.name] = owner
+
+    def unregister_owner(self, owner: str) -> None:
+        """Dispose only the selected source's registrations, never other owners."""
+        self.replace_owned_tools(owner, [])
 
     def capture_tool_step(
         self, *, allowed: Callable[[str], bool] | None = None,
@@ -894,6 +977,7 @@ class ToolRegistry:
                     self._discovery_state.invalidate(name)
             self._tools.clear()
             self._functions.clear()
+            self._tool_owners.clear()
             logger.info("所有工具已清空。")
 
 # 全局工具注册表
