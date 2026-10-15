@@ -164,3 +164,7 @@ def test_real_http_routing_uses_signed_principal_scope(backend):
         finally:
             assert client.delete(f"/api/v2/sessions/{sid}",
                                  headers=headers("alice")).status_code == 204
+
+
+def test_production_probe_requires_unprivileged_rls_runtime_role(backend):
+    assert backend.production_probe() is True
