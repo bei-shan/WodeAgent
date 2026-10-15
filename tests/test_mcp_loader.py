@@ -345,8 +345,8 @@ def test_mcp_pending_connections_are_registry_scoped():
         assert first_owner == second_owner == "mcp:shared"
         assert [adapter.name for adapter in first_adapters] == ["shared_read_first"]
         assert [adapter.name for adapter in second_adapters] == ["shared_read_second"]
-        assert first_adapters[0].client is client_one
-        assert second_adapters[0].client is client_two
+        assert first_adapters[0]._mcp_client is client_one
+        assert second_adapters[0]._mcp_client is client_two
     finally:
         clear_pending_servers()
 
