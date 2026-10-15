@@ -20,7 +20,7 @@ class DelegateModeFeature(AgentFeature):
         "TeamCreate", "SendMessage", "TeamStatus", "TeamDelete", "TeamCleanup",
         "TeamApprovals", "TeamApprovePlan", "TeamFanout", "TeamCollect",
         "TeamTaskCreate", "TeamTaskGet", "TeamTaskUpdate", "TeamTaskList",
-        "TodoWrite", "AskUser",
+        "TodoWrite", "AskUser", "ToolSearch",
     }
 
     def init(self, agent: "CodeAgent") -> None:
