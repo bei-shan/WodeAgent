@@ -63,11 +63,13 @@ export function ToolCard({ tool, sid }: { tool: ToolEntry; sid: string | null })
   const dot = tool.status === 'running' ? 'bg-amber-400 animate-pulse' : tool.status === 'error' ? 'bg-red-400' : 'bg-emerald-400'
   return (
     <div className={`ml-10 border rounded-xl px-3 py-2 text-xs ${colors} animate-slide-up`}>
-      <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
+      <button type="button" className="w-full flex items-center gap-2 text-left select-none"
+        onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
+        aria-label={`${tool.name} 工具详情`}>
         <span className={`w-2 h-2 rounded-full ${dot}`} />
         <span className="font-medium text-gray-700">{tool.name}</span>
         <span className="text-gray-400 ml-auto text-[10px]">{expanded ? '收起' : '展开'}</span>
-      </div>
+      </button>
       {expanded && (
         <div className="mt-2 space-y-1">
           <div className="text-gray-400 text-[10px] uppercase tracking-wide">Input</div>
@@ -110,46 +112,52 @@ export function NavItem({ icon, label, active, onClick }: { icon: string; label:
 
 export function SessionItem({ session, active, onSelect, onDelete, onRename, onTogglePin }: {
   session: SessionInfo; active: boolean; onSelect: () => void;
-  onDelete: () => void; onRename: (t: string) => void; onTogglePin: () => void;
+  onDelete: () => void; onRename: (title: string) => void; onTogglePin: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(session.title)
 
+  const finishRename = () => {
+    const title = name.trim()
+    if (title && title !== session.title) onRename(title)
+    setRenaming(false)
+  }
+
   return (
-    <div onClick={onSelect}
-      className={`group flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer transition-colors ${
-        active ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
-      }`}>
+    <div className={`session-row group flex items-center justify-between ${active ? 'active' : ''}`}>
       {renaming ? (
-        <input value={name} onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { onRename(name); setRenaming(false) } }}
-          onBlur={() => { onRename(name); setRenaming(false) }}
-          autoFocus
-          className="flex-1 bg-white border border-blue-300 rounded-lg px-2 py-0.5 text-[13px] outline-none"
-          onClick={e => e.stopPropagation()} />
+        <input aria-label="重命名会话" value={name} onChange={event => setName(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') { event.preventDefault(); finishRename() }
+            if (event.key === 'Escape') { setName(session.title); setRenaming(false) }
+          }}
+          onBlur={finishRename} autoFocus
+          className="mx-2 my-1 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-[13px] outline-none" />
       ) : (
-        <div className="flex items-center gap-1.5 min-w-0">
-          {session.pinned && <span className="text-[10px] shrink-0">📌</span>}
-          <span className="truncate text-[13px]">{session.title || session.id.slice(0, 8)}</span>
-          {session.busy && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />}
-        </div>
+        <button type="button" onClick={onSelect} aria-current={active ? 'page' : undefined}
+          className="session-row-main flex items-center gap-2" title={session.title || session.id}>
+          {session.pinned && <span className="shrink-0 text-xs" aria-label="置顶">📌</span>}
+          <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
+          {session.busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 animate-pulse" aria-label="执行中" />}
+        </button>
       )}
-      <div className="relative ml-1 shrink-0" onClick={e => e.stopPropagation()}>
-        <button onClick={() => setMenuOpen(!menuOpen)}
-          className="w-6 h-6 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 opacity-0 group-hover:opacity-100 transition-opacity">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+      <div className="relative shrink-0 pr-1">
+        <button type="button" onClick={() => setMenuOpen(value => !value)}
+          aria-label={`管理会话 ${session.title || session.id}`} aria-expanded={menuOpen}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-200 hover:text-gray-700 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-20 w-32 animate-fade-in">
-            <button onClick={() => { setRenaming(true); setMenuOpen(false) }}
-              className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors">重命名</button>
-            <button onClick={() => { onTogglePin(); setMenuOpen(false) }}
-              className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors">
+          <div className="absolute right-0 top-full z-20 mt-1 w-32 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+            <button type="button" onClick={() => { setName(session.title); setRenaming(true); setMenuOpen(false) }}
+              className="w-full px-3 py-2 text-left text-xs text-gray-600 hover:bg-gray-50">重命名</button>
+            <button type="button" onClick={() => { onTogglePin(); setMenuOpen(false) }}
+              className="w-full px-3 py-2 text-left text-xs text-gray-600 hover:bg-gray-50">
               {session.pinned ? '取消置顶' : '置顶'}
             </button>
-            <button onClick={() => { onDelete(); setMenuOpen(false) }}
-              className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 transition-colors">删除</button>
+            <button type="button" onClick={() => { onDelete(); setMenuOpen(false) }}
+              className="w-full px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50">删除</button>
           </div>
         )}
       </div>

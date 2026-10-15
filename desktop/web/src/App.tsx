@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
+import ChatComposer from './components/ChatComposer'
+import MessageContent from './components/MessageContent'
 import TracePanel from './components/TracePanel'
 import PluginsPanel from './components/PluginsPanel'
 import { createSessionEventHandler } from './state/sessionEvents'
 import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
-import { PermissionModal, AskUserModal, ToolCard, NavItem, SessionItem } from './components/ConversationWidgets'
+import { PermissionModal, AskUserModal, ToolCard, SessionItem } from './components/ConversationWidgets'
 import { SkillsPanel, McpPanel, HooksPanel } from './components/ManagementPanels'
 import type { Message, ToolEntry, PermRequest, AskRequest } from './components/types'
 import AuthGate from './AuthGate'
@@ -53,7 +55,6 @@ function AppCore() {
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(260)
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -68,7 +69,8 @@ function AppCore() {
 
   // Sidebar state
   const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'trace'>('sessions')
-  const [moreOpen, setMoreOpen] = useState(false)
+  const [sessionSearch, setSessionSearch] = useState('')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
   const [subagentStatus, setSubagentStatus] = useState('')
@@ -134,8 +136,21 @@ function AppCore() {
   }
 
   const createSession = async () => {
-    try { const session = await api.sessions.create(); setSessions(prev => [session, ...prev]); await selectSession(session.id, true) }
-    catch (e: any) { alert(e.message) }
+    try {
+      const session = await api.sessions.create()
+      setSessions(prev => [session, ...prev])
+      setSidebarTab('sessions')
+      setMobileNavOpen(false)
+      await selectSession(session.id, true)
+    } catch (e: any) { alert(e.message) }
+  }
+
+  const ensureSession = async (): Promise<string> => {
+    if (activeSidRef.current) return activeSidRef.current
+    const session = await api.sessions.create()
+    setSessions(prev => [session, ...prev])
+    await selectSession(session.id, true)
+    return session.id
   }
 
   const deleteSession = async (sid: string) => {
@@ -155,10 +170,23 @@ function AppCore() {
   }
 
   const toggleTeams = async () => {
-    const next = !agentTeams; setAgentTeams(next)
-    if (activeSid) {
-      try { await api.config.update(activeSid, { enable_agent_teams: next }); setTeamsList(await api.teams.list(activeSid)) } catch { setAgentTeams(!next) }
-    }
+    if (planMode) return
+    const next = !agentTeams
+    try {
+      const sid = await ensureSession()
+      await api.config.update(sid, { enable_agent_teams: next })
+      setAgentTeams(next)
+      setTeamsList(await api.teams.list(sid))
+    } catch (e: any) { alert('更新 Agent 团队失败：' + e.message) }
+  }
+
+  const togglePlanMode = async () => {
+    const next = !planMode
+    try {
+      const sid = await ensureSession()
+      await api.config.update(sid, { plan_mode: next })
+      setPlanMode(next)
+    } catch (e: any) { alert('切换计划模式失败：' + e.message) }
   }
 
   const createTeam = async () => {
@@ -218,21 +246,25 @@ function AppCore() {
     try { await api.sessions.interrupt(activeSidRef.current) }
     catch (e: any) { alert('中断失败：' + e.message) }
   }
-  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
 
   // File upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files; if (!files || !activeSid) return
-    for (let i = 0; i < files.length; i++) {
-      const form = new FormData(); form.append('file', files[i])
+    const files = e.target.files
+    if (!files?.length) return
+    let sid: string
+    try { sid = await ensureSession() }
+    catch (error: any) { alert('创建会话失败：' + error.message); e.target.value = ''; return }
+    for (const file of Array.from(files)) {
+      const form = new FormData()
+      form.append('file', file)
       try {
-        const res = await fetch(`/api/sessions/${activeSid}/upload`, { method: 'POST', body: form })
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/upload`, { method: 'POST', body: form })
         if (!res.ok) throw new Error('HTTP ' + res.status)
         const data = await res.json()
         setUploadedFiles(prev => [...prev, { name: data.name, path: data.path }])
-      } catch (e: any) { alert('上传失败：' + e.message) }
+      } catch (error: any) { alert('上传失败：' + error.message) }
     }
-    if (fileInputRef.current) fileInputRef.current.value = ''
+    e.target.value = ''
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -249,357 +281,265 @@ function AppCore() {
     { key: 'trace' as const, icon: Icons.brain, label: 'Trace' },
   ]
 
+  const filteredSessions = sessions.filter(session =>
+    (session.title || session.id).toLocaleLowerCase().includes(sessionSearch.trim().toLocaleLowerCase())
+  )
+  const activeSession = sessions.find(session => session.id === activeSid)
+  const activeTitle = sidebarTab === 'sessions'
+    ? (activeSession?.title || 'Ridge')
+    : navItems.find(item => item.key === sidebarTab)?.label || 'Ridge'
+
+  const composer = (
+    <ChatComposer
+      input={input} onInput={setInput} onSend={sendMessage} sending={sending}
+      models={models} selectedModel={selectedModel}
+      modelPickerOpen={showModelPicker} onToggleModelPicker={() => setShowModelPicker(v => !v)}
+      onChooseModel={chooseModel}
+      uploadedFiles={uploadedFiles}
+      onRemoveFile={path => setUploadedFiles(prev => prev.filter(file => file.path !== path))}
+      onFileUpload={handleFileUpload}
+      planMode={planMode} onTogglePlanMode={togglePlanMode}
+      agentTeams={agentTeams} onToggleTeams={toggleTeams}
+    />
+  )
+
   return (
-    <div className="fixed inset-0 flex bg-[#F9FAFB] text-gray-800 overflow-hidden">
-      {/* ═══════════════ LEFT SIDEBAR ═══════════════ */}
-      <aside ref={sidebarRef} className={`relative flex flex-col border-r border-gray-100 bg-white shrink-0 transition-all duration-200 overflow-hidden ${sidebarCollapsed ? 'w-0 border-r-0' : ''}`}
+    <div className="app-shell">
+      {mobileNavOpen && (
+        <button type="button" className="sidebar-backdrop" aria-label="关闭侧边栏"
+          onClick={() => setMobileNavOpen(false)} />
+      )}
+
+      <aside ref={sidebarRef} aria-label="主导航"
+        className={`app-sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}
         style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}>
-        <div className="flex-1 flex flex-col min-w-[220px]">
-        {/* Logo */}
-        <div className="px-4 pt-4 pb-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-            </div>
-            <span className="font-bold text-gray-800 text-lg">Ridge</span>
-          </div>
-        </div>
-
-        {/* New task button */}
-        <div className="px-4 pb-3">
-          <button onClick={createSession}
-            className="w-full py-2.5 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 transition-colors">
-            + 新建任务
-          </button>
-        </div>
-
-        {/* Agent teams status (toggle moved below input) */}
-        <div className="px-4 pb-3">
-          {agentTeams && (
-            <div className="mt-2 space-y-0.5">
-              {teamsList.map(t => (
-                <div key={t.name} className="flex items-center justify-between px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                  <div className="flex items-center gap-2">
-                    <Svg d={Icons.teams} size={13} />
-                    <span className="font-medium">{t.name}</span>
-                  </div>
-                  <span className="text-gray-400 text-[10px]">{t.running}跑 {t.succeeded}成</span>
-                </div>
-              ))}
-              <button onClick={() => setShowNewTeam(true)}
-                className="w-full text-xs text-blue-500 hover:text-blue-600 py-1 text-left font-medium flex items-center gap-1">
-                <Svg d={Icons.plus} size={11} /> 创建团队
+        <div className="sidebar-interior">
+          <div className="sidebar-top">
+            <div className="sidebar-brand">
+              <span className="sidebar-mark" aria-hidden="true">✳</span>
+              <span>Ridge</span>
+              <button type="button" className="mobile-only ml-auto topbar-button"
+                onClick={() => setMobileNavOpen(false)} aria-label="关闭导航">
+                <Svg d={Icons.xmark} size={18} />
               </button>
-              {showNewTeam && (
-                <div className="flex gap-1 mt-1">
-                  <input value={newTeamName} onChange={e => setNewTeamName(e.target.value)}
-                    placeholder="团队名称" className="flex-1 bg-gray-100 border border-gray-200 rounded-lg px-2 py-1.5 text-xs input-focus-ring" />
-                  <button onClick={createTeam} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 whitespace-nowrap">创建</button>
-                </div>
-              )}
             </div>
-          )}
-        </div>
-
-        {/* Navigation menu */}
-        <nav className="flex-1 overflow-y-auto px-3 space-y-0.5">
-          {navItems.map(item => (
-            <NavItem key={item.key} icon={item.icon} label={item.label}
-              active={sidebarTab === item.key}
-              onClick={() => setSidebarTab(item.key)} />
-          ))}
-
-          {/* Collapsible "More" group */}
-          <div className="pt-2">
-            <button onClick={() => setMoreOpen(!moreOpen)}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm text-gray-500 hover:bg-gray-50 transition-colors">
-              <div className="flex items-center gap-3">
-                <Svg d={Icons.chevron} size={14} className={`transition-transform duration-200 ${moreOpen ? 'rotate-180' : ''}`} />
-                <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">更多</span>
-              </div>
+            <button type="button" className="sidebar-main-button" onClick={createSession}>
+              <Svg d={Icons.plus} size={18} />
+              <span>新建任务</span>
             </button>
-            {moreOpen && (
-              <div className="ml-2 mt-0.5 animate-slide-up">
-                <div className="px-3 py-2 rounded-xl text-xs text-gray-400">
-                  更多功能开发中…
-                </div>
-              </div>
-            )}
+            <div className="flex items-center gap-1 mt-2 text-gray-400 px-1">
+              <Svg d={Icons.search} size={16} />
+              <input type="search" className="sidebar-search" placeholder="搜索对话"
+                aria-label="搜索对话" value={sessionSearch}
+                onChange={event => setSessionSearch(event.target.value)} />
+            </div>
           </div>
 
-          {/* Recent tasks group */}
-          <div className="pt-4">
-            <div className="px-3 pb-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">最近</div>
-            <div className="space-y-0.5">
-              {sessions.slice(0, 15).map(s => (
-                <SessionItem key={s.id} session={s} active={s.id === activeSid}
-                  onSelect={() => selectSession(s.id)}
-                  onDelete={() => setConfirmDelete(s.id)}
-                  onRename={async (title) => { try { await api.sessions.rename(s.id, title); loadSessions() } catch {} }}
-                  onTogglePin={async () => { try { await api.sessions.togglePin(s.id); loadSessions() } catch {} }}
+          <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="会话和工作台">
+            {filteredSessions.some(session => session.pinned) && (
+              <section aria-label="置顶对话">
+                <div className="sidebar-section-label">置顶</div>
+                {filteredSessions.filter(session => session.pinned).map(session => (
+                  <SessionItem key={session.id} session={session} active={session.id === activeSid && sidebarTab === 'sessions'}
+                    onSelect={() => { setSidebarTab('sessions'); setMobileNavOpen(false); selectSession(session.id) }}
+                    onDelete={() => setConfirmDelete(session.id)}
+                    onRename={async title => { try { await api.sessions.rename(session.id, title); loadSessions() } catch {} }}
+                    onTogglePin={async () => { try { await api.sessions.togglePin(session.id); loadSessions() } catch {} }}
+                  />
+                ))}
+              </section>
+            )}
+            <section aria-label="最近对话">
+              <div className="sidebar-section-label">最近的对话</div>
+              {filteredSessions.filter(session => !session.pinned).map(session => (
+                <SessionItem key={session.id} session={session} active={session.id === activeSid && sidebarTab === 'sessions'}
+                  onSelect={() => { setSidebarTab('sessions'); setMobileNavOpen(false); selectSession(session.id) }}
+                  onDelete={() => setConfirmDelete(session.id)}
+                  onRename={async title => { try { await api.sessions.rename(session.id, title); loadSessions() } catch {} }}
+                  onTogglePin={async () => { try { await api.sessions.togglePin(session.id); loadSessions() } catch {} }}
                 />
               ))}
-              {sessions.length === 0 && (
-                <div className="px-3 py-4 text-center">
-                  <div className="text-xs text-gray-400">暂无任务记录</div>
-                  <div className="text-[11px] text-gray-300 mt-1">经典版对话记录请在用户菜单中切换查看</div>
-                </div>
+              {filteredSessions.length === 0 && (
+                <p className="px-3 py-4 text-xs text-gray-400">
+                  {sessionSearch ? '没有匹配的对话' : '还没有对话，创建一个新任务吧'}
+                </p>
               )}
+            </section>
+            <section aria-label="工作台">
+              <div className="sidebar-section-label">工作台</div>
+              {navItems.filter(item => item.key !== 'sessions').map(item => (
+                <button key={item.key} type="button"
+                  className={`sidebar-nav-button ${sidebarTab === item.key ? 'active' : ''}`}
+                  onClick={() => { setSidebarTab(item.key); setMobileNavOpen(false); setShowModelPicker(false) }}>
+                  <Svg d={item.icon} size={17} /> <span>{item.label}</span>
+                </button>
+              ))}
+            </section>
+            {agentTeams && (
+              <section aria-label="Agent 团队" className="px-1">
+                <div className="sidebar-section-label">Agent 团队</div>
+                {teamsList.map(team => (
+                  <div key={team.name} className="flex justify-between gap-2 px-3 py-2 text-xs text-gray-600">
+                    <span className="truncate">{team.name}</span>
+                    <span className="shrink-0 text-gray-400">{team.running} 运行 / {team.succeeded} 完成</span>
+                  </div>
+                ))}
+                {showNewTeam ? (
+                  <div className="flex gap-1 px-2">
+                    <input aria-label="团队名称" value={newTeamName}
+                      onChange={event => setNewTeamName(event.target.value)}
+                      onKeyDown={event => { if (event.key === 'Enter') createTeam() }}
+                      placeholder="团队名称" className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs" />
+                    <button type="button" onClick={createTeam} className="rounded-lg bg-gray-800 px-2 py-1 text-xs text-white">创建</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setShowNewTeam(true)}
+                    className="sidebar-nav-button"><Svg d={Icons.plus} size={14} /> 创建团队</button>
+                )}
+              </section>
+            )}
+          </nav>
+          <div className="sidebar-bottom">
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
+              className="sidebar-nav-button no-underline">
+              <Svg d={Icons.doc} size={17} /> <span>GitHub 源码与文档</span>
+            </a>
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
+              <span className="h-7 w-7 rounded-full bg-gray-200 flex items-center justify-center">
+                <Svg d={Icons.user} size={14} />
+              </span>
+              <span>本地工作区</span>
             </div>
-          </div>
-        </nav>
-
-        {/* Bottom: download + user */}
-        <div className="border-t border-gray-100 px-4 py-3 space-y-2">
-          <a href={GITHUB_URL} target="_blank" rel="noopener"
-            className="w-full flex items-center gap-2.5 px-2 py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors no-underline">
-            <Svg d={Icons.download} size={16} />
-            <span>下载 CLI</span>
-          </a>
-          <div className="flex items-center gap-2.5 px-2">
-            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
-              <Svg d={Icons.user} size={12} />
-            </div>
-            <span className="text-sm text-gray-600">sam</span>
           </div>
         </div>
-        </div>{/* close inner flex wrapper */}
-        {/* Resize handle */}
         {!sidebarCollapsed && (
-          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-300 transition-colors z-10"
-            onMouseDown={e => {
-              e.preventDefault()
-              const startX = e.clientX
+          <div className="sidebar-grip desktop-only" role="separator" aria-label="调整侧边栏宽度"
+            onMouseDown={event => {
+              event.preventDefault()
+              const startX = event.clientX
               const startW = sidebarWidth
-              const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(180, Math.min(500, startW + ev.clientX - startX)))
-              const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
-              document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
+              const onMove = (e: MouseEvent) => setSidebarWidth(Math.max(224, Math.min(420, startW + e.clientX - startX)))
+              const onUp = () => {
+                document.removeEventListener('mousemove', onMove)
+                document.removeEventListener('mouseup', onUp)
+              }
+              document.addEventListener('mousemove', onMove)
+              document.addEventListener('mouseup', onUp)
             }}
           />
         )}
       </aside>
 
-      {/* ═══════════════ RIGHT MAIN ═══════════════ */}
-      <main className="flex-1 flex flex-col min-w-0 bg-[#F9FAFB]">
-        {/* Top bar */}
-        <header className="px-4 py-3 flex items-center justify-between shrink-0 gap-3">
-          <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              {sidebarCollapsed
-                ? <><path d="M4 6h16M4 12h16M4 18h16"/></>
-                : <><path d="M3 12h18M3 6h12m-12 12h12"/></>}
-            </svg>
-          </button>
-          <div className="flex items-center gap-3">
-          {activeSid && <span className={`text-xs mr-2 ${streamConnected ? 'text-emerald-600' : 'text-amber-600'}`}>
-            {streamConnected ? '实时连接正常' : '连接中 / 自动重连…'}
-          </span>}
-          {sending && <button onClick={interrupt} className="text-xs text-red-600 border rounded-lg px-3 py-1.5">停止生成</button>}
-            <a href={GITHUB_URL} target="_blank" rel="noopener"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
-              <Svg d={Icons.doc} size={16} />
-              <span>文档</span>
-            </a>
-            <a href={GITHUB_URL} target="_blank" rel="noopener"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors no-underline">
-              <Svg d={Icons.download} size={16} />
-              <span>下载 CLI</span>
+      <main className="app-main">
+        <header className="topbar">
+          <div className="flex items-center gap-2 min-w-0">
+            <button type="button" className="topbar-button desktop-only"
+              onClick={() => setSidebarCollapsed(value => !value)}
+              aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}>
+              <Svg d={Icons.chat} size={18} />
+            </button>
+            <button type="button" className="topbar-button mobile-only"
+              onClick={() => setMobileNavOpen(true)} aria-label="打开侧边栏">
+              <Svg d={Icons.chat} size={18} />
+            </button>
+            <h2 className="topbar-title">{activeTitle}</h2>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {activeSid && (
+              <div className={`connection-state ${streamConnected ? '' : 'offline'}`} role="status">
+                <span className="connection-dot" aria-hidden="true" />
+                {streamConnected ? '实时连接正常' : '连接中 / 自动重连…'}
+              </div>
+            )}
+            {sending && (
+              <button type="button" onClick={interrupt}
+                className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">停止生成</button>
+            )}
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
+              className="topbar-button" aria-label="查看项目源码" title="GitHub">
+              <Svg d={Icons.doc} size={18} />
             </a>
           </div>
         </header>
 
-        {/* ── Skills management panel ── */}
         {sidebarTab === 'skills' && (
           <SkillsPanel skills={skillsList} onRefresh={async () => { try { setSkillsList(await api.skills.list()) } catch {} }} />
         )}
-
         {sidebarTab === 'plugins' && <PluginsPanel />}
-
-        {/* ── MCP management panel ── */}
         {sidebarTab === 'mcp' && (
           <McpPanel servers={mcpServers} onRefresh={async () => { try { setMcpServers(await api.mcp.list()) } catch {} }} />
         )}
-
-        {/* ── Hooks management panel ── */}
         {sidebarTab === 'hooks' && <HooksPanel />}
         {sidebarTab === 'files' && <FileBrowser sessionId={activeSid} />}
         {sidebarTab === 'trace' && <TracePanel sessionId={activeSid} />}
 
-        {/* ── Chat / empty state ── */}
         {sidebarTab === 'sessions' && (messages.length === 0 && !sending ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-8">
-            <h1 className="text-[28px] font-bold text-gray-800 mb-12 tracking-tight">Hi, 我是 Ridge</h1>
-
-            {/* Input card — white, shadow, accessories bar above textarea */}
-            <div className="w-full max-w-4xl bg-white rounded-2xl border border-gray-200 shadow-sm">
-              {/* Accessories bar — left/right groups, above textarea */}
-              <div className="flex items-center justify-between px-5 pt-4 pb-2">
-                <div className="flex items-center gap-3">
-                  {/* Model selector */}
-                  <div className="relative">
-                    <button onClick={() => setShowModelPicker(!showModelPicker)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                      <Svg d={Icons.brain} size={16} />
-                      <span>{selectedModel || models[0]?.model || 'Model'}</span>
-                      <Svg d={Icons.chevron} size={12} className="text-gray-400" />
-                    </button>
-                    {showModelPicker && models.length > 0 && (
-                      <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-10 min-w-[180px]">
-                        {models.map(m => (
-                          <button key={m.name} onClick={() => chooseModel(m)}
-                            className="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">{m.model}</button>
-                        ))}
+          <div className="empty-chat">
+            <div className="empty-chat-content">
+              <h1>Hi, 我是 Ridge</h1>
+              {composer}
+              <div className="prompt-shortcuts" aria-label="快捷任务">
+                {SCENARIOS.map(scenario => (
+                  <button key={scenario.label} type="button" className="prompt-shortcut"
+                    onClick={() => fillScenario(scenario.prompt)}>
+                    {scenario.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="conversation-area" role="log" aria-label="对话消息" aria-live="polite">
+            <div className="message-stream">
+              {messages.map(message => (
+                <div key={message.id} className={`chat-message ${message.role === 'user' ? 'user' : 'assistant'} animate-slide-up`}>
+                  <div className={message.role === 'user' ? 'chat-message-user-body' : 'chat-message-assistant-body'}>
+                    <MessageContent content={message.content || (message.streaming ? '' : '(空)')}
+                      streaming={message.streaming} />
+                    {message.step && <div className="mt-1 text-xs text-gray-400">Step {message.step}</div>}
+                    {message.role === 'assistant' && !message.streaming && message.content && (
+                      <div className="message-actions">
+                        <button type="button" aria-label="复制回答"
+                          onClick={() => navigator.clipboard?.writeText(message.content)}>
+                          <Svg d={Icons.doc} size={13} /> 复制
+                        </button>
                       </div>
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => fileInputRef.current?.click()} disabled={!activeSid} title={activeSid ? '上传文件' : '请先创建会话'}
-                    className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
-                    <Svg d={Icons.plus} size={16} />
-                  </button>
-                  <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
-                </div>
-              </div>
-              {/* Textarea */}
-              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                disabled={sending} rows={2}
-                placeholder="问任何问题"
-                className="w-full bg-transparent px-5 text-gray-800 resize-none text-[15px] leading-relaxed disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
-              />
-              {/* Bottom bar: toggles left, send right */}
-              <div className="flex items-center justify-between px-5 pb-4">
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <span className="text-[11px] text-gray-400" title="模型推理参数尚未接入，暂不可用">深度思考（待接入）</span>
-                    <label className="toggle"><input type="checkbox" disabled title="功能暂未接入" /><span className="slider" /></label>
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <span className="text-[11px] text-gray-400">Agent 团队</span>
-                    <label className="toggle"><input type="checkbox" checked={agentTeams} onChange={toggleTeams} disabled={planMode} /><span className="slider" /></label>
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <span className="text-[11px] text-gray-400">Plan</span>
-                    <label className="toggle"><input type="checkbox" checked={planMode} onChange={async () => {
-                      const next = !planMode; setPlanMode(next);
-                      if (activeSid) { try { await api.config.update(activeSid, { plan_mode: next }) } catch { setPlanMode(!next) } }
-                    }} /><span className="slider" /></label>
-                  </label>
-                </div>
-                <button onClick={sendMessage} disabled={sending || !input.trim()}
-                  className="w-9 h-9 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Svg d={Icons.send} size={17} />
-                </button>
-              </div>
-            </div>
-
-            {/* Uploaded files preview */}
-            {uploadedFiles.length > 0 && (
-              <div className="flex flex-wrap gap-2 justify-center mt-3">
-                {uploadedFiles.map((f, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-blue-50 text-blue-600 text-xs">
-                    <Svg d={Icons.file} size={12} /> {f.name}
-                    <button onClick={() => setUploadedFiles(prev => prev.filter(x => x.path !== f.path))}
-                      className="ml-1 text-blue-400 hover:text-red-500">×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Quick tags */}
-            <div className="flex flex-wrap gap-2 justify-center mt-5">
-              {SCENARIOS.map(s => (
-                <button key={s.label} onClick={() => fillScenario(s.prompt)}
-                  className="px-3.5 py-1.5 rounded-full border border-gray-200 text-xs text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 transition-colors bg-white">
-                  {s.label}
-                </button>
-              ))}
-            </div>
-
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
-            <div className="max-w-4xl mx-auto py-6 px-6 space-y-5">
-              {messages.map(msg => (
-                <div key={msg.id} className={`flex gap-3 animate-slide-up ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                  {msg.role === 'assistant' && (
-                    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 shrink-0 mt-0.5">
-                      <Svg d={Icons.chat} size={16} />
-                    </div>
-                  )}
-                  <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${
-                    msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-50 text-gray-800 border border-gray-100'
-                  }`}>
-                    <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${msg.streaming ? 'cursor-blink' : ''}`}>
-                      {msg.content || (msg.streaming ? '' : '(空)')}
-                    </div>
-                    {msg.step && <div className="text-[10px] opacity-40 mt-1">Step {msg.step}</div>}
-                  </div>
-                </div>
               ))}
               {tools.length > 0 && (
-                <div className="space-y-2" aria-label="工具执行记录">
-                  <h3 className="text-xs text-gray-500 ml-10">工具执行记录</h3>
-                  {tools.map(tool => <ToolCard key={tool.id} tool={tool} sid={activeSid} />)}
-                </div>
+                <section className="message-tools" aria-label="工具执行记录">
+                  <h3 className="text-xs">工具执行记录</h3>
+                  <div className="space-y-2">
+                    {tools.map(tool => <ToolCard key={tool.id} tool={tool} sid={activeSid} />)}
+                  </div>
+                </section>
               )}
-              {subagentStatus && <div className="ml-10 text-xs text-blue-600">{subagentStatus}</div>}
-              {/* Generated files download */}
+              {subagentStatus && <p className="text-xs text-blue-600">{subagentStatus}</p>}
               {generatedFiles.length > 0 && (
-                <div className="border-t border-gray-100 pt-3 mt-2">
-                  <div className="text-[11px] text-gray-400 mb-1.5">生成的文件</div>
+                <section aria-label="生成的文件" className="rounded-xl border border-gray-100 p-3">
+                  <h3 className="mb-2 text-xs font-medium text-gray-500">生成的文件</h3>
                   <div className="flex flex-wrap gap-2">
-                    {generatedFiles.map((f, i) => (
-                      <a key={i} href={`/api/sessions/${activeSid}/files/download?path=${encodeURIComponent(f.path)}`}
-                        download className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-colors">
-                        <Svg d={Icons.download} size={12} /> {f.name}
+                    {generatedFiles.map(file => (
+                      <a key={file.path} href={`/api/sessions/${activeSid}/files/download?path=${encodeURIComponent(file.path)}`}
+                        download className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100">
+                        <Svg d={Icons.download} size={12} /> {file.name}
                       </a>
                     ))}
                   </div>
-                </div>
+                </section>
               )}
               <div ref={chatEndRef} />
             </div>
           </div>
         ))}
 
-        {/* Bottom input (when chat started) */}
-        {sidebarTab === 'sessions' && messages.length > 0 && (
-          <div className="px-6 py-4 shrink-0">
-            <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-gray-200 shadow-sm">
-              <div className="flex items-center justify-between px-5 pt-4 pb-2">
-                <div className="flex items-center gap-3">
-                  <button onClick={() => fileInputRef.current?.click()}
-                    className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 hover:text-blue-500 transition-colors">
-                    <Svg d={Icons.plus} size={14} />
-                  </button>
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-sm text-gray-500" title="模型推理参数尚未接入">深度思考（待接入）</span>
-                    <label className="toggle"><input type="checkbox" disabled title="功能暂未接入" /><span className="slider" /></label>
-                  </label>
-                </div>
-                <button onClick={sendMessage} disabled={sending || !input.trim()}
-                  className="w-8 h-8 rounded-full bg-gray-200 text-gray-400 flex items-center justify-center hover:bg-blue-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Svg d={Icons.send} size={15} />
-                </button>
-              </div>
-              {uploadedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-5 pb-1">
-                  {uploadedFiles.map((f, i) => (
-                    <span key={i} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[11px]">
-                      <Svg d={Icons.file} size={11} /> {f.name}
-                      <button onClick={() => setUploadedFiles(prev => prev.filter(x => x.path !== f.path))}
-                        className="ml-0.5 text-blue-400 hover:text-red-500">×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                disabled={sending} rows={2}
-                placeholder="继续对话… (Enter 发送)"
-                className="w-full bg-transparent px-5 pb-5 text-sm text-gray-800 resize-none disabled:opacity-40 placeholder:text-gray-400 border-0 focus:outline-none"
-              />
+        {sidebarTab === 'sessions' && (messages.length > 0 || sending) && (
+          <div className="chat-footer">
+            <div className="chat-footer-inner">
+              {composer}
+              <p className="chat-disclaimer">Ridge 可能出错，请核对重要代码和执行结果。</p>
             </div>
           </div>
         )}
