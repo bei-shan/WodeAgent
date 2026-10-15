@@ -11,6 +11,10 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
   const [baseline, setBaseline] = useState<string | null>(null)
   const [comparison, setComparison] = useState<string | null>(null)
   const [diffMode, setDiffMode] = useState(false)
+  const [gitMode, setGitMode] = useState(false)
+  const [gitPatch, setGitPatch] = useState('')
+  const [gitReason, setGitReason] = useState('')
+  const [gitLoading, setGitLoading] = useState(false)
   const [fileTruncated, setFileTruncated] = useState(false)
   const revision = useRef(0)
   const [error, setError] = useState('')
@@ -25,7 +29,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
     setContent('')
     setBaseline(null)
     setComparison(null)
-    setDiffMode(false)
+    setDiffMode(false); setGitMode(false)
     setFileTruncated(false)
   }, [sessionId])
 
@@ -56,7 +60,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
       setSelected(null)
       setBaseline(null)
       setComparison(null)
-      setDiffMode(false)
+      setDiffMode(false); setGitMode(false)
       setPath(entry.path)
       return
     }
@@ -64,7 +68,9 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
     setContent('')
     setBaseline(null)
     setComparison(null)
-    setDiffMode(false)
+    setDiffMode(false); setGitMode(false)
+    setGitPatch('')
+    setGitReason('')
     setError('')
     try {
       const result = await files.content(sessionId, entry.path)
@@ -93,9 +99,29 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
       }
       setComparison(normalize(latest.content))
       setContent(latest.content)
+      setGitMode(false)
       setDiffMode(true)
     } catch (err: any) {
       if (serial === revision.current) setError(err.message || '获取最新快照失败')
+    }
+  }
+
+  const compareGit = async () => {
+    if (!sessionId || !selected) return
+    const serial = ++revision.current
+    setGitLoading(true)
+    setError('')
+    try {
+      const result = await files.gitDiff(sessionId, selected)
+      if (serial !== revision.current) return
+      setGitPatch(result.patch || '')
+      setGitReason(result.reason || '')
+      setGitMode(true)
+      setDiffMode(false)
+    } catch (err: any) {
+      if (serial === revision.current) setError(err.message || 'Git Diff 获取失败')
+    } finally {
+      if (serial === revision.current) setGitLoading(false)
     }
   }
 
@@ -116,7 +142,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
           <div className="grid md:grid-cols-2 gap-4">
             <div className="bg-white border rounded-xl overflow-hidden">
               <div className="flex items-center gap-2 border-b p-3 text-sm font-mono">
-                <button onClick={() => { setPath(parent); setSelected(null); setBaseline(null); setComparison(null); setDiffMode(false); revision.current++ }} disabled={path === '.'} className="text-blue-600 disabled:text-gray-300">上一级</button>
+                <button onClick={() => { setPath(parent); setSelected(null); setBaseline(null); setComparison(null); setDiffMode(false); setGitMode(false); revision.current++ }} disabled={path === '.'} className="text-blue-600 disabled:text-gray-300">上一级</button>
                 <span className="truncate ml-2">{path === '.' || path === './' ? '/' : '/' + path}</span>
               </div>
               {loading && <p className="p-4 text-sm text-gray-500">加载中…</p>}
@@ -138,27 +164,32 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
               <div className="flex items-center justify-between p-3 border-b gap-2">
                 <span className="font-mono text-xs truncate">{selected || '文件预览'}</span>
                 <div className="flex items-center gap-2 shrink-0">
+                  {selected && <button type="button" disabled={gitLoading}
+                    onClick={() => void compareGit()} className="text-xs text-blue-600 disabled:opacity-50">Git Diff</button>}
                   {selected && baseline !== null && (
                     <button type="button" onClick={() => void compareLatest()} disabled={fileTruncated}
                       className="text-xs text-blue-600 disabled:opacity-40">对比最新</button>
                   )}
                   {selected && diffMode && (
-                    <button type="button" onClick={() => setDiffMode(false)} className="text-xs text-gray-600">原文</button>
+                    <button type="button" onClick={() => setDiffMode(false); setGitMode(false)} className="text-xs text-gray-600">原文</button>
                   )}
                   {selected && comparison !== null && (
-                    <button type="button" onClick={() => { setBaseline(comparison); setDiffMode(false); setComparison(null) }}
+                    <button type="button" onClick={() => { setBaseline(comparison); setDiffMode(false); setGitMode(false); setComparison(null) }}
                       className="text-xs text-gray-600" title="更新此浏览器会话中的文件对比基线">更新基线</button>
                   )}
                   {selected && <a className="text-blue-600 text-xs" download
                     href={`/api/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(selected)}`}>下载</a>}
                 </div>
               </div>
-              {selected ? (diffMode && baseline !== null && comparison !== null
-                ? <FileDiff before={baseline} after={comparison} />
-                : <pre className="p-4 overflow-auto whitespace-pre-wrap text-xs max-h-[65vh]">{content}</pre>)
+              {selected ? (gitMode
+                ? gitPatch ? <pre aria-label="Git Diff 内容" className="p-4 overflow-auto whitespace-pre-wrap text-xs max-h-[65vh]">{gitPatch}</pre>
+                  : <p className="p-4 text-sm text-gray-500">{gitReason || '相对 HEAD 没有变化'}</p>
+                : diffMode && baseline !== null && comparison !== null
+                  ? <FileDiff before={baseline} after={comparison} />
+                  : <pre className="p-4 overflow-auto whitespace-pre-wrap text-xs max-h-[65vh]">{content}</pre>)
                 : <p className="p-4 text-sm text-gray-400">选择一个文件以查看内容。</p>}
               {selected && <p className="px-3 py-2 border-t text-[11px] text-gray-400">
-                Diff 对比的是当前浏览器会话首次查看时与再次读取时的文件快照，不是 Git 提交历史。
+                「对比最新」是本地快照比较；「Git Diff」仅针对会话内 Git 仓库中的已跟踪文件，对比 HEAD。
               </p>}
             </div>
           </div>
