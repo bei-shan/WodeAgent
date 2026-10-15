@@ -196,6 +196,10 @@ def create_app(
     )
     app.state.execution_history = ExecutionHistory(os.path.join(app.state.data_dir, 'sessions'))
     app.state.git_diff_service = GitDiffService(app.state.workspace_service)
+    # Interactive containers are opt-in, require explicit local auth, and are
+    # capped independently from Agent turn admission.
+    app.state.terminal_enabled = os.getenv('WEB_SANDBOX_TERMINAL_ENABLED', '').lower() == 'true' and auth is not None
+    app.state.terminal_sessions = set()
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state.config_catalog = ConfigCatalogService(app.state.project_root)
@@ -601,6 +605,50 @@ def create_app(
         return await asyncio.to_thread(
             app.state.workspace_service.content, sid, path, start_line, limit,
         )
+
+    @app.get("/api/sandbox/terminal-capabilities")
+    async def sandbox_terminal_capabilities():
+        import shutil
+        return {
+            "enabled": bool(app.state.terminal_enabled and shutil.which("docker")),
+            "backend": "docker",
+            "interactive": True,
+        }
+
+    @app.websocket("/api/sessions/{sid}/terminal")
+    async def session_docker_terminal(ws: WebSocket, sid: str):
+        # Refuse when local auth is absent even if the UI is running on
+        # localhost. A browser WebSocket has no CSRF token of its own.
+        if not app.state.terminal_enabled or not allow_websocket(ws, auth):
+            await ws.close(code=4403)
+            return
+        try:
+            app.state.session_service._require_known(sid)
+        except ServiceError:
+            await ws.close(code=4404)
+            return
+        if sid in app.state.terminal_sessions or len(app.state.terminal_sessions) >= 2:
+            await ws.close(code=4429)
+            return
+        app.state.terminal_sessions.add(sid)
+        try:
+            from core.sandbox.docker_provider import DockerCommandProvider
+            from desktop.service.docker_terminal import serve_docker_terminal
+            from core.sandbox.contracts import SandboxUnavailable
+            import shutil
+            if not shutil.which("docker"):
+                await ws.close(code=4503)
+                return
+            # The secure workspace service materializes and verifies the
+            # per-session directory without following a session symlink.
+            with app.state.workspace_service._root_fd(sid):
+                workspace = os.path.join(app.state.data_dir, "sessions", sid)
+                provider = DockerCommandProvider(workspace)
+            await serve_docker_terminal(ws, provider)
+        except (SandboxUnavailable, ServiceError, OSError):
+            await ws.close(code=4503)
+        finally:
+            app.state.terminal_sessions.discard(sid)
 
     @app.get("/api/sessions/{sid}/git/diff")
     async def get_session_git_diff(
