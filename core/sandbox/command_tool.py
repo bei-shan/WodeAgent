@@ -4,8 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from core.sandbox.docker_provider import SandboxUnavailable
-from core.sandbox.contracts import SandboxCommandProvider
+from core.sandbox.contracts import SandboxCommandProvider, SandboxUnavailable
 from core.runtime.cancellation import current_cancel_event
 from tools.builtin.bash import BashTool
 from tools.base import ErrorCode
