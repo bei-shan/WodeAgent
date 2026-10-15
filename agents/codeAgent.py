@@ -136,6 +136,10 @@ class CodeAgent(Agent):
         for feat in self._features:
             feat.post_init(self)
 
+        # Deferred catalog must see the fully-registered built-ins and the
+        # final post-init tool removals. Disabled by default for compatibility.
+        self._configure_tool_discovery()
+
         # ── Session ID fallback ──
         if not hasattr(self, "_session_id"):
             import uuid
@@ -269,6 +273,41 @@ class CodeAgent(Agent):
         # MCP prompt sync (tools registered by MCPFeature.init)
         self.context_builder.set_mcp_tools_prompt(
             "" if self._sandbox_mode != "local_trusted" else self._mcp_tools_prompt
+        )
+
+    def _configure_tool_discovery(self) -> None:
+        """Enable one bounded tool-search catalog for this local Agent session.
+
+        This is a context/UX optimization, never hosted authorization: the
+        existing plan/delegate feature hooks and sandbox gate remain mandatory.
+        """
+        self._tool_discovery_state = None
+        if not getattr(self.config, "tool_deferred_discovery_enabled", False):
+            return
+        if self._sandbox_mode != "local_trusted":
+            self.logger.warning("Deferred tool discovery disabled in isolated sandbox mode")
+            return
+        from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
+
+        def mode_allows(name: str) -> bool:
+            if self._in_plan_mode and name not in self.PLAN_MODE_TOOLS:
+                return False
+            if self.delegate_mode and not self._is_tool_allowed_in_delegate_mode(name):
+                return False
+            return True
+
+        state = ToolDiscoveryState(
+            max_promoted=getattr(self.config, "tool_discovery_max_promoted", 18),
+        )
+        self.tool_registry.register_tool(
+            ToolSearchTool(self.tool_registry, state, can_promote=mode_allows),
+        )
+        self.tool_registry.enable_deferred_discovery(state)
+        self._tool_discovery_state = state
+        self.context_builder.set_mcp_tools_prompt(
+            "Additional MCP, team and plugin tools are deferred. "
+            "Call ToolSearch with a specific name or capability to discover "
+            "tools before invoking them. Discovery does not grant permissions."
         )
 
     # ------------------------------------------------------------------
