@@ -122,6 +122,16 @@ function AppCore() {
         setMessages(data.messages.map(m => ({ id: uid(), role: m.role, content: m.content })))
         connectSession(sid, fresh)
       }
+      // The durable projection is fetched independently from chat history;
+      // WebSocket tool events may arrive before this request resolves.
+      const recorded = await api.sessions.executionHistory(sid).catch(() => ({ tools: [] }))
+      if (isCurrent()) {
+        setTools(live => {
+          const byId = new Map(recorded.tools.map(t => [t.id, t]))
+          for (const item of live) byId.set(item.id, item)
+          return Array.from(byId.values())
+        })
+      }
       const meta = await api.sessions.get(sid)
       if (isCurrent()) setSending(meta.busy)
     } catch (e: any) { alert('打开会话失败：' + e.message) }
