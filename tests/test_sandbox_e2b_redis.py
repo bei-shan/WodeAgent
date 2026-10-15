@@ -80,7 +80,7 @@ def test_reserve_track_release_and_config_fencing():
     assert list(db.h.values())[0][token(1)].endswith(":remote-vm-001")
     with pytest.raises(SandboxUnavailable, match="capacity"):
         b.reserve(token(2))
-    with pytest.raises(SandboxUnavailable, match="ownership"):
+    with pytest.raises(SandboxUnavailable, match="not confirmed"):
         b.release(token(1))
     with pytest.raises(SandboxUnavailable, match="ownership"):
         a.reserve(token(1))
