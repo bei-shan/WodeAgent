@@ -40,7 +40,7 @@ class FakeDocker:
                 cid for cid, (name, labels) in self.containers.items()
                 if all(item.removeprefix("label=").partition("=")[0] in labels
                        and labels[item.removeprefix("label=").partition("=")[0]]
-                       == item.partition("=")[-1] for item in filters)
+                       == item.removeprefix("label=").partition("=")[2] for item in filters)
             ][:MAX_SCAN]
             return subprocess.CompletedProcess(args, 0, "\n".join(eligible) + "\n", "")
         if args[1] == "inspect":
