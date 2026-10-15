@@ -34,6 +34,9 @@ class ToolDiscoveryState:
         self.always_visible = frozenset(always_visible) | {"ToolSearch"}
         self.max_promoted = max(1, min(int(max_promoted), 48))
         self._promoted: dict[str, None] = {}
+        # Search returns a proposal; visibility changes only at the next
+        # explicit model-schema binding, never during the tool batch itself.
+        self._pending: dict[str, None] = {}
         self._lock = threading.RLock()
 
     def is_visible(self, name: str) -> bool:
@@ -46,6 +49,23 @@ class ToolDiscoveryState:
         """Replacing/removing a tool revokes approval for its old executable."""
         with self._lock:
             self._promoted.pop(name, None)
+            self._pending.pop(name, None)
+
+    def pending_names(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._pending)
+
+    def activate_pending(self, allowed: Callable[[str], bool]) -> None:
+        """Commit discoveries at the model schema boundary, not mid-batch."""
+        with self._lock:
+            for name in tuple(self._pending):
+                try:
+                    permitted = bool(allowed(name))
+                except Exception:
+                    permitted = False
+                if permitted and len(self._promoted) < self.max_promoted:
+                    self._promoted[name] = None
+            self._pending.clear()
 
     def promoted_names(self) -> frozenset[str]:
         with self._lock:
@@ -101,11 +121,12 @@ class ToolDiscoveryState:
         matches: list[dict[str, str]] = []
         with self._lock:
             for _, name, description in ranked:
-                if len(matches) >= limit or len(self._promoted) >= self.max_promoted:
+                if (len(matches) >= limit
+                        or len(self._promoted) + len(self._pending) >= self.max_promoted):
                     break
-                if name in self._promoted or not permitted(name):
+                if name in self._promoted or name in self._pending or not permitted(name):
                     continue
-                self._promoted[name] = None
+                self._pending[name] = None
                 matches.append({"name": name, "description": description[:240]})
         return matches
 
