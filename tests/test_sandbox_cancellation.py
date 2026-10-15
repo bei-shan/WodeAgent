@@ -11,11 +11,13 @@ from core.runtime.cancellation import scoped_tool_cancellation
 from core.runtime.process_execution import ProcessOutcome
 from core.sandbox.command_tool import SandboxBashTool
 from core.sandbox.docker_provider import DockerCommandProvider, SandboxUnavailable
+from core.sandbox.docker_lifecycle import DockerLeaseManager
 
 
 def _provider(tmp_path, runner=None):
     return DockerCommandProvider(
         tmp_path, docker_binary="/usr/bin/docker", runner=runner,
+        lease_manager=DockerLeaseManager("/usr/bin/docker", b"x" * 32),
     )
 
 
