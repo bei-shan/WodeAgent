@@ -138,7 +138,7 @@ def test_redis_connection_failure_refuses_admission_release_and_metrics():
     db.fail = True
     with pytest.raises(SandboxUnavailable, match="unavailable"):
         cap.reserve(token(1))
-    with pytest.raises(SandboxUnavailable, match="unavailable"):
+    with pytest.raises(SandboxUnavailable, match="cannot be verified"):
         _ = cap.used
     db.fail = False
     cap.reserve(token(1))
