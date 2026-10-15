@@ -56,6 +56,7 @@ class CodeAgent(Agent):
     PLAN_MODE_TOOLS = {
         "Read", "Grep", "Glob", "LS", "TodoWrite",
         "TaskOutput", "EnterPlanMode", "ExitPlanMode", "AskUser",
+        "ToolSearch",
     }
     
     def __init__(
