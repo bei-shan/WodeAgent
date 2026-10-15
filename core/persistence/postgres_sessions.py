@@ -67,6 +67,35 @@ class PostgresPrivateSessionStore:
             (scope.tenant_id, scope.user_id, scope.project_id),
         )
 
+    def production_probe(self) -> bool:
+        """Verify the runtime DB role cannot bypass table RLS.
+
+        Minimal read-only query, no user/session data, safe for readiness
+        probes. Deployment must also validate network/TLS backups and IAM.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT r.rolsuper, r.rolbypassrls,
+                              c.relrowsecurity, c.relforcerowsecurity,
+                              EXISTS (
+                                  SELECT 1 FROM pg_policies p
+                                  WHERE p.schemaname='ridge'
+                                    AND p.tablename='private_sessions'
+                              )
+                       FROM pg_roles r, pg_class c
+                       JOIN pg_namespace n ON n.oid=c.relnamespace
+                       WHERE r.rolname=current_user
+                         AND n.nspname='ridge'
+                         AND c.relname='private_sessions'"""
+                )
+                row = cur.fetchone()
+                return bool(
+                    row and row[0] is False and row[1] is False
+                    and row[2] is True and row[3] is True
+                    and row[4] is True
+                )
+
     def create(
         self, scope: MemoryScope, session_id: str, *,
         title: str = "", snapshot: Mapping[str, Any] | None = None,
