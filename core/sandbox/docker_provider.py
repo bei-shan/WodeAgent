@@ -17,13 +17,9 @@ from threading import Event
 from typing import Callable
 
 from core.runtime.process_execution import run_process
-from core.sandbox.contracts import CommandResult
+from core.sandbox.contracts import CommandResult, SandboxUnavailable
 from core.sandbox.docker_lifecycle import (DockerLeaseManager, SandboxLeaseError,
     installation_key_path, shared_lease_manager)
-
-
-class SandboxUnavailable(RuntimeError):
-    """Fail closed: never fall back to running a command on the host."""
 
 
 class DockerCommandProvider:
