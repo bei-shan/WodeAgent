@@ -113,6 +113,31 @@ class PostgresPrivateSessionStore:
                     int(row[2]),
                 )
 
+    def list_private(self, scope: MemoryScope, *, limit: int = 50) -> list[StoredPrivateSession]:
+        """Return only scoped, privately owned sessions with bounded pagination."""
+        if not isinstance(scope, MemoryScope):
+            raise TypeError("Authenticated server-derived MemoryScope required")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                self._scope(cur, scope)
+                cur.execute(
+                    """SELECT session_id, title, snapshot, version
+                       FROM ridge.private_sessions
+                       WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
+                       ORDER BY updated_at DESC, session_id DESC LIMIT %s""",
+                    (scope.tenant_id, scope.project_id, scope.user_id, limit),
+                )
+                return [
+                    StoredPrivateSession(
+                        str(sid).strip(), title,
+                        snap if isinstance(snap, dict) else json.loads(snap),
+                        int(version),
+                    )
+                    for sid, title, snap, version in cur.fetchall()
+                ]
+
     def save(
         self, scope: MemoryScope, session_id: str,
         snapshot: Mapping[str, Any], *, expected_version: int,
