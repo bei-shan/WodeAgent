@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from core.runtime.session_controller import SessionController
+from core.runtime.admission import TurnCapacityExceeded
 from core.runtime.turn_state import load_turn_outcome
 from core.session_manager import SessionManager
-from .errors import ConflictError, NotFoundError
+from .errors import CapacityError, ConflictError, NotFoundError
 
 
 class TurnService:
@@ -29,7 +30,11 @@ class TurnService:
 
     def send(self, sid: str, content: str) -> dict:
         session = self._require_active(sid)
-        if not session.send_message(content):
+        try:
+            accepted = session.send_message(content)
+        except TurnCapacityExceeded as exc:
+            raise CapacityError("Agent turn capacity exhausted; retry later") from exc
+        if not accepted:
             raise ConflictError("Agent is busy — wait for turn.finished event")
         return {"status": "accepted"}
 
