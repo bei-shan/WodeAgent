@@ -22,6 +22,11 @@ class HookService:
         from core.hook_system import HookManager
 
         agent._hook_manager = HookManager(project_root=agent._original_project_root)
+        # Apply only declarative, explicitly trusted hook manifests. No
+        # arbitrary project Python is imported, initialized or executed.
+        from core.plugin_loader import PluginLoader
+        for contribution in PluginLoader(agent._original_project_root).discover():
+            contribution.apply(agent._hook_manager)
         agent._hook_system_messages: list[str] = []
         agent._hook_session_context: list[str] = []
 
