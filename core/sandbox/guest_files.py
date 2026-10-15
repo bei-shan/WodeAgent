@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import shlex
-from pathlib import PurePosixPath
 from threading import Event
 
 from core.sandbox.contracts import SandboxCommandProvider, SandboxUnavailable
@@ -83,10 +81,14 @@ def operate():
             if len(data) > READ_LIMIT:
                 raise ValueError("file too large")
             name = segments[-1]
+            mode = 0o600
             try:
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 if not stat.S_ISREG(info.st_mode):
                     raise PermissionError("not a regular file")
+                # Do not unintentionally strip executable/read bits on updates;
+                # never copy setuid/setgid/sticky bits from an old file.
+                mode = stat.S_IMODE(info.st_mode) & 0o777
             except FileNotFoundError:
                 pass
             temp = ".ridge-guest-" + secrets.token_hex(12)
@@ -94,6 +96,7 @@ def operate():
                              0o600, dir_fd=fd)
             try:
                 with os.fdopen(handle, "wb") as output:
+                    os.fchmod(output.fileno(), mode)
                     output.write(data)
                     output.flush()
                     os.fsync(output.fileno())
