@@ -212,6 +212,18 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
         return self._lease_update(scope, turn_id, worker_id, fence, "complete",
                                   result=encoded)
 
+    def fail(
+        self, scope: MemoryScope, turn_id: str, *, worker_id: str, fence: int,
+        error_kind: str = "worker_execution_failed",
+    ) -> bool:
+        """Terminally fail a job under the CURRENT lease; never expose secrets."""
+        if error_kind not in {"worker_execution_failed", "invalid_payload"}:
+            raise ValueError("Invalid bounded failure kind")
+        return self._lease_update(
+            scope, turn_id, worker_id, fence, "fail",
+            result=json.dumps({"error_kind": error_kind}),
+        )
+
     def _lease_update(
         self, scope: MemoryScope, turn_id: str, worker_id: str, fence: int,
         action: str, *, seconds: int = 30, result: str | None = None,
@@ -224,15 +236,19 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
             raise ValueError("Invalid fencing token")
         if type(seconds) is not int or not 1 <= seconds <= 3600:
             raise ValueError("Invalid lease duration")
-        if action not in {"renew", "complete"}:
+        if action not in {"renew", "complete", "fail"}:
             raise ValueError("Invalid lease operation")
-        update = (
-            "lease_until=now()+(%s * interval '1 second'), updated_at=now()"
-            if action == "renew"
-            else "status='completed', result=%s::jsonb, lease_owner=NULL, "
-                 "lease_until=NULL, updated_at=now()"
-        )
-        value = seconds if action == "renew" else result
+        if action == "renew":
+            update = "lease_until=now()+(%s * interval '1 second'), updated_at=now()"
+            value = seconds
+        else:
+            # SQL fragment derived from the fixed internal action, never user input.
+            status = "completed" if action == "complete" else "failed"
+            update = (
+                f"status='{status}', result=%s::jsonb, lease_owner=NULL, "
+                "lease_until=NULL, updated_at=now()"
+            )
+            value = result
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._scope(cur, scope)
