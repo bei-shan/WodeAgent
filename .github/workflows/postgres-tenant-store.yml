@@ -6,6 +6,7 @@ on:
       - "core/persistence/**"
       - "desktop/service/hosted_app.py"
       - "desktop/service/hosted_identity.py"
+      - "docs/releases/production-gates.md"
       - "tests/test_hosted_identity_api.py"
       - "requirements-hosted.txt"
       - "db/migrations/**"
@@ -17,6 +18,12 @@ on:
     branches: [main]
     paths:
       - "core/persistence/**"
+      - "desktop/service/hosted_app.py"
+      - "desktop/service/hosted_identity.py"
+      - "tests/test_hosted_identity_api.py"
+      - "tests/test_postgres_turn_queue.py"
+      - "requirements-hosted.txt"
+      - "docs/releases/production-gates.md"
       - "db/migrations/**"
       - "tests/test_postgres_private_sessions.py"
       - "requirements-postgres.txt"
