@@ -69,6 +69,7 @@ class CodeAgent(Agent):
         config: Optional[Config] = None,
         logger=None,
         event_sink=None,  # core.events.EventSink — UI decoupling
+        hosted_tool_authority=None,  # trusted Worker binding, never a request field
     ):
         super().__init__(name, llm, system_prompt=system_prompt, config=config)
         self.project_root = project_root
@@ -80,6 +81,9 @@ class CodeAgent(Agent):
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
         if self._sandbox_mode not in {"local_trusted", "docker", "boxlite", "e2b"}:
             raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker, boxlite or e2b")
+        if hosted_tool_authority is not None and self._sandbox_mode == "local_trusted":
+            raise PermissionError("Hosted Agent tools require an isolated sandbox, not local_trusted")
+        self._hosted_tool_authority = hosted_tool_authority
         if self._sandbox_mode != "local_trusted" and getattr(self.config, "enable_agent_teams", False):
             raise ValueError("Isolated sandbox mode does not support AgentTeams yet")
         self.logger = logger or setup_logger(
@@ -140,6 +144,10 @@ class CodeAgent(Agent):
         # Deferred catalog must see the fully-registered built-ins and the
         # final post-init tool removals. Disabled by default for compatibility.
         self._configure_tool_discovery()
+        if self._hosted_tool_authority is not None:
+            # Isolated sandbox already restricted the registry to Bash.
+            # The mandatory membership gate must bind before the first step.
+            self.tool_registry.bind_hosted_authority(self._hosted_tool_authority)
 
         # ── Session ID fallback ──
         if not hasattr(self, "_session_id"):
@@ -866,6 +874,8 @@ class CodeAgent(Agent):
         # Preserve that compatibility while the framework-owned entrypoint
         # uses the explicit three-phase runtime.
         use_stages = "_execute_tool" not in self.__dict__
+        if getattr(self, "_hosted_tool_authority", None) is not None and not use_stages:
+            raise PermissionError("Hosted Agent execution cannot override the sealed tool dispatcher")
         staged_runtime = (
             ToolRuntime(
                 self.tool_registry, self.logger,
