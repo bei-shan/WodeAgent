@@ -2,8 +2,8 @@
 
 Infrastructure primitive ONLY. Local Agent execution and hosted API must
 not execute from this queue until sandbox, delegated scopes and callbacks
-have been independently verified. Network/tool side effects are NOT made
-idempotent by the queue's idempotency key.
+have been independently verified. Expired executions are TERMINAL failures:
+the queue never automatically replays potentially non-idempotent effects.
 """
 from __future__ import annotations
 
@@ -86,17 +86,15 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._scope(cur, scope)
-                # A dead worker on its last attempt must not leave a job
-                # in 'running' indefinitely. Expiry is checked by PostgreSQL
-                # inside this transaction, before acquiring the next job.
-                self._reap_exhausted(cur, scope)
+                # A crashed worker may have performed irreversible effects.
+                # The DB fence prevents stale publication but does not undo
+                # Shell, filesystem or network changes: NEVER auto-replay.
+                self._reap_expired(cur, scope)
                 cur.execute(
                     """WITH picked AS (
                         SELECT turn_id FROM ridge.private_turn_jobs
                         WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
-                          AND attempts < 3
-                          AND (status='queued' OR
-                              (status='running' AND lease_until < now()))
+                          AND status='queued'
                         ORDER BY created_at, turn_id
                         FOR UPDATE SKIP LOCKED LIMIT 1
                        )
@@ -122,24 +120,26 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
 
 
     @staticmethod
-    def _reap_exhausted(cur, scope: MemoryScope, *, limit: int = 100) -> int:
-        """Fail crashed jobs that exhausted retries, in bounded lock batches.
+    def _reap_expired(cur, scope: MemoryScope, *, limit: int = 100) -> int:
+        """Mark uncertain executions as terminal failures, never replay.
 
-        Uses SKIP LOCKED so one worker never stalls all other workers. Does
-        not log, copy, or publish the sensitive original turn payload.
+        Expired workers may already have changed external state. Releasing a
+        stale PostgreSQL lease is NOT evidence of idempotency. Each failure
+        bumps the DB fencing token, redacts the original payload, and prevents
+        a second worker from claiming it automatically. A new user request
+        must enqueue a new job after observing the uncertainty.
         """
         cur.execute(
             """WITH expired AS (
                  SELECT turn_id FROM ridge.private_turn_jobs
                   WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
-                    AND status='running' AND attempts>=3
-                    AND lease_until <= now()
+                    AND status='running' AND lease_until <= now()
                   ORDER BY lease_until, turn_id
                   FOR UPDATE SKIP LOCKED LIMIT %s
                )
                UPDATE ridge.private_turn_jobs j
                   SET status='failed',
-                      result='{"error_kind":"retry_exhausted"}'::jsonb,
+                      result='{"error_kind":"lease_expired_uncertain"}'::jsonb,
                       lease_owner=NULL, lease_until=NULL,
                       fence=j.fence+1, updated_at=now()
                  FROM expired e
@@ -151,8 +151,8 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
         )
         return cur.rowcount
 
-    def reap_exhausted(self, scope: MemoryScope, *, limit: int = 100) -> int:
-        """Bounded operator/worker sweep after last-attempt lease expiry."""
+    def reap_expired(self, scope: MemoryScope, *, limit: int = 100) -> int:
+        """Bounded, tenant-scoped cleanup of unconfirmed expired turns."""
         if not isinstance(scope, MemoryScope):
             raise TypeError("Verified worker delegation scope required")
         if type(limit) is not int or not 1 <= limit <= 1000:
@@ -160,7 +160,7 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 self._scope(cur, scope)
-                return self._reap_exhausted(cur, scope, limit=limit)
+                return self._reap_expired(cur, scope, limit=limit)
 
     def cancel(self, scope: MemoryScope, turn_id: str) -> bool:
         """Terminally revoke a queued or executing job.
