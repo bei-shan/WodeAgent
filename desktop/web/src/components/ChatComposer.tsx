@@ -80,12 +80,12 @@ export default function ChatComposer({
               <Svg d={Icons.chevron} size={13} />
             </button>
             {modelPickerOpen && (
-              <div className="model-menu" role="listbox" aria-label="选择模型">
+              <div className="model-menu" aria-label="选择模型">
                 {models.length === 0 ? (
                   <p className="px-3 py-2 text-xs text-gray-500">暂无可用模型</p>
                 ) : models.map(model => (
-                  <button key={model.name} type="button" role="option"
-                    aria-selected={(selectedModel || models[0]?.model) === model.model}
+                  <button key={model.name} type="button" aria-label={model.model}
+                    aria-pressed={(selectedModel || models[0]?.model) === model.model}
                     onClick={() => onChooseModel(model)}
                     className="model-menu-option">
                     <span className="font-medium">{model.model}</span>
