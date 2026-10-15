@@ -15,6 +15,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from typing import Callable
 
 from core.events import AgentEvent
 
@@ -40,10 +41,11 @@ class EventJournal:
     consumer, while stream followers independently use wait_after().
     """
 
-    def __init__(self, capacity: int = 2048) -> None:
+    def __init__(self, capacity: int = 2048, on_append: Callable[[AgentEvent], None] | None = None) -> None:
         if capacity < 1:
             raise ValueError("capacity must be >= 1")
         self.capacity = capacity
+        self._on_append = on_append
         # Distinguish cursors across process restarts; sequence alone resets.
         self.stream_id = uuid.uuid4().hex
         self._entries: deque[SequencedEvent] = deque(maxlen=capacity)
@@ -75,7 +77,16 @@ class EventJournal:
             self._latest += 1
             self._entries.append(SequencedEvent(self._latest, event))
             self._condition.notify_all()
-            return self._latest
+            seq = self._latest
+        # Persist selected projections outside the condition lock. A full or
+        # unavailable history store must never abort the agent's event stream.
+        if self._on_append is not None:
+            try:
+                self._on_append(event)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Execution history persistence failed")
+        return seq
 
     def put_nowait(self, event: AgentEvent) -> int:
         return self.put(event)
