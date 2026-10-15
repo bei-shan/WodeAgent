@@ -32,7 +32,7 @@ def make_agent(registry, features):
         tool_parallel_reads_enabled=True, tool_max_concurrency=3,
         budget_enforce=False,
     )
-    agent._features = features
+    agent._tool_interceptors = features
     agent._hook_manager = None
     agent.delegate_mode = False
     agent._interrupt_requested = threading.Event()
