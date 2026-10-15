@@ -399,7 +399,9 @@ def create_app(
 
     @app.post("/api/sessions/{sid}/messages")
     async def send_message(sid: str, body: MessageSend):
-        return app.state.turn_service.send(sid, body.content)
+        # Lazy Agent creation touches files/plugins/models and can block.
+        # Keep the ASGI loop responsive even on a cold session.
+        return await asyncio.to_thread(app.state.turn_service.send, sid, body.content)
 
     @app.post("/api/sessions/{sid}/interrupt")
     async def interrupt(sid: str):
