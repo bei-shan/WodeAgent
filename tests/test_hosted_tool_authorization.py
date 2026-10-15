@@ -238,7 +238,7 @@ def test_hosted_constructor_never_bootstraps_host_plugins_hooks_or_mcp(tmp_path,
     )
     try:
         assert agent._runtime_services.started == ("sandbox",)
-        assert {f.name for f in agent._features} == {
+        assert {policy.name for policy in agent._policy_middleware.policies} == {
             "delegate_mode", "budget", "plan_mode",
         }
         assert [t["function"]["name"] for t in agent._get_openai_tools_for_current_mode()] == ["Bash"]
