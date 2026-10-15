@@ -87,6 +87,16 @@ def create_hosted_app(
         dsn = os.environ.get("RIDGE_POSTGRES_DSN", "").strip()
         if not dsn:
             raise RuntimeError("Hosted session API requires RIDGE_POSTGRES_DSN")
+        # In hosted mode refuse plaintext or unauthenticated server identity.
+        # Test fixtures pass an explicitly injected local store instead.
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(dsn)
+        tls = parse_qs(parsed.query).get("sslmode", [""])[0]
+        if (parsed.scheme not in {"postgres", "postgresql"}
+                or not parsed.hostname or tls != "verify-full"):
+            raise RuntimeError(
+                "Hosted PostgreSQL requires an URL DSN with sslmode=verify-full"
+            )
         store = PostgresPrivateSessionStore(dsn)
     if verifier is None:
         verifier = OIDCVerifier(OIDCSettings.from_env())
