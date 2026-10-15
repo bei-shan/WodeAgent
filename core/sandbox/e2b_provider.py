@@ -291,6 +291,11 @@ class E2BCommandProvider:
         finally:
             with self._lock:
                 self._busy = False
+                must_kill = self._closed and self._client is not None
+            if must_kill:
+                # close() may have signalled while this command was running.
+                # Do not leave a VM alive because shutdown saw a busy worker.
+                self._kill_remote()
 
     def close(self) -> None:
         # Signals an in-progress blocking SDK call without waiting for the
