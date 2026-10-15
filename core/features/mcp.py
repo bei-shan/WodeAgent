@@ -87,7 +87,9 @@ class MCPFeature(AgentFeature):
         # Pending retries belong to this Agent; never dispose another Agent's
         # equally named MCP server.
         from tools.mcp.loader import clear_pending_servers
-        clear_pending_servers(agent.tool_registry)
+        registry = getattr(agent, "tool_registry", None)
+        if registry is not None:
+            clear_pending_servers(registry)
         for client in getattr(agent, "_mcp_clients", []) or []:
             try:
                 client.close_sync()
