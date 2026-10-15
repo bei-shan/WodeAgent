@@ -11,6 +11,7 @@ import pytest
 from core.sandbox.contracts import SandboxUnavailable
 from core.sandbox.e2b_redis_capacity import (
     RedisE2BCapacity, _RESERVE, _TRACK, _RELEASE,
+    _COMMAND_BEGIN, _COMMAND_END,
 )
 from core.sandbox.e2b_provider import E2BCommandProvider
 
@@ -21,16 +22,18 @@ class FakeRedis:
         self.lock = threading.Lock()
         self.h: dict[str, dict[str, str]] = {}
         self.limits: dict[str, str] = {}
+        self.commands: dict[str, dict[str, str]] = {}
         self.fail = False
         self.scripts = []
 
-    def eval(self, script, keys_count, slots, limit_key, token, owner, *args):
-        assert keys_count == 2
+    def eval(self, script, keys_count, slots, limit_key, command_key, token, owner, *args):
+        assert keys_count == 3
         self.scripts.append(script)
         with self.lock:
             if self.fail:
                 raise OSError("Redis timeout")
             data = self.h.setdefault(slots, {})
+            commands = self.commands.setdefault(command_key, {})
             if script == _RESERVE:
                 configured = self.limits.setdefault(limit_key, args[0])
                 if configured != args[0]:
@@ -54,7 +57,24 @@ class FakeRedis:
                 if not data[token].startswith(owner + ":"):
                     return "FENCED"
                 del data[token]
+                commands.pop(token, None)
                 return "RELEASED"
+            if script == _COMMAND_BEGIN:
+                vm_id, command_id = args
+                if data.get(token) != owner + ":" + vm_id:
+                    return "FENCED"
+                if token in commands:
+                    return "BUSY"
+                commands[token] = owner + ":" + command_id
+                return "BEGUN"
+            if script == _COMMAND_END:
+                vm_id, command_id = args
+                if data.get(token) != owner + ":" + vm_id:
+                    return "FENCED"
+                if commands.get(token) != owner + ":" + command_id:
+                    return "FENCED"
+                del commands[token]
+                return "ENDED"
         raise AssertionError("Unknown Redis E2B Lua script")
 
     def hlen(self, key):
@@ -231,5 +251,121 @@ def test_real_redis_atomic_capacity_and_fenced_release():
     finally:
         # These keys are generated for this test alone; never clear a
         # production deployment's shared E2B capacity ledger.
-        client.delete(a._key, a._limit_key)
+        client.delete(a._key, a._limit_key, a._command_key)
         client.close()
+
+
+def test_exact_owner_and_execution_token_required_for_command_fences():
+    db = FakeRedis()
+    owner = make_store(db, limit=1)
+    stranger = make_store(db, limit=1)
+    t = token(42)
+    owner.reserve(t)
+    owner.track(t, "remote-vm-001")
+    running = owner.begin_command(t, "remote-vm-001")
+    assert len(running) == 48
+    with pytest.raises(SandboxUnavailable, match="fenced or busy"):
+        owner.begin_command(t, "remote-vm-001")
+    with pytest.raises(SandboxUnavailable, match="fenced or busy"):
+        stranger.begin_command(t, "remote-vm-001")
+    with pytest.raises(SandboxUnavailable, match="fenced or unconfirmed"):
+        owner.end_command(t, "remote-vm-001", token(99))
+    assert db.commands[owner._command_key][t].endswith(running)
+    owner.end_command(t, "remote-vm-001", running)
+    assert not db.commands[owner._command_key]
+    retry = owner.begin_command(t, "remote-vm-001")
+    assert retry != running
+    # VM destruction is a stronger authority: release clears any stale claim
+    # *only* after the caller has confirmed the remote VM was destroyed.
+    owner.release(t)
+    assert owner.used == 0
+    assert not db.commands[owner._command_key]
+    with pytest.raises(SandboxUnavailable):
+        owner.end_command(t, "remote-vm-001", retry)
+
+
+def test_execution_claim_survives_owner_crash_and_is_not_stolen():
+    db = FakeRedis()
+    owner = make_store(db, limit=1)
+    t = token(1)
+    owner.reserve(t)
+    owner.track(t, "remote-vm-001")
+    owner.begin_command(t, "remote-vm-001")
+    assert "EXPIRE" not in _COMMAND_BEGIN.upper()
+    other_process = make_store(db, limit=1)
+    with pytest.raises(SandboxUnavailable):
+        other_process.begin_command(t, "remote-vm-001")
+    with pytest.raises(SandboxUnavailable):
+        other_process.release(t)
+    with pytest.raises(SandboxUnavailable):
+        other_process.reserve(token(2))
+    assert other_process.used == 1
+
+
+def test_concurrent_execution_fences_only_admit_one_thread():
+    db = FakeRedis()
+    cap = make_store(db, limit=1)
+    t = token(2)
+    cap.reserve(t)
+    cap.track(t, "remote-vm-001")
+    def attempt(_):
+        try:
+            return cap.begin_command(t, "remote-vm-001")
+        except SandboxUnavailable:
+            return None
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        decisions = list(pool.map(attempt, range(16)))
+    winners = [v for v in decisions if v is not None]
+    assert len(winners) == 1
+    cap.end_command(t, "remote-vm-001", winners[0])
+    cap.release(t)
+
+
+def test_provider_completes_command_claim_only_after_success(tmp_path):
+    from tests.test_sandbox_e2b import FakeVM
+    class Remote(FakeVM):
+        sandbox_id = "remote-vm-001"
+    db = FakeRedis()
+    cap = make_store(db, limit=1)
+    vm = Remote()
+    from core.sandbox.e2b_provider import E2BCommandProvider
+    agent = E2BCommandProvider(
+        tmp_path, api_key="fake-secret", single_gateway_ack=True,
+        capacity=cap, sdk_factory=lambda **kw: vm,
+    )
+    try:
+        assert agent.execute("echo ok").exit_code == 0
+        assert cap.used == 1
+        assert not db.commands[cap._command_key]
+        assert vm.killed == 0
+        assert agent.execute("second").exit_code == 0
+        assert not db.commands[cap._command_key]
+    finally:
+        agent.close()
+    assert cap.used == 0
+    assert vm.killed == 1
+
+
+def test_provider_fails_closed_when_redis_fence_cannot_be_verified(tmp_path):
+    from tests.test_sandbox_e2b import FakeVM
+    class Remote(FakeVM):
+        sandbox_id = "remote-vm-001"
+    db = FakeRedis()
+    cap = make_store(db, limit=1)
+    vm = Remote()
+    from core.sandbox.e2b_provider import E2BCommandProvider
+    p = E2BCommandProvider(
+        tmp_path, api_key="fake-secret", single_gateway_ack=True,
+        capacity=cap, sdk_factory=lambda **kw: vm,
+    )
+    assert p.execute("first").exit_code == 0
+    db.fail = True
+    with pytest.raises(SandboxUnavailable, match="fence admission"):
+        p.execute("must-not-run")
+    assert len(vm.commands.calls) == 1
+    assert p._poisoned
+    db.fail = False
+    # Depending on kill outcome, slot is either safely released or retained;
+    # never replay when Redis result is uncertain.
+    with pytest.raises(SandboxUnavailable):
+        p.execute("must-not-run")
