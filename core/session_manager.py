@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+
+# Local single-process safety only. A multi-instance deployment needs a
+# transactional shared session store (e.g. PostgreSQL), not JSON indexes.
+_INDEX_WRITE_LOCK = threading.RLock()
 
 
 @dataclass
@@ -171,31 +177,31 @@ class SessionManager:
 
     def rename_session(self, session_id: str, title: str) -> bool:
         """Rename a session. Returns ``True`` on success."""
-        index = self._load_index()
-        for s in index:
-            if s.id == session_id:
-                s.title = title.strip()
-                self._write_index(index)
-                return True
-        return False
+        with _INDEX_WRITE_LOCK:
+            index = self._load_index()
+            for s in index:
+                if s.id == session_id:
+                    s.title = title.strip()
+                    self._write_index(index)
+                    return True
+            return False
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session (snapshot + index entry). Returns ``True`` on success."""
-        # Remove snapshot file.
-        snap = self._snapshot_path(session_id)
-        if snap.exists():
-            try:
-                snap.unlink()
-            except OSError:
-                return False
+        with _INDEX_WRITE_LOCK:
+            snap = self._snapshot_path(session_id)
+            if snap.exists():
+                try:
+                    snap.unlink()
+                except OSError:
+                    return False
 
-        # Remove from index.
-        index = self._load_index()
-        new_index = [s for s in index if s.id != session_id]
-        if len(new_index) == len(index):
-            return False  # not found
-        self._write_index(new_index)
-        return True
+            index = self._load_index()
+            new_index = [s for s in index if s.id != session_id]
+            if len(new_index) == len(index):
+                return False  # not found
+            self._write_index(new_index)
+            return True
 
     # ------------------------------------------------------------------
     # Internal
@@ -243,15 +249,20 @@ class SessionManager:
             }
             for s in index
         ]
-        self._index_path().write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # Atomic replacement prevents readers from seeing truncated JSON.
+        path = self._index_path()
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _append_index(self, info: SessionInfo) -> None:
-        index = self._load_index()
-        index.append(info)
-        self._write_index(index)
+        with _INDEX_WRITE_LOCK:
+            index = self._load_index()
+            index.append(info)
+            self._write_index(index)
 
     def _update_index(
         self,
@@ -261,26 +272,30 @@ class SessionManager:
         preview: str = "",
         only_overwrite_placeholder: bool = False,
     ) -> None:
-        index = self._load_index()
-        for s in index:
-            if s.id == session_id:
-                s.modified_at = _now_iso()
-                if title:
-                    if not only_overwrite_placeholder or s.title.startswith("New session"):
-                        s.title = title
-                s.message_count = message_count
-                s.preview = preview
-                self._write_index(index)
-                return
+        with _INDEX_WRITE_LOCK:
+            index = self._load_index()
+            for s in index:
+                if s.id == session_id:
+                    s.modified_at = _now_iso()
+                    if title:
+                        if not only_overwrite_placeholder or s.title.startswith("New session"):
+                            s.title = title
+                    s.message_count = message_count
+                    s.preview = preview
+                    self._write_index(index)
+                    return
 
     def _write_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         path = self._snapshot_path(session_id)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(path)
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _now_iso() -> str:
