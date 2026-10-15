@@ -41,12 +41,13 @@ class RuntimeServices:
         self._entered: list[str] = []
         self._starting: set[str] = set()
         self._closed = False
+        self._posted = False
 
     def register(
         self, name: str, factory: Callable[[], RuntimeService],
         *, requires: tuple[str, ...] = (),
     ) -> None:
-        if self._closed or self._entered:
+        if self._closed or self._entered or self._posted:
             raise RuntimeError("Register services before starting the runtime")
         if (not isinstance(name, str) or not name or name in self._definitions
                 or not callable(factory)):
@@ -64,6 +65,8 @@ class RuntimeServices:
             return self._instances[name]
         if name in self._starting:
             raise RuntimeError(f"Cyclic runtime service dependency: {name}")
+        if self._posted:
+            raise RuntimeError("No service may start after post-start")
         spec = self._definitions.get(name)
         if spec is None:
             raise LookupError(f"Unknown runtime service: {name}")
@@ -91,6 +94,22 @@ class RuntimeServices:
 
     def get(self, name: str) -> RuntimeService | None:
         return self._instances.get(name)
+
+    def post_start(self) -> None:
+        """Finish startup after the tool catalog has been assembled."""
+        if self._closed or self._posted:
+            raise RuntimeError("Invalid service post-start lifecycle")
+        # A new resource may not be started after this point.
+        self._posted = True
+        try:
+            for name in self._entered:
+                post = getattr(self._instances[name], "post_start", None)
+                if callable(post):
+                    post(self.agent)
+        except BaseException:
+            self.close()
+            raise
+
 
     def close(self) -> None:
         if self._closed:
