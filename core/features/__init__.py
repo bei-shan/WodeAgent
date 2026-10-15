@@ -39,6 +39,15 @@ BUILTIN_FEATURES: list[type[AgentFeature]] = [
 
 def collect_all_features(agent: "CodeAgent") -> list[AgentFeature]:
     """Instantiate and return all features (built-in + plugin), sorted by order."""
+    # Until a tenant-scoped hosted application/runtime and plugin-capability
+    # broker exist, never execute host-side Hook/MCP/Worktree/Session/Team
+    # initialization or load trusted Python plugin code on a hosted worker.
+    # Only pure in-memory turn policy adapters can initialize.
+    if getattr(agent, "_hosted_tool_authority", None) is not None:
+        return [cls() for cls in (
+            DelegateModeFeature, BudgetFeature, PlanModeFeature,
+        )]
+
     features: list[AgentFeature] = [cls() for cls in BUILTIN_FEATURES]
 
     # Plugin discovery

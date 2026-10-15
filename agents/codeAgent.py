@@ -37,6 +37,11 @@ from core.worktree.manager import WorktreeManager, WorktreeError
 from core.features import collect_all_features
 from core.features.base import AgentFeature
 from core.features.lifecycle import FeatureLifecycle
+from core.runtime.services import RuntimeServices
+from core.runtime.service_mcp import MCPService
+from core.runtime.service_teams import TeamService
+from core.runtime.service_sessions import SessionService
+from core.runtime.service_sandbox import SandboxService
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
@@ -130,6 +135,16 @@ class CodeAgent(Agent):
         # ── Core initialisation ──
         self._init_core()
 
+        # Explicit, per-Agent service owners; features remain compatibility
+        # bridges and middleware, not owners of MCP/session/team/sandbox.
+        self._runtime_services = RuntimeServices(self)
+        self._runtime_services.register("mcp", MCPService)
+        self._runtime_services.register("teams", TeamService, requires=("mcp",))
+        self._runtime_services.register("session", SessionService)
+        self._runtime_services.register("sandbox", SandboxService)
+        self._worktree_manager = None
+        self._background_runner = None
+
         # Explicit feature transaction. Partially initialized features must
         # be cleaned up if any later init/post-init or tool bootstrap fails.
         self._features: list[AgentFeature] = collect_all_features(self)
@@ -181,7 +196,8 @@ class CodeAgent(Agent):
         # Skills
         self._skill_loader = SkillLoader(self._skill_catalog_root)
         self._skills_prompt = ""
-        self._refresh_skills_prompt()
+        if self._hosted_tool_authority is None:
+            self._refresh_skills_prompt()
 
         # MCP prompt placeholder (populated later in _init_tools)
         self._mcp_tools_prompt = ""
@@ -222,9 +238,11 @@ class CodeAgent(Agent):
         bootstrap.provide("interactive", self.interactive)
         bootstrap.provide("worktree_manager", self._worktree_manager)
 
-        # Auto-discover and register all non-team built-in tools
-        registered = bootstrap.discover_and_register()
-        self.logger.debug("Auto-registered %d built-in tools: %s", len(registered), registered)
+        # In hosted mode even constructing host-local tool classes is denied;
+        # provision the isolated shell adapter only, never host plugins.
+        if self._hosted_tool_authority is None:
+            registered = bootstrap.discover_and_register()
+            self.logger.debug("Auto-registered %d built-in tools: %s", len(registered), registered)
 
         # Team tools (only when AgentTeams is enabled)
         if self.enable_agent_teams and self.team_manager:
@@ -232,52 +250,7 @@ class CodeAgent(Agent):
             self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
 
         if self._sandbox_mode != "local_trusted":
-            # Both Docker and BoxLite seal the registry before the first model
-            # step; no host Read/Write/Skill/MCP/plugin tool bypass is allowed.
-            from core.sandbox.command_tool import SandboxBashTool
-            if self._sandbox_mode == "docker":
-                from core.sandbox.docker_provider import DockerCommandProvider
-                provider = DockerCommandProvider(
-                    self.project_root,
-                    image=self.config.sandbox_docker_image,
-                    memory=self.config.sandbox_memory,
-                    cpus=self.config.sandbox_cpus,
-                    pids_limit=self.config.sandbox_pids_limit,
-                )
-            elif self._sandbox_mode == "boxlite":
-                from core.sandbox.boxlite_provider import BoxliteCommandProvider
-                provider = BoxliteCommandProvider(
-                    self.project_root,
-                    image=self.config.sandbox_boxlite_image,
-                    memory_mib=self.config.sandbox_boxlite_memory_mib,
-                    cpus=self.config.sandbox_boxlite_cpus,
-                    guest_stdin_enabled=self.config.sandbox_boxlite_stdin_enabled,
-                )
-                if self.config.sandbox_boxlite_warm_enabled:
-                    provider.enable_warm_pool(
-                        session_scope=secrets.token_hex(24),
-                        max_replicas=1,
-                        idle_timeout=self.config.sandbox_boxlite_warm_idle_seconds,
-                    )
-            else:
-                from core.sandbox.e2b_provider import E2BCommandProvider
-                provider = E2BCommandProvider(
-                    self.project_root,
-                    template=self.config.sandbox_e2b_template,
-                    sandbox_ttl=self.config.sandbox_e2b_ttl_seconds,
-                    capacity_limit=self.config.sandbox_e2b_capacity,
-                    single_gateway_ack=self.config.sandbox_e2b_single_gateway_ack,
-                    redis_ledger_enabled=self.config.sandbox_e2b_redis_ledger_enabled,
-                    deployment=self.config.sandbox_e2b_deployment,
-                )
-            self._sandbox_provider = provider
-            self.tool_registry.register_tool(SandboxBashTool(provider), owner="builtin")
-            self.tool_registry.restrict_to_tools({"Bash"})
-            self.logger.warning(
-                "%s sandbox mode: only isolated Bash is exposed; "
-                "host file, MCP, skill and subagent tools are denied",
-                self._sandbox_mode,
-            )
+            self._runtime_services.ensure("sandbox")
 
         # MCP prompt sync (tools registered by MCPFeature.init)
         self.context_builder.set_mcp_tools_prompt(
@@ -621,6 +594,12 @@ class CodeAgent(Agent):
 
     def run(self, input_text: str, **kwargs) -> str:
         """Run each turn with isolated configuration in the current thread."""
+        # A verified principal and Bash-only registry do not yet supply a
+        # durable hosted Session/Worker/Sandbox resource authorization contract.
+        # Refuse hosted turns until the scoped runner is connected, rather
+        # than accidentally executing the local SessionManager path.
+        if getattr(self, "_hosted_tool_authority", None) is not None:
+            raise PermissionError("Hosted Agent turns require an authenticated fenced worker runner")
         from core.runtime.config_scope import scoped_config
         with scoped_config(self.config):
             return self._run_scoped(input_text, **kwargs)
@@ -670,6 +649,11 @@ class CodeAgent(Agent):
                         "Feature %s.cleanup failed: %s",
                         getattr(feat, "name", type(feat).__name__), exc,
                     )
+
+        # A failed constructor also closes partially-started services.
+        runtime_services = getattr(self, "_runtime_services", None)
+        if runtime_services is not None:
+            runtime_services.close()
 
         # Close owned VM resources even if another feature cleanup raised.
         sandbox_provider = getattr(self, "_sandbox_provider", None)
