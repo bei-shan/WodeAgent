@@ -171,6 +171,32 @@ Full recovery requires a separate operator-reviewed procedure with remote
 control-plane destruction evidence, subsequent fenced Redis release, and
 cross-process user/session ownership attestation.
 
+## Explicit operator-approved host artifact publication
+
+`core/sandbox/e2b_artifacts.py` now offers an **internal, unregistered**
+`publish_e2b_artifact` helper. A trusted application service must supply
+a fresh human approval callback after inspecting the source path, restricted
+destination, size and SHA-256 digest. With no callback or denied approval,
+publication fails. **No Agent/model/plugin tool can invoke this capability by
+default**, and this helper does NOT provide an authenticated approval UI.
+
+Publication can only create a new file under an already-existing
+`artifacts/` directory inside the selected host project. Parent directories
+are opened using `O_DIRECTORY|O_NOFOLLOW`; filenames cannot be dotfiles,
+existing artifacts cannot be overwritten, and a mode-0600 private temp file
+is atomically linked into place without clobbering symlinks or existing files.
+Only bounded E2B guest bytes (24 KiB) are accepted. Files are not uploaded
+back into E2B, and there is **no automatic artifact synchronization**.
+
+```bash
+python -m pytest tests/test_sandbox_e2b_artifacts.py -q
+```
+
+This is a foundational safe local write primitive, not production user
+authorization: a multi-user Web UI must bind the callback to a verified user
+identity, explicit action and auditable consent record. Source trust,
+content scanning, access controls and retention remain release gates.
+
 ## Intentionally missing (required for production parity)
 
 - Redis-backed atomic capacity and token-fenced release are optional, but there is **no full distributed session ownership or gateway failover** yet.
@@ -178,8 +204,9 @@ cross-process user/session ownership attestation.
   initialize multiple processes and rely on this per-process limiter.
 - No remote VM discovery, cross-process adoption, or opportunistic deletion.
   Automatically killing an unowned remote ID is a security violation.
-- No local-project bootstrap, remote file **upload** or host publication; only
-  bounded guest **read/list** into memory is available, without partial sync. E2B has no shared host workspace.
+- No local-project bootstrap or remote file **upload**; bounded guest read/list
+  is available, and restricted host publication requires external trusted user
+  approval (not exposed as an Agent tool). E2B has no shared host workspace.
 - No credential refresh/rotation, remote file symlink-safe transfer audit, or
   retry-safe idempotency journal for side-effecting operations.
 - No measured multi-tenant workloads or verified E2B template/network
