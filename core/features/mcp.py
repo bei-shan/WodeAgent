@@ -46,7 +46,7 @@ class MCPFeature(AgentFeature):
         # Retry pending servers
         try:
             from tools.mcp.loader import get_pending_server_names, retry_pending_server, format_mcp_tools_prompt
-            pending = get_pending_server_names()
+            pending = get_pending_server_names(agent.tool_registry)
             if pending:
                 for name in pending:
                     ok = retry_pending_server(agent.tool_registry, name, timeout=10.0)
@@ -67,7 +67,7 @@ class MCPFeature(AgentFeature):
         if step == 1:
             try:
                 from tools.mcp.loader import get_pending_server_names
-                pending = get_pending_server_names()
+                pending = get_pending_server_names(agent.tool_registry)
                 if pending:
                     blocks.append(
                         f"[MCP] Pending servers: {', '.join(pending)}. "
@@ -84,6 +84,10 @@ class MCPFeature(AgentFeature):
 
     def cleanup(self, agent: "CodeAgent") -> None:
         """Close every MCP client that was registered at init."""
+        # Pending retries belong to this Agent; never dispose another Agent's
+        # equally named MCP server.
+        from tools.mcp.loader import clear_pending_servers
+        clear_pending_servers(agent.tool_registry)
         for client in getattr(agent, "_mcp_clients", []) or []:
             try:
                 client.close_sync()
