@@ -35,6 +35,7 @@ import uuid
 from typing import Any, Callable, Optional
 
 from core.events import AgentEvent, EventSink
+from core.runtime.execution_history import ExecutionHistory
 from core.runtime.event_journal import EventJournal
 from core.runtime.turn_state import TurnOutcome, TurnStatus, failure_outcome, persist_turn_outcome, load_turn_outcome
 
@@ -85,7 +86,8 @@ class AgentSession:
         self.last_turn = load_turn_outcome(session_id)
 
         # Bounded, replayable journal; each WebSocket has an independent cursor.
-        self.events = EventJournal()
+        history = ExecutionHistory(workspace_base)
+        self.events = EventJournal(on_append=lambda event: history.append(self.session_id, event))
 
         # Pending permission / ask-user requests.
         #   {request_id: (threading.Event, dict-for-result)}
