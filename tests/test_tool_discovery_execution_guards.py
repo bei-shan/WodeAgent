@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.codeAgent import CodeAgent
-from core.features.plan_mode import PlanModeFeature
+from core.runtime.policy_middleware import PlanModeMiddleware
 from core.runtime.tool_runtime import ToolRuntime
 from tools.base import Tool, ToolParameter
 from tools.registry import ToolRegistry
@@ -43,7 +43,7 @@ def test_plan_mode_not_just_schema_filter_but_hard_execution_guard():
     bash = _ProbeTool("Bash")
     registry.register_tool(read)
     registry.register_tool(bash)
-    feature = PlanModeFeature()
+    feature = PlanModeMiddleware()
     agent = SimpleNamespace()
     feature.init(agent)
     agent._in_plan_mode = True
@@ -75,7 +75,7 @@ def test_plan_mode_tool_discovery_matches_runtime_policy():
     agent.tool_registry = registry
     agent._in_plan_mode = True
     agent.delegate_mode = False
-    agent.PLAN_MODE_TOOLS = PlanModeFeature.PLAN_MODE_TOOLS
+    agent.PLAN_MODE_TOOLS = PlanModeMiddleware.PLAN_MODE_TOOLS
     names = {t["function"]["name"] for t in agent._get_openai_tools_for_current_mode()}
     assert names == {"Read"}
 
