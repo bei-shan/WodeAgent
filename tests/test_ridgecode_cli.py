@@ -108,3 +108,23 @@ def test_missing_ui_binary_refuses_launch(monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     assert cli.main(["web"]) == 2
     assert cli.main(["tui"]) == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file ACLs differ from POSIX modes")
+def test_setup_publishes_secrets_with_restricted_file_permissions(tmp_path, monkeypatch):
+    import stat
+    from scripts.first_run_wizard import _write_env
+
+    monkeypatch.chdir(tmp_path)
+    provider = {
+        "name": "OpenAI", "key": "openai",
+        "env_prefix": "OPENAI",
+        "default_model": "test-model",
+        "base_url": "https://example.invalid/v1",
+    }
+    _write_env(provider, "TEST_ONLY_FAKE_KEY", False)
+    config = tmp_path / ".env"
+    assert config.is_file()
+    assert stat.S_IMODE(config.stat().st_mode) & 0o077 == 0
+    assert "LLM_API_KEY=TEST_ONLY_FAKE_KEY" in config.read_text()
+    assert list(tmp_path.glob(".ridge-env-*")) == []
