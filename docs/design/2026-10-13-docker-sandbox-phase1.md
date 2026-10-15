@@ -73,10 +73,11 @@ modifications under `/workspace` do persist.
   mode rather than allowed through unisolated host code. It is possible for
   Python framework plugins that execute before the tool dispatcher to access
   the host; do not import untrusted plugin Python.
-- **Docker cancellation and timeout cleanup are best effort.** They now
-  request daemon-side removal after CLI termination, but daemon or host
-  crashes can still leave containers behind; recovery/garbage collection and
-  managed per-session leases remain future work.
+- **Docker cancellation and timeout cleanup are best effort.** Daemon-side
+  removal follows normal Stop/timeout, and a [signed lease reaper](2026-10-15-docker-lease-reaper.md)
+  now reconciles old owned containers on startup and every 60 seconds. It
+  cannot guarantee recovery after a lost owner key, indefinite host outage,
+  or unexpected pause exceeding its fixed expiry margin.
 - Container filesystem APIs, read-only source overlays, upload/download file
   exchange, user-scoped isolation, NetworkPolicy, seccomp/AppArmor profiles
   and container runtime hardening are next-stage work.
@@ -90,7 +91,7 @@ modifications under `/workspace` do persist.
 ## Acceptance test boundaries
 
 ```bash
-python -m pytest tests/test_sandbox_boundary.py tests/test_sandbox_cancellation.py tests/test_bash_tool.py -q
+python -m pytest tests/test_sandbox_boundary.py tests/test_sandbox_cancellation.py tests/test_sandbox_leases.py tests/test_bash_tool.py -q
 ```
 
 For host integration, manually verify a Docker-enabled Agent can run a
