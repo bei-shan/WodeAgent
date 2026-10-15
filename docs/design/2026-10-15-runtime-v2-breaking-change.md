@@ -25,9 +25,10 @@ by VCRService, not by a generic privileged plugin callback.
 
 Plugin manifests may contribute Skills, output styles and explicitly
 consented declarative Hooks. PluginLoader does not `exec_module` any
-project-provided Python, even when the deprecated
-`RIDGE_ALLOW_PLUGIN_CODE` flag is set. Historic `custom_features`
-declarations cannot load; operators must port to a constrained tool/
+project-provided Python, and invalid `custom_features` manifests are
+rejected during installation or discovery. The deprecated
+`RIDGE_ALLOW_PLUGIN_CODE` flag grants no capabilities. Explicit command
+Hook consent requires `RIDGE_ALLOW_TRUSTED_HOOKS=1`; operators must port to a constrained tool/
 hook contribution with explicit capability grants. Trusted local shell
 Hooks continue to require operator opt-in; they are never loaded in
 hosted identity mode.
