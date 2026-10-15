@@ -51,24 +51,41 @@ def test_queue_scoped_idempotency_and_fencing(stores):
         session_store.delete(owner, sid)
 
 
-def test_expired_lease_is_recovered_without_stale_commit(stores):
+def test_expired_lease_is_terminal_and_cannot_replay_side_effects(stores):
     session_store, queue = stores
     owner = MemoryScope("lease-t", "lease-u", "lease-p")
     sid = uuid.uuid4().hex[:12]
     session_store.create(owner, sid)
     try:
-        key = queue.enqueue(owner, sid, idempotency_key="lease-id", payload={"type": "read-only"})
+        turn_id = queue.enqueue(
+            owner, sid, idempotency_key="lease-id",
+            payload={"command": "external write; may already be complete"},
+        )
         first = queue.claim(owner, worker_id="old", lease_seconds=1)
-        assert first.id == key
+        assert first.id == turn_id and first.attempt == 1
         time.sleep(1.15)
-        second = queue.claim(owner, worker_id="new", lease_seconds=10)
-        assert second is not None
-        assert second.id == first.id
-        assert second.fence == first.fence + 1
-        assert second.attempt == 2
-        assert not queue.renew(owner, key, worker_id="old", fence=first.fence)
-        assert not queue.complete(owner, key, worker_id="old", fence=first.fence, result={"stale": True})
-        assert queue.complete(owner, key, worker_id="new", fence=second.fence, result={"done": True})
+        # A new worker must NEVER retry a potentially non-idempotent turn.
+        assert queue.claim(owner, worker_id="new", lease_seconds=10) is None
+        assert not queue.renew(owner, turn_id, worker_id="old", fence=first.fence)
+        assert not queue.complete(
+            owner, turn_id, worker_id="old", fence=first.fence,
+            result={"stale": True},
+        )
+        with queue._connect() as conn:
+            with conn.cursor() as cur:
+                queue._scope(cur, owner)
+                cur.execute(
+                    """SELECT status, result, fence, attempts FROM ridge.private_turn_jobs
+                         WHERE tenant_id=%s AND project_id=%s
+                           AND owner_user_id=%s AND turn_id=%s""",
+                    (owner.tenant_id, owner.project_id, owner.user_id, turn_id),
+                )
+                status, result, fence, attempts = cur.fetchone()
+        assert status == "failed"
+        assert result == {"error_kind": "lease_expired_uncertain"}
+        assert fence == first.fence + 1
+        assert attempts == 1
+        assert queue.reap_expired(owner) == 0
     finally:
         session_store.delete(owner, sid)
 
@@ -142,46 +159,52 @@ def test_cancel_revokes_active_fence_and_is_scoped(stores):
         session_store.delete(owner, sid)
 
 
-def test_last_expired_attempt_is_marked_terminal_failed(stores):
+def test_expiry_reap_is_scoped_and_blocks_retries_after_first_attempt(stores):
     session_store, queue = stores
     owner = MemoryScope("exhaust-t", "exhaust-u", "exhaust-p")
+    outsider = MemoryScope("other-t", "exhaust-u", "exhaust-p")
     sid = uuid.uuid4().hex[:12]
     session_store.create(owner, sid)
     try:
-        turn = queue.enqueue(owner, sid, idempotency_key="crash-thrice", payload={"secret": "don't echo"})
-        for attempt in range(1, 4):
-            lease = queue.claim(owner, worker_id=f"lost-{attempt}", lease_seconds=10)
-            assert lease is not None and lease.attempt == attempt
-            # Simulate a crash + an expired DB-authoritative lease (no wall-clock sleep).
-            with queue._connect() as conn:
-                with conn.cursor() as cur:
-                    queue._scope(cur, owner)
-                    cur.execute(
-                        """UPDATE ridge.private_turn_jobs
-                              SET lease_until=now()-interval '1 second'
-                            WHERE tenant_id=%s AND project_id=%s
-                              AND owner_user_id=%s AND turn_id=%s""",
-                        (owner.tenant_id, owner.project_id, owner.user_id, turn),
-                    )
-        assert queue.claim(owner, worker_id="no-more-retries") is None
+        turn = queue.enqueue(
+            owner, sid, idempotency_key="crashed-once",
+            payload={"secret": "must not be included in failure"},
+        )
+        lease = queue.claim(owner, worker_id="lost-1", lease_seconds=10)
+        assert lease is not None and lease.attempt == 1
+        # Simulate a dead worker without wall-clock sleep.
         with queue._connect() as conn:
             with conn.cursor() as cur:
                 queue._scope(cur, owner)
                 cur.execute(
-                    """SELECT status, result, fence, lease_until
+                    """UPDATE ridge.private_turn_jobs
+                          SET lease_until=now()-interval '1 second'
+                        WHERE tenant_id=%s AND project_id=%s
+                          AND owner_user_id=%s AND turn_id=%s""",
+                    (owner.tenant_id, owner.project_id, owner.user_id, turn),
+                )
+        assert queue.reap_expired(outsider) == 0
+        assert queue.reap_expired(owner) == 1
+        assert queue.claim(owner, worker_id="never-retry") is None
+        with queue._connect() as conn:
+            with conn.cursor() as cur:
+                queue._scope(cur, owner)
+                cur.execute(
+                    """SELECT status, result, fence, lease_until, attempts
                          FROM ridge.private_turn_jobs
                         WHERE tenant_id=%s AND project_id=%s
                           AND owner_user_id=%s AND turn_id=%s""",
                     (owner.tenant_id, owner.project_id, owner.user_id, turn),
                 )
-                status, result, fence, expiry = cur.fetchone()
+                status, result, fence, expiry, attempts = cur.fetchone()
         assert status == "failed"
-        assert result == {"error_kind": "retry_exhausted"}
+        assert result == {"error_kind": "lease_expired_uncertain"}
         assert expiry is None
-        assert fence == 4
-        assert not queue.complete(owner, turn, worker_id="lost-3", fence=3, result={})
-        assert queue.reap_exhausted(owner) == 0
-        assert queue.reap_exhausted(MemoryScope("other-t", "exhaust-u", "exhaust-p")) == 0
+        assert attempts == 1
+        assert fence == lease.fence + 1
+        assert not queue.complete(owner, turn, worker_id="lost-1", fence=lease.fence, result={})
+        assert queue.reap_expired(owner) == 0
+        assert queue.reap_expired(outsider) == 0
     finally:
         session_store.delete(owner, sid)
 
