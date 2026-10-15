@@ -184,3 +184,44 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .answer-code-copy:hover { background: #e4e4e4; }
 .answer-code-block pre { border: 0; border-radius: 0; margin: 0; padding: 13px 16px; overflow-x: auto; background: transparent; line-height: 1.7; }
 .answer-code-block pre code { padding: 0; border-radius: 0; font-size: 12px; background: transparent; white-space: pre; }
+
+/* Markdown response typography and safe lexical code coloring */
+.markdown-answer { font-size: 14px; line-height: 1.78; color: #262626; overflow-wrap: anywhere; }
+.markdown-paragraph { white-space: pre-wrap; margin: 0 0 13px; }
+.markdown-paragraph:last-child { margin-bottom: 0; }
+.markdown-heading { color: #202124; font-weight: 700; line-height: 1.3; margin: 18px 0 10px; }
+.markdown-answer h1 { font-size: 22px; } .markdown-answer h2 { font-size: 19px; }
+.markdown-answer h3 { font-size: 17px; } .markdown-answer h4, .markdown-answer h5, .markdown-answer h6 { font-size: 15px; }
+.markdown-list { list-style: disc; padding-left: 23px; margin: 8px 0 14px; }
+.markdown-list.list-decimal { list-style: decimal; }
+.markdown-list li { padding-left: 3px; margin: 4px 0; }
+.markdown-quote { border-left: 3px solid #d3d3d3; padding: 6px 0 6px 14px; color: #666; white-space: pre-wrap; margin: 10px 0; }
+.markdown-rule { border: 0; border-top: 1px solid #ececec; margin: 19px 0; }
+.markdown-link { color: #3166b2; text-decoration: underline; text-underline-offset: 2px; }
+.markdown-inline-code { color: #ab3c50; background: #f3f3f3; border-radius: 5px; padding: 2px 5px; font-size: .88em; }
+.syntax-keyword { color: #9c47ab; font-weight: 550; }
+.syntax-string { color: #167c44; }
+.syntax-number { color: #bc5b18; }
+.syntax-comment { color: #848b95; font-style: italic; }
+.answer-code-block { max-width: 100%; }
+.answer-code-block pre { white-space: pre; }
+
+/* Read-only agent execution inspector */
+.execution-launch { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 9px; color: #575757; font-size: 12px; }
+.execution-launch:hover, .execution-launch[aria-expanded="true"] { background: #f1f1f1; color: #202123; }
+.execution-count { display: inline-flex; background: #eee; border-radius: 999px; font-size: 10px; padding: 2px 6px; }
+.execution-panel { width: clamp(310px, 30vw, 440px); max-width: 45%; display: flex; flex-direction: column; min-height: 0; background: #fafafa; border-left: 1px solid #e8e8e8; flex-shrink: 0; }
+.execution-tab { font-size: 12px; padding: 7px 9px; border-radius: 8px; color: #777; }
+.execution-tab.selected { color: #252525; background: #e9e9e9; font-weight: 600; }
+.execution-json { max-height: 210px; overflow: auto; border-radius: 8px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-output { background: #171a20; border-radius: 12px; overflow: hidden; color: #d6e3d6; border: 1px solid #2c3138; }
+.terminal-header { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; font-size: 11px; background: #2c3036; color: #c0c6cd; }
+.terminal-body { margin: 0; border: 0; border-radius: 0; max-height: 350px; padding: 12px; overflow: auto; background: transparent; color: #d6e3d6; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+/* Diff is between two browser-held previews, never a fake git comparison. */
+.diff-line { display: flex; align-items: baseline; min-width: max-content; line-height: 1.8; }
+.diff-same { background: white; } .diff-added { background: #e9f7ed; color: #21693e; } .diff-removed { background: #fff0ee; color: #a1332e; }
+.diff-number { color: #969696; padding: 0 5px; min-width: 36px; text-align: right; user-select: none; border-right: 1px solid #ededed; }
+.diff-prefix { padding: 0 9px; user-select: none; }
+@media (max-width: 767px) {
+  .execution-panel { position: fixed; inset: 0 0 0 auto; z-index: 47; width: min(440px, 100vw); max-width: 100%; box-shadow: -3px 0 30px rgba(0,0,0,.18); }
+}
