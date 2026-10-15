@@ -266,7 +266,8 @@ def _show_complete() -> None:
 
 
 if __name__ == "__main__":
-    # Never allow the old direct script invocation to silently succeed
-    # without running setup; use the canonical command and overwrite guard.
-    from ridgecode.cli import main as ridge_main
-    raise SystemExit(ridge_main(["setup"]))
+    # Kept for internal uses; the supported user entrypoint is
+    # `python -m ridgecode setup`. A direct script run is never a no-op.
+    if Path(".env").exists():
+        raise SystemExit("An .env file exists; use python -m ridgecode setup --force")
+    raise SystemExit(0 if run_wizard() else 1)
