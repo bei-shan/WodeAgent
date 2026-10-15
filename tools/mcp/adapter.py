@@ -155,6 +155,8 @@ def register_mcp_tools(tool_registry, mcp_client, namespace: str | None = None) 
     """Discover tools from MCP server and register them to ToolRegistry."""
     logger = logging.getLogger(__name__)
     safe_name_pattern = re.compile(r"[^a-zA-Z0-9_-]")
+    owner = f"mcp:{namespace or 'default'}"
+    assigned_names: set[str] = set()
 
     def sanitize_tool_name(name: str) -> str:
         sanitized = safe_name_pattern.sub("_", name)
@@ -164,13 +166,21 @@ def register_mcp_tools(tool_registry, mcp_client, namespace: str | None = None) 
     def ensure_unique(base_name: str) -> str:
         candidate = base_name
         counter = 2
-        while tool_registry.get_tool(candidate) or tool_registry.get_function(candidate):
+        while True:
+            exists = tool_registry.get_tool(candidate) or tool_registry.get_function(candidate)
+            owner_of = getattr(tool_registry, "owner_of", None)
+            existing_owner = owner_of(candidate) if callable(owner_of) else None
+            # Same-server names are reused on reconnect; other owners are
+            # never replaced, even if their original name was sanitized.
+            if candidate not in assigned_names and (not exists or existing_owner == owner):
+                assigned_names.add(candidate)
+                return candidate
             candidate = f"{base_name}_{counter}"
             counter += 1
-        return candidate
 
     tools = mcp_client.list_tools_sync()
     registered: list[dict[str, object | None]] = []
+    adapters: list[MCPToolAdapter] = []
     for tool in tools.tools:
         remote_name = getattr(tool, "name", None) or getattr(tool, "tool_name", None)
         description = getattr(tool, "description", None)
@@ -185,6 +195,15 @@ def register_mcp_tools(tool_registry, mcp_client, namespace: str | None = None) 
         if public_name != raw_public_name:
             logger.info("Sanitized MCP tool name '%s' -> '%s'", raw_public_name, public_name)
         adapter = MCPToolAdapter(mcp_client, public_name, remote_name, description, schema)
-        tool_registry.register_tool(adapter)
+        adapters.append(adapter)
         registered.append({"name": public_name, "description": description, "schema": schema})
+    replace_owned = getattr(tool_registry, "replace_owned_tools", None)
+    if callable(replace_owned):
+        # All-or-nothing publication: stale remote tools vanish after reconnect,
+        # without ever touching another server or the built-in namespace.
+        replace_owned(owner, adapters)
+    else:
+        # Compatibility for standalone third-party registry implementations.
+        for adapter in adapters:
+            tool_registry.register_tool(adapter)
     return registered

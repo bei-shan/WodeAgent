@@ -98,6 +98,13 @@ class MCPFeature(AgentFeature):
         registry = getattr(agent, "tool_registry", None)
         if registry is not None:
             clear_pending_servers(registry)
+            list_owners = getattr(registry, "registered_owners", None)
+            unregister_owner = getattr(registry, "unregister_owner", None)
+            if callable(list_owners) and callable(unregister_owner):
+                # A server teardown must invalidate only its own adapters.
+                # Old model snapshots will reject the now-removed handles.
+                for owner in list_owners(prefix="mcp:"):
+                    unregister_owner(owner)
         for client in getattr(agent, "_mcp_clients", []) or []:
             try:
                 client.close_sync()
