@@ -97,9 +97,9 @@ def test_step_seals_are_registry_scoped_and_filter_is_fail_closed():
 def test_function_adapter_swap_cannot_hijack_old_llm_call():
     registry = ToolRegistry()
     called = []
-    registry.register_function("lookup", "Original", lambda text: called.append(("old", text)) or "ok")
+    registry.register_function("lookup", "Original", lambda text: called.append(("old", text)) or json.dumps({"status": "success", "data": {}}))
     step = registry.capture_tool_step()
-    registry.register_function("lookup", "Replaced", lambda text: called.append(("new", text)) or "ok")
+    registry.register_function("lookup", "Replaced", lambda text: called.append(("new", text)) or json.dumps({"status": "success", "data": {}}))
     assert_stale(response(registry, "lookup", {"input": "x"}, step))
     assert called == []
     next_step = registry.capture_tool_step()
