@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from core.context_engine.trace_sanitizer import TraceSanitizer
@@ -32,7 +33,7 @@ class ExecutionHistory:
         self.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.db_path.is_symlink():
             raise OSError("Execution database may not be a symlink")
-        with sqlite3.connect(self.db_path, timeout=5) as conn:
+        with closing(sqlite3.connect(self.db_path, timeout=5)) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS tools (
                 sid TEXT NOT NULL, call_id TEXT NOT NULL,
                 step INTEGER NOT NULL, name TEXT NOT NULL,
@@ -72,7 +73,7 @@ class ExecutionHistory:
                     }), ensure_ascii=False)
             except (ValueError, TypeError, UnicodeError):
                 pass
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute("""INSERT INTO tools (sid,call_id,step,name,status,summary)
                 VALUES (?,?,?,?,?,?)
                 ON CONFLICT(sid,call_id) DO UPDATE SET
@@ -90,7 +91,7 @@ class ExecutionHistory:
             raise ValueError("Invalid session ID")
         if not self.db_path.exists():
             return {"tools": []}
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT call_id,step,name,status,summary FROM tools WHERE sid=? ORDER BY rowid ASC LIMIT ?",
                 (sid, MAX_ITEMS),
@@ -107,5 +108,5 @@ class ExecutionHistory:
     def delete(self, sid: str) -> None:
         if not SESSION.fullmatch(sid) or not self.db_path.exists():
             return
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM tools WHERE sid=?", (sid,))
