@@ -176,3 +176,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Fenced code in model responses; no HTML is injected from model output. */
+.answer-code-block { overflow: hidden; border: 1px solid #e6e6e6; border-radius: 13px; margin: 12px 0; background: #f8f8f8; }
+.answer-code-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 13px; color: #666; font-size: 11px; background: #efefef; }
+.answer-code-copy { display: flex; align-items: center; gap: 5px; border-radius: 5px; padding: 3px 5px; }
+.answer-code-copy:hover { background: #e4e4e4; }
+.answer-code-block pre { border: 0; border-radius: 0; margin: 0; padding: 13px 16px; overflow-x: auto; background: transparent; line-height: 1.7; }
+.answer-code-block pre code { padding: 0; border-radius: 0; font-size: 12px; background: transparent; white-space: pre; }
