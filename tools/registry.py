@@ -133,6 +133,8 @@ class ToolRegistry:
         if tool.name in self._functions:
             raise ValueError(f"Tool name '{tool.name}' is already registered as a function")
         if tool.name in self._tools:
+            if tool.name == "ToolSearch" and self._discovery_state is not None:
+                raise PermissionError("Cannot replace the active ToolSearch control tool")
             logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
             if self._discovery_state is not None:
                 self._discovery_state.invalidate(tool.name)
@@ -166,6 +168,8 @@ class ToolRegistry:
 
     def unregister(self, name: str):
         """注销工具"""
+        if name == "ToolSearch" and self._discovery_state is not None:
+            raise PermissionError("Cannot remove ToolSearch while discovery is enabled")
         if self._discovery_state is not None:
             self._discovery_state.invalidate(name)
         if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
