@@ -30,6 +30,13 @@ class StoredPrivateSession:
     version: int
 
 
+@dataclass(frozen=True, slots=True)
+class PrivateSessionSummary:
+    id: str
+    title: str
+    version: int
+
+
 class PostgresPrivateSessionStore:
     """Standalone adapter; do not expose until an authenticated principal exists.
 
@@ -142,7 +149,7 @@ class PostgresPrivateSessionStore:
                     int(row[2]),
                 )
 
-    def list_private(self, scope: MemoryScope, *, limit: int = 50) -> list[StoredPrivateSession]:
+    def list_private(self, scope: MemoryScope, *, limit: int = 50) -> list[PrivateSessionSummary]:
         """Return only scoped, privately owned sessions with bounded pagination."""
         if not isinstance(scope, MemoryScope):
             raise TypeError("Authenticated server-derived MemoryScope required")
@@ -152,19 +159,17 @@ class PostgresPrivateSessionStore:
             with conn.cursor() as cur:
                 self._scope(cur, scope)
                 cur.execute(
-                    """SELECT session_id, title, snapshot, version
+                    """SELECT session_id, title, version
                        FROM ridge.private_sessions
                        WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
                        ORDER BY updated_at DESC, session_id DESC LIMIT %s""",
                     (scope.tenant_id, scope.project_id, scope.user_id, limit),
                 )
+                # Do not return 50 full multi-MB JSON snapshots from a
+                # listing endpoint. Fetch content explicitly by session ID.
                 return [
-                    StoredPrivateSession(
-                        str(sid).strip(), title,
-                        snap if isinstance(snap, dict) else json.loads(snap),
-                        int(version),
-                    )
-                    for sid, title, snap, version in cur.fetchall()
+                    PrivateSessionSummary(str(sid).strip(), title, int(version))
+                    for sid, title, version in cur.fetchall()
                 ]
 
     def save(
