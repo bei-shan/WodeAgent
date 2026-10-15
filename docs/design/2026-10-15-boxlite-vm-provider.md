@@ -62,8 +62,7 @@ best effort if the underlying BoxLite runtime hangs. No claim of enforced
 process-tree termination, VM cleanup after a host crash, or multi-tenant
 isolation is made until separately tested against live KVM/HVF.
 
-Unlike DeerFlow's warm BoxLite pool, this initial backend pays VM startup cost
-for *every* Bash call. It has no multi-session VM ownership leases, no structured
+By default BoxLite starts a new VM per command. The [optional per-Agent warm VM pool](2026-10-15-boxlite-session-pool.md) reuses one VM with dedicated-loop lifecycle and bounded idle cleanup, but remains experimental and requires real KVM/HVF acceptance. It has no multi-session VM ownership leases, no structured
 guest file API, no uploaded skills projection, no artifact syncing beyond the
 RW bind mount, and no E2B/Kubernetes provider. Docker remains the better-tested
 isolation path for current v0.1 candidates.
