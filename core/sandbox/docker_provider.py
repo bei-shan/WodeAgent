@@ -85,7 +85,7 @@ class DockerCommandProvider:
                     binary, secrets.token_bytes(32), runner=runner,
                 )
             else:
-                secret_path = installation_key_path()
+                secret_path = installation_key_path().resolve(strict=False)
                 try:
                     secret_path.relative_to(self.workspace)
                 except ValueError:
