@@ -18,6 +18,7 @@ from core.runtime.tool_contracts import validate_tool_input
 from core.runtime.tool_snapshot import (
     ToolStepBinding, ToolStepSnapshot, encode_tool_schema, schema_fingerprint,
 )
+from core.runtime.tool_authorization import HostedToolAuthority
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -72,6 +73,8 @@ class ToolRegistry:
         # When set, deny schema AND execution for all other tools, including
         # dynamically registered plugins or MCP functions.
         self._sandbox_allowed_tools: frozenset[str] | None = None
+        # Only bound by a trusted hosted worker after sandbox restriction.
+        self._hosted_authority: HostedToolAuthority | None = None
         # Read 元信息缓存（用于乐观锁自动注入）
         # key: path_resolved 或原始 path
         self._read_cache: dict[str, ReadMeta] = {}
@@ -104,8 +107,36 @@ class ToolRegistry:
             raise PermissionError("Sandbox tool policy cannot be relaxed after activation")
         self._sandbox_allowed_tools = frozenset(allowed)
 
+    def bind_hosted_authority(self, authority: HostedToolAuthority) -> None:
+        """One-way bind: no rebinding to another tenant or permissive local mode."""
+        if not isinstance(authority, HostedToolAuthority):
+            raise TypeError("Verified hosted tool authority required")
+        with self._registration_lock:
+            if self._hosted_authority is not None:
+                raise PermissionError("Hosted execution authority is already bound")
+            if self._sandbox_allowed_tools != frozenset({"Bash"}):
+                raise PermissionError("Hosted tool authority requires an isolated Bash-only registry")
+            self._hosted_authority = authority
+
+    def inherit_hosted_authority(self, parent: "ToolRegistry") -> None:
+        """Subagent registries cannot drop the parent's tenant execution fence."""
+        if not isinstance(parent, ToolRegistry):
+            raise TypeError("Source must be a ToolRegistry")
+        with parent._registration_lock:
+            authority = parent._hosted_authority
+        if authority is not None:
+            self.restrict_to_tools({"Bash"})
+            self.bind_hosted_authority(authority)
+
+    def _hosted_tool_allowed(self, name: str) -> bool:
+        policy = self._hosted_authority
+        return policy is None or policy.allows(name)
+
     def _tool_allowed(self, name: str) -> bool:
-        return self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools
+        return (
+            (self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools)
+            and self._hosted_tool_allowed(name)
+        )
 
     def enable_deferred_discovery(
         self, state, *, can_execute: Callable[[str], bool] | None = None,
@@ -506,6 +537,17 @@ class ToolRegistry:
         else:
             parameters = {"input": input_text}
         
+        # Hosted membership is re-read for every invocation, including direct
+        # registry calls bypassing the model and calls with stale snapshots.
+        if not self._hosted_tool_allowed(name):
+            message = "Hosted tool access denied or project membership unavailable."
+            return json.dumps({
+                "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                "error": {"code": ErrorCode.PERMISSION_DENIED.value, "message": message},
+                "stats": {"time_ms": 0},
+                "context": {"cwd": ".", "params_input": parameters},
+            }, ensure_ascii=False)
+
         # Deny before optimistic-lock injection or any adapter execution.
         if not self._tool_allowed(name):
             return json.dumps({
