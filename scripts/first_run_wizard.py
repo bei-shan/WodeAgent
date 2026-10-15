@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -230,23 +231,42 @@ def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> No
         "# TRACE_ENABLED=true",
         "",
     ])
-    Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Secret-bearing config is atomically published with 0600 permissions.
+    # The public CLI refuses to overwrite an existing file without --force.
+    temp_name = None
+    try:
+        fd, temp_name = tempfile.mkstemp(prefix=".ridge-env-", dir=".")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, ".env")
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)
 
 
 def _show_complete() -> None:
     console.print()
     console.print(
         Panel(
-            "[bold green]✅ Setup complete![/bold green]\n\n"
-            "[bold]Quick start:[/bold]\n"
-            "  • Type anything to chat with the agent\n"
-            "  • [cyan]/help[/cyan] to see all commands\n"
-            "  • [cyan]/model[/cyan] to switch models\n"
-            "  • [cyan]/sessions[/cyan] to manage conversations\n"
-            "  • [cyan]init[/cyan] to generate CODE_LAW.md\n\n"
-            "Your [bold].env[/bold] has been created. Edit it\n"
-            "anytime to change settings.",
+            "[bold green]Setup complete![/bold green]\\n\\n"
+            "Start the local server:\\n"
+            "  [cyan]python -m ridgecode serve[/cyan]\\n\\n"
+            "Start the Web client in another terminal:\\n"
+            "  [cyan]python -m ridgecode web[/cyan]\\n\\n"
+            "Or launch OpenTUI after installing Bun dependencies:\\n"
+            "  [cyan]python -m ridgecode tui[/cyan]\\n\\n"
+            "Your [bold].env[/bold] was created with restricted permissions.",
             border_style="green",
         )
     )
     console.print()
+
+
+if __name__ == "__main__":
+    # Never allow the old direct script invocation to silently succeed
+    # without running setup; use the canonical command and overwrite guard.
+    from ridgecode.cli import main as ridge_main
+    raise SystemExit(ridge_main(["setup"]))
