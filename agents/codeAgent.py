@@ -196,7 +196,8 @@ class CodeAgent(Agent):
         # Skills
         self._skill_loader = SkillLoader(self._skill_catalog_root)
         self._skills_prompt = ""
-        self._refresh_skills_prompt()
+        if self._hosted_tool_authority is None:
+            self._refresh_skills_prompt()
 
         # MCP prompt placeholder (populated later in _init_tools)
         self._mcp_tools_prompt = ""
@@ -593,6 +594,12 @@ class CodeAgent(Agent):
 
     def run(self, input_text: str, **kwargs) -> str:
         """Run each turn with isolated configuration in the current thread."""
+        # A verified principal and Bash-only registry do not yet supply a
+        # durable hosted Session/Worker/Sandbox resource authorization contract.
+        # Refuse hosted turns until the scoped runner is connected, rather
+        # than accidentally executing the local SessionManager path.
+        if self._hosted_tool_authority is not None:
+            raise PermissionError("Hosted Agent turns require an authenticated fenced worker runner")
         from core.runtime.config_scope import scoped_config
         with scoped_config(self.config):
             return self._run_scoped(input_text, **kwargs)
