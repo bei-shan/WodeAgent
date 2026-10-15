@@ -361,7 +361,7 @@ test('file attachment can create a session from an empty chat', async ({ page })
   await expect(page.getByLabel('待发送的附件').getByText('uploaded.txt')).toBeVisible()
   await page.getByPlaceholder('问任何问题').fill('检查附件')
   await page.getByRole('button', { name: '发送消息' }).click()
-  await expect.poll(() => state.messages).toEqual(['检查附件\\n@uploaded.txt'])
+  await expect.poll(() => state.messages).toEqual(['检查附件\n@uploaded.txt'])
   await expect(page.locator('.chat-composer')).toHaveCount(1)
   await expect(page.getByPlaceholder('问任何问题')).toHaveCount(1)
 })
@@ -373,7 +373,7 @@ test('safe code blocks render in the conversation with copy controls', async ({ 
   await page.getByPlaceholder('问任何问题').press('Enter')
   await expect(page.getByText('实时连接正常')).toBeVisible()
   await emit(page, 'llm.delta', {
-    kind: 'content', text: '示例：\\n```python\\nprint(1 + 1)\\n```',
+    kind: 'content', text: '示例：\n```python\nprint(1 + 1)\n```',
   })
   await expect(page.locator('.answer-code-block code')).toHaveText('print(1 + 1)')
   await expect(page.getByRole('button', { name: '复制代码' })).toBeVisible()
