@@ -508,7 +508,7 @@ class CodeAgent(Agent):
         """Rebind path-aware runtime components after worktree root changes."""
         if self._sandbox_mode != "local_trusted":
             raise RuntimeError(
-                "Worktree root switching is disabled in Docker sandbox mode; "
+                "Worktree root switching is disabled in isolated sandbox mode; "
                 "configure a new isolated session workspace instead"
             )
         root = Path(project_root).resolve()
