@@ -866,7 +866,12 @@ class CodeAgent(Agent):
         # Preserve that compatibility while the framework-owned entrypoint
         # uses the explicit three-phase runtime.
         use_stages = "_execute_tool" not in self.__dict__
-        staged_runtime = ToolRuntime(self.tool_registry, self.logger) if use_stages else None
+        staged_runtime = (
+            ToolRuntime(
+                self.tool_registry, self.logger,
+                step_snapshot=getattr(self, "_model_tool_step_snapshot", None),
+            ) if use_stages else None
+        )
         if use_stages and not hasattr(self, "_last_tool_timing"):
             self._last_tool_timing = {}
         prepared = {}
@@ -1332,6 +1337,18 @@ class CodeAgent(Agent):
         activate = getattr(self.tool_registry, "activate_discovered_tools", None)
         if callable(activate):
             activate()
+        capture = getattr(self.tool_registry, "capture_tool_step", None)
+        if callable(capture):
+            def allowed(name: str) -> bool:
+                return (
+                    (not self._in_plan_mode or name in self.PLAN_MODE_TOOLS)
+                    and (not self.delegate_mode or self._is_tool_allowed_in_delegate_mode(name))
+                )
+            snapshot = capture(allowed=allowed)
+            self._model_tool_step_snapshot = snapshot
+            return snapshot.model_schemas()
+        # Compatibility with registry ports supplied by older integrations.
+        self._model_tool_step_snapshot = None
         tools = self.tool_registry.get_openai_tools()
         filtered: list[dict[str, Any]] = []
         for item in tools:
