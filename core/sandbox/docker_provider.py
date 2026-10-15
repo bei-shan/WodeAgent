@@ -12,30 +12,18 @@ import re
 import secrets
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from typing import Callable
 
 from core.runtime.process_execution import run_process
+from core.sandbox.contracts import CommandResult, SandboxUnavailable
 from core.sandbox.docker_lifecycle import (DockerLeaseManager, SandboxLeaseError,
     installation_key_path, shared_lease_manager)
 
 
-class SandboxUnavailable(RuntimeError):
-    """Fail closed: never fall back to running a command on the host."""
-
-
-@dataclass(frozen=True)
-class CommandResult:
-    stdout: str
-    stderr: str
-    exit_code: int | None
-    timed_out: bool = False
-    interrupted: bool = False
-
-
 class DockerCommandProvider:
+    kind = "docker"
     def __init__(
         self,
         workspace: str | Path,

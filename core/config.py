@@ -43,11 +43,15 @@ class Config(BaseModel):
     tool_max_concurrency: int = 4
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
-    sandbox_mode: str = "local_trusted"  # "local_trusted" or "docker"
+    sandbox_mode: str = "local_trusted"  # "local_trusted", "docker", "boxlite"
     sandbox_docker_image: str = "python:3.12-alpine"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
     sandbox_pids_limit: int = 64
+    # Optional BoxLite hardware micro-VM; never falls back to host execution.
+    sandbox_boxlite_image: str = "python:3.12-slim"
+    sandbox_boxlite_memory_mib: int = 1024
+    sandbox_boxlite_cpus: int = 2
 
     # ===== AgentTeams =====
     enable_agent_teams: bool = False
@@ -166,6 +170,9 @@ class Config(BaseModel):
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
             sandbox_cpus=env_float("AGENT_SANDBOX_CPUS", 1.0),
             sandbox_pids_limit=env_int("AGENT_SANDBOX_PIDS_LIMIT", 64),
+            sandbox_boxlite_image=env_str("AGENT_SANDBOX_BOXLITE_IMAGE", "python:3.12-slim"),
+            sandbox_boxlite_memory_mib=env_int("AGENT_SANDBOX_BOXLITE_MEMORY_MIB", 1024),
+            sandbox_boxlite_cpus=env_int("AGENT_SANDBOX_BOXLITE_CPUS", 2),
             # AgentTeams
             enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),

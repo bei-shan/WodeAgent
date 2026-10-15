@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
-from core.sandbox.docker_provider import DockerCommandProvider, SandboxUnavailable
+from core.sandbox.contracts import SandboxCommandProvider, SandboxUnavailable
 from core.runtime.cancellation import current_cancel_event
 from tools.builtin.bash import BashTool
 from tools.base import ErrorCode
@@ -13,19 +12,19 @@ from tools.base import ErrorCode
 
 class SandboxBashTool(BashTool):
     usage_notes = (
-        "Bash: runs exclusively in an ephemeral isolated Docker container, "
-        "working directory /workspace. The container has no outbound network "
-        "and no host credentials. Read/write files using shell commands inside "
-        "/workspace; host Read/Write/MCP tools are unavailable in Docker mode."
+        "Bash: runs only in the explicitly selected isolated Docker or BoxLite "
+        "backend at /workspace. Guest networking is disabled. Workspace is "
+        "shared read-write with the guest; host Read/Write/MCP/Skill tools "
+        "are unavailable in isolated mode."
     )
 
-    def __init__(self, provider: DockerCommandProvider):
+    def __init__(self, provider: SandboxCommandProvider):
         super().__init__(name="Bash", project_root=provider.workspace)
         self.provider = provider
         self.description = (
-            "Run a shell command within an isolated, network-disabled Docker "
-            "container. Workspace is mounted at /workspace. Only the workspace "
-            "volume persists between commands."
+            "Execute shell command in a network-disabled isolated "
+            f"{provider.kind} environment. The host workspace is mounted "
+            "read-write at /workspace and is the only persistent guest path."
         )
 
     def run(self, parameters: dict[str, Any]) -> str:
@@ -65,7 +64,7 @@ class SandboxBashTool(BashTool):
         except SandboxUnavailable:
             return self.create_error_response(
                 error_code=ErrorCode.EXECUTION_ERROR,
-                message="Docker sandbox is unavailable; host execution is forbidden.",
+                message="Isolated sandbox is unavailable; host execution is forbidden.",
                 params_input=parameters,
             )
         elapsed = int((time.monotonic() - start) * 1000)
@@ -78,18 +77,18 @@ class SandboxBashTool(BashTool):
             "stdout": stdout, "stderr": stderr,
             "exit_code": result.exit_code,
             "truncated": truncated, "command": command,
-            "directory": directory, "sandbox": "docker",
+            "directory": directory, "sandbox": self.provider.kind,
         }
         if result.interrupted:
             return self.create_error_response(
                 error_code=ErrorCode.INTERRUPTED,
-                message="Docker command interrupted; container cleanup requested.",
+                message="Sandbox command interrupted; guest cleanup requested.",
                 params_input=parameters, time_ms=elapsed,
             )
         if result.timed_out:
             return self.create_error_response(
                 error_code=ErrorCode.TIMEOUT,
-                message="Docker command timed out; container cleanup requested.",
+                message="Sandbox command timed out; guest cleanup requested.",
                 params_input=parameters, time_ms=elapsed,
             )
         if result.exit_code == 0 and not truncated:
