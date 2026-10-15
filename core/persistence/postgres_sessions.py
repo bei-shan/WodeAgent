@@ -74,6 +74,28 @@ class PostgresPrivateSessionStore:
             (scope.tenant_id, scope.user_id, scope.project_id),
         )
 
+    def authorize_membership(self, scope: MemoryScope) -> bool:
+        """Database-authoritative project membership, rechecked per request.
+
+        A valid but revoked OIDC token must immediately stop reading or
+        mutating private sessions. This query is separately protected by
+        forced RLS. Missing migrations/role privileges fail closed.
+        """
+        if not isinstance(scope, MemoryScope):
+            raise TypeError("Verified principal scope required")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                self._scope(cur, scope)
+                cur.execute(
+                    """SELECT EXISTS(
+                         SELECT 1 FROM ridge.private_project_memberships
+                          WHERE tenant_id=%s AND project_id=%s AND user_id=%s
+                            AND enabled IS TRUE
+                       )""",
+                    (scope.tenant_id, scope.project_id, scope.user_id),
+                )
+                return cur.fetchone()[0] is True
+
     def production_probe(self) -> bool:
         """Verify the runtime DB role cannot bypass table RLS.
 
@@ -97,10 +119,38 @@ class PostgresPrivateSessionStore:
                          AND c.relname='private_sessions'"""
                 )
                 row = cur.fetchone()
-                return bool(
+                sessions_safe = bool(
                     row and row[0] is False and row[1] is False
                     and row[2] is True and row[3] is True
                     and row[4] is True
+                )
+                if not sessions_safe:
+                    return False
+                cur.execute(
+                    """SELECT c.relrowsecurity, c.relforcerowsecurity,
+                              EXISTS (
+                                SELECT 1 FROM pg_policies p
+                                WHERE p.schemaname='ridge'
+                                  AND p.tablename='private_project_memberships'
+                                  AND p.cmd='SELECT'
+                              ),
+                              has_table_privilege(
+                                current_user, 'ridge.private_project_memberships', 'SELECT'
+                              ),
+                              has_table_privilege(
+                                current_user, 'ridge.private_project_memberships',
+                                'INSERT,UPDATE,DELETE'
+                              )
+                       FROM pg_class c JOIN pg_namespace n
+                         ON n.oid=c.relnamespace
+                       WHERE n.nspname='ridge'
+                         AND c.relname='private_project_memberships'"""
+                )
+                membership = cur.fetchone()
+                return bool(
+                    membership and membership[0] is True
+                    and membership[1] is True and membership[2] is True
+                    and membership[3] is True and membership[4] is False
                 )
 
     def create(

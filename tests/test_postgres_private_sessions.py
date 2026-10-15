@@ -143,28 +143,132 @@ def test_real_http_routing_uses_signed_principal_scope(backend):
     from desktop.service.hosted_app import create_hosted_app
     from tests.test_hosted_identity_api import TestVerifier, headers
 
-    app = create_hosted_app(verifier=TestVerifier(), store=backend)
-    with TestClient(app) as client:
-        response = client.post("/api/v2/sessions", json={"title": "live-private"},
-                               headers=headers("alice"))
-        assert response.status_code == 201
-        sid = response.json()["id"]
-        try:
-            assert client.get("/api/v2/sessions", headers=headers("alice")).status_code == 200
-            assert client.get(f"/api/v2/sessions/{sid}", headers=headers("bob")).status_code == 404
-            assert client.get(f"/api/v2/sessions/{sid}", headers=headers("other-user")).status_code == 404
-            response = client.put(f"/api/v2/sessions/{sid}",
-                                  headers=headers("alice"),
-                                  json={"expected_version": 1, "snapshot": {"phase": "tested"}})
-            assert response.status_code == 200
-            assert response.json()["version"] == 2
-            assert client.put(f"/api/v2/sessions/{sid}", headers=headers("bob"),
-                              json={"expected_version": 2, "snapshot": {"bad": 1}}).status_code == 409
-            assert backend.get(scope("t1", "u1", "p1"), sid).snapshot == {"phase": "tested"}
-        finally:
-            assert client.delete(f"/api/v2/sessions/{sid}",
-                                 headers=headers("alice")).status_code == 204
+    psycopg = pytest.importorskip("psycopg")
+    admin_dsn = os.environ.get("RIDGE_TEST_POSTGRES_ADMIN_DSN")
+    if not admin_dsn:
+        pytest.skip("Trusted isolated CI provisioning DSN required")
+    # Only this CI admin role can provision signed principals. The runtime
+    # identity is read-only and can never self-enroll.
+    members = [
+        ("t1", "p1", "u1"), ("t2", "p1", "u1"), ("t1", "p1", "u2"),
+    ]
+    with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+        for member in members:
+            cur.execute(
+                """INSERT INTO ridge.private_project_memberships
+                   (tenant_id,project_id,user_id,enabled)
+                   VALUES (%s,%s,%s,TRUE)
+                   ON CONFLICT (tenant_id,project_id,user_id)
+                   DO UPDATE SET enabled=TRUE, updated_at=now()""",
+                member,
+            )
+
+    try:
+        app = create_hosted_app(verifier=TestVerifier(), store=backend)
+        with TestClient(app) as client:
+            response = client.post("/api/v2/sessions", json={"title": "live-private"},
+                                   headers=headers("alice"))
+            assert response.status_code == 201
+            sid = response.json()["id"]
+            try:
+                assert client.get("/api/v2/sessions", headers=headers("alice")).status_code == 200
+                assert client.get(f"/api/v2/sessions/{sid}", headers=headers("bob")).status_code == 404
+                assert client.get(f"/api/v2/sessions/{sid}", headers=headers("other-user")).status_code == 404
+                response = client.put(f"/api/v2/sessions/{sid}",
+                                      headers=headers("alice"),
+                                      json={"expected_version": 1, "snapshot": {"phase": "tested"}})
+                assert response.status_code == 200
+                assert response.json()["version"] == 2
+                assert client.put(f"/api/v2/sessions/{sid}", headers=headers("bob"),
+                                  json={"expected_version": 2, "snapshot": {"bad": 1}}).status_code == 409
+                assert backend.get(scope("t1", "u1", "p1"), sid).snapshot == {"phase": "tested"}
+                # Now revoke the *same* signed principal in the real DB.
+                # Every subsequent HTTP operation must fail immediately.
+                with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE ridge.private_project_memberships SET enabled=FALSE
+                           WHERE tenant_id='t1' AND project_id='p1' AND user_id='u1'"""
+                    )
+                try:
+                    assert client.get(
+                        f"/api/v2/sessions/{sid}", headers=headers("alice")
+                    ).status_code == 403
+                    assert client.post(
+                        "/api/v2/sessions", json={}, headers=headers("alice")
+                    ).status_code == 403
+                finally:
+                    with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+                        cur.execute(
+                            """UPDATE ridge.private_project_memberships SET enabled=TRUE
+                               WHERE tenant_id='t1' AND project_id='p1' AND user_id='u1'"""
+                        )
+            finally:
+                assert client.delete(f"/api/v2/sessions/{sid}",
+                                     headers=headers("alice")).status_code == 204
+    finally:
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            for member in members:
+                cur.execute(
+                    """DELETE FROM ridge.private_project_memberships
+                       WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                    member,
+                )
 
 
 def test_production_probe_requires_unprivileged_rls_runtime_role(backend):
+    assert backend.production_probe() is True
+
+
+def test_runtime_membership_is_authoritative_and_revocable(backend):
+    psycopg = pytest.importorskip("psycopg")
+    admin_dsn = os.environ.get("RIDGE_TEST_POSTGRES_ADMIN_DSN")
+    if not admin_dsn:
+        pytest.skip("Admin DSN for isolated CI membership provisioning required")
+    tag = uuid.uuid4().hex[:12]
+    scoped = scope(tenant="membership-" + tag, user="user-" + tag,
+                   project="project-" + tag)
+    args = (scoped.tenant_id, scoped.project_id, scoped.user_id)
+    try:
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO ridge.private_project_memberships
+                   (tenant_id,project_id,user_id,enabled)
+                   VALUES (%s,%s,%s,TRUE)""",
+                args,
+            )
+        assert backend.authorize_membership(scoped) is True
+        assert backend.authorize_membership(
+            scope(tenant=scoped.tenant_id, user="other", project=scoped.project_id)
+        ) is False
+        # Runtime has *read-only* membership privilege; disabling access
+        # requires a privileged provisioning process.
+        with psycopg.connect(os.environ["RIDGE_TEST_POSTGRES_DSN"]) as conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.cursor() as cur:
+                    backend._scope(cur, scoped)
+                    cur.execute(
+                        """UPDATE ridge.private_project_memberships
+                              SET enabled=FALSE
+                            WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                        args,
+                    )
+
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE ridge.private_project_memberships SET enabled=FALSE
+                   WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                args,
+            )
+        assert backend.authorize_membership(scoped) is False
+    finally:
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM ridge.private_project_memberships
+                   WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                args,
+            )
+
+
+def test_hosted_readiness_rejects_missing_membership_guards(backend):
+    # The real runtime role must not own or mutate the membership table.
     assert backend.production_probe() is True
