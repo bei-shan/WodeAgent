@@ -303,7 +303,7 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(
             ToolSearchTool(self.tool_registry, state, can_promote=mode_allows),
         )
-        self.tool_registry.enable_deferred_discovery(state)
+        self.tool_registry.enable_deferred_discovery(state, can_execute=mode_allows)
         self._tool_discovery_state = state
         self.context_builder.set_mcp_tools_prompt(
             "Additional MCP, team and plugin tools are deferred. "
