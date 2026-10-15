@@ -37,7 +37,7 @@ def make_agent(*, parallel=True, feature=None):
         tool_parallel_reads_enabled=parallel, tool_max_concurrency=3,
         budget_enforce=False,
     )
-    agent._features = [feature] if feature is not None else []
+    agent._tool_interceptors = [feature] if feature is not None else []
     agent._hook_manager = None
     agent.delegate_mode = False
     agent._interrupt_requested = threading.Event()
@@ -86,7 +86,7 @@ def test_codeagent_overlaps_safe_reads_but_preserves_tool_history_order():
                           EventType.TOOL_COMPLETED, EventType.TOOL_COMPLETED]
 
 
-def test_uncertain_plugin_feature_forces_serial_execution():
+def test_unknown_interceptor_forces_serial_execution():
     agent = make_agent(feature=SimpleNamespace(name="unknown_plugin"))
     threads = []
     parent_thread = threading.get_ident()
