@@ -82,9 +82,14 @@ class Mem0MemoryBackend:
         records = response.get("results", []) if isinstance(response, dict) else []
         if len(records) != 1 or not isinstance(records[0], dict):
             raise ValueError("Mem0 did not confirm a single saved memory")
-        if records[0].get("user_id", owner) != owner:
-            raise ValueError("Mem0 returned a different owner")
-        return self._record(records[0], scope)
+        saved = records[0]
+        if saved.get("user_id") != owner:
+            # Many SDK versions omit the owner from an add() result.
+            # Verify persistence with get() rather than assuming ownership.
+            saved = self._client.get(saved.get("id"))
+        if not isinstance(saved, dict) or saved.get("user_id") != owner:
+            raise ValueError("Mem0 could not verify persisted memory ownership")
+        return self._record(saved, scope)
 
     def search(self, scope: MemoryScope, query: str, *, limit: int = 8) -> list[MemoryRecord]:
         owner = self._user_key(scope)
