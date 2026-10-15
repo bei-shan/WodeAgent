@@ -208,3 +208,17 @@ def test_owner_key_must_not_be_mounted_in_workspace(tmp_path, monkeypatch):
     )
     with pytest.raises(SandboxUnavailable, match="expose"):
         DockerCommandProvider(workspace, docker_binary="/usr/bin/docker")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires symlinks")
+def test_owner_key_parent_symlink_cannot_bypass_workspace_check(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    monkeypatch.setattr(
+        "core.sandbox.docker_provider.installation_key_path",
+        lambda: alias / "private.key",
+    )
+    with pytest.raises(SandboxUnavailable, match="expose"):
+        DockerCommandProvider(workspace, docker_binary="/usr/bin/docker")
