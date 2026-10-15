@@ -119,7 +119,7 @@ class ToolBootstrap:
 
                 try:
                     tool_instance = self._instantiate(obj)
-                    self._registry.register_tool(tool_instance)
+                    self._registry.register_tool(tool_instance, owner="builtin")
                     registered.append(tool_instance.name)
                     logger.debug("Auto-registered tool: %s", tool_instance.name)
                 except Exception as exc:
@@ -194,7 +194,7 @@ def register_team_tools(bootstrap: ToolBootstrap) -> list[str]:
 
             try:
                 tool_instance = bootstrap._instantiate(obj)
-                bootstrap._registry.register_tool(tool_instance)
+                bootstrap._registry.register_tool(tool_instance, owner="team")
                 registered.append(tool_instance.name)
                 logger.debug("Registered team tool: %s", tool_instance.name)
             except Exception as exc:
