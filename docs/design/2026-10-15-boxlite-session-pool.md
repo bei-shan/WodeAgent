@@ -44,8 +44,10 @@ from a model, plugin, browser or untrusted API.
 - `CodeAgent.close()` closes the owned pool even if one feature cleanup fails,
   and stops its loop and reaper threads.
 
-Both slot admission and cleanup are bounded. A stuck SDK shutdown may still
-leave guest resources behind; the event-loop bridge has timeouts, not a
+Both slot admission and cleanup are bounded. If a VM shutdown cannot be
+confirmed, the pool enters a fail-closed poisoned state and refuses new VM
+admissions instead of reusing uncertain capacity. A stuck SDK shutdown may
+still leave guest resources behind; the event-loop bridge has timeouts, not a
 reliable hypervisor-level kill guarantee. This is not a multi-host HA
 solution. Live KVM/HVF tests and stress reporting remain necessary.
 
