@@ -218,7 +218,7 @@ class DockerCommandProvider:
             result = run_process(
                 argv, shell=False, cwd=str(self.workspace), env=os.environ.copy(),
                 timeout=timeout_seconds, cancel_event=cancel_event,
-                stdin_data=stdin_data,
+                **({"stdin_data": stdin_data} if stdin_data is not None else {}),
             )
             if result.timed_out or result.interrupted:
                 self._force_remove(container_name)
