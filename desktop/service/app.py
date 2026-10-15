@@ -51,6 +51,8 @@ from desktop.service.application import (
 )
 from desktop.service.application.session_portability import MAX_BYTES
 from desktop.service.application.errors import InvalidInputError, PayloadTooLargeError
+from core.runtime.execution_history import ExecutionHistory
+from desktop.service.application.git_diff import GitDiffService
 from desktop.service.schemas import (
     SessionCreate,
     SessionInfo,
@@ -192,6 +194,8 @@ def create_app(
     app.state.workspace_service = WorkspaceService(
         controller=app.state.controller, data_dir=app.state.data_dir,
     )
+    app.state.execution_history = ExecutionHistory(os.path.join(app.state.data_dir, 'sessions'))
+    app.state.git_diff_service = GitDiffService(app.state.workspace_service)
     app.state.tool_registry = tool_registry
     app.state.project_root = os.path.abspath(project_root)
     app.state.config_catalog = ConfigCatalogService(app.state.project_root)
@@ -597,6 +601,20 @@ def create_app(
         return await asyncio.to_thread(
             app.state.workspace_service.content, sid, path, start_line, limit,
         )
+
+    @app.get("/api/sessions/{sid}/git/diff")
+    async def get_session_git_diff(
+        sid: str,
+        path: str = Query(..., description="File relative to session workspace"),
+    ):
+        """Tracked worktree changes against HEAD; never host/project fallback."""
+        return await asyncio.to_thread(app.state.git_diff_service.diff, sid, path)
+
+    @app.get("/api/sessions/{sid}/execution-history")
+    async def get_session_execution_history(sid: str):
+        """Bounded private tool-event summaries, including after restart."""
+        app.state.session_service._require_known(sid)
+        return await asyncio.to_thread(app.state.execution_history.list, sid)
 
     @app.get("/api/sessions/{sid}/files/download")
     async def file_download(sid: str, path: str = Query(...)):
