@@ -92,7 +92,7 @@ def create_hosted_app(
     async def list_sessions(identity: HostedIdentity = Depends(authenticated)):
         import asyncio
         records = await asyncio.to_thread(store.list_private, identity.scope)
-        return [project(r) for r in records]
+        return [{"id": r.id, "title": r.title, "version": r.version} for r in records]
 
     @app.post("/api/v2/sessions", status_code=201)
     async def create_session(body: SessionCreateRequest,
