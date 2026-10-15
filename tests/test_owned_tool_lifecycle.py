@@ -125,12 +125,12 @@ def test_mcp_sanitized_name_collision_cannot_take_another_server_adapter():
     client = SimpleNamespace(list_tools_sync=lambda: SimpleNamespace(tools=[item]))
     first = register_mcp_tools(registry, client, namespace="one.two")
     first_adapter = registry.get_tool(first[0]["name"])
-    second = register_mcp_tools(registry, client, namespace="one-two")
+    second = register_mcp_tools(registry, client, namespace="one two")
     assert first[0]["name"] == "one_two_get"
     assert second[0]["name"] == "one_two_get_2"
     assert registry.get_tool("one_two_get") is first_adapter
     assert registry.owner_of("one_two_get") == "mcp:one.two"
-    assert registry.owner_of("one_two_get_2") == "mcp:one-two"
+    assert registry.owner_of("one_two_get_2") == "mcp:one two"
 
 
 def test_mcp_cleanup_unregisters_only_mcp_names():
