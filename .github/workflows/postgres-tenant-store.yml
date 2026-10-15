@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "core/persistence/**"
+      - "desktop/service/hosted_app.py"
+      - "desktop/service/hosted_identity.py"
+      - "tests/test_hosted_identity_api.py"
+      - "requirements-hosted.txt"
       - "db/migrations/**"
       - "tests/test_postgres_private_sessions.py"
       - "requirements-postgres.txt"
@@ -46,7 +50,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install runtime test dependencies
-        run: python -m pip install -r requirements-postgres.txt pytest
+        run: python -m pip install -r requirements-hosted.txt pytest
       - name: Prepare least-privileged DB account and migration
         run: |
           sudo apt-get update -qq
@@ -60,4 +64,4 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d ridge_ci \
             -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ridge.private_sessions TO ridge_app"
       - name: Run real PostgreSQL owner isolation and CAS tests
-        run: python -m pytest tests/test_postgres_private_sessions.py -q
+        run: python -m pytest tests/test_postgres_private_sessions.py tests/test_hosted_identity_api.py -q
