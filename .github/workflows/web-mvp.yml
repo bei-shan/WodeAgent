@@ -6,6 +6,12 @@ on:
   pull_request:
     paths:
       - 'desktop/**'
+      - 'ridgecode/**'
+      - 'scripts/first_run_wizard.py'
+      - 'tests/test_ridgecode_cli.py'
+      - 'tests/test_repository_hygiene.py'
+      - 'docs/ARCHITECTURE.md'
+      - 'docs/COMMANDS.md'
       - 'core/runtime/**'
       - 'core/memory/**'
       - 'tests/test_mem0_backend.py'
