@@ -189,6 +189,25 @@ def test_cancelled_vm_is_disposed_not_warmed(tmp_path):
         p.close()
 
 
+def test_uncertain_vm_cleanup_poisoned_pool_does_not_overcommit():
+    class ShutdownFails(FakeBox):
+        async def __aexit__(self, *args):
+            raise OSError("Hypervisor shutdown failed")
+
+    p = _pool(capacity=1, factory=ShutdownFails)
+    try:
+        p.acquire("A")
+        p.release("A")
+        with pytest.raises(SandboxUnavailable, match="cleanup unconfirmed"):
+            p.acquire("B")
+        assert len(FakeBox.created) == 1
+        assert p.counts == (0, 0, 0)
+        with pytest.raises(SandboxUnavailable, match="unavailable"):
+            p.acquire("C")
+    finally:
+        p.shutdown()
+
+
 def test_pool_rejects_invalid_limits_and_after_shutdown():
     for params in ({"max_replicas": 0}, {"max_replicas": True},
                    {"idle_timeout": -1}, {"idle_timeout": float("inf")}):
