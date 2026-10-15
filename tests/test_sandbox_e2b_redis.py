@@ -1,6 +1,8 @@
 """Redis E2B capacity scripts: atomic admission, owner fencing, no silent TTL."""
 from __future__ import annotations
 
+import os
+import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -197,3 +199,37 @@ def test_failed_redis_release_after_remote_kill_leaves_slot_reserved(tmp_path):
     assert cap.used == 1
     with pytest.raises(SandboxUnavailable):
         make_store(db, limit=1).reserve(token(2))
+
+
+@pytest.mark.skipif(
+    os.getenv("AGENT_E2B_REDIS_INTEGRATION") != "1",
+    reason="explicit trusted Redis integration acknowledgement required",
+)
+def test_real_redis_atomic_capacity_and_fenced_release():
+    """Connects to Redis only on opt-in; uses isolated random test keys."""
+    url = os.getenv("E2B_REDIS_URL")
+    if not url:
+        pytest.skip("E2B_REDIS_URL not configured")
+    from redis import Redis
+    client = Redis.from_url(
+        url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3,
+    )
+    deployment = "accept-" + secrets.token_hex(8)
+    a = RedisE2BCapacity(deployment=deployment, limit=1, redis_client=client)
+    b = RedisE2BCapacity(deployment=deployment, limit=1, redis_client=client)
+    try:
+        a.reserve(token(1))
+        with pytest.raises(SandboxUnavailable):
+            b.reserve(token(2))
+        a.track(token(1), "live-test-remote")
+        with pytest.raises(SandboxUnavailable):
+            b.release(token(1))
+        a.release(token(1))
+        assert b.used == 0
+        b.reserve(token(2))
+        b.release(token(2))
+    finally:
+        # These keys are generated for this test alone; never clear a
+        # production deployment's shared E2B capacity ledger.
+        client.delete(a._key, a._limit_key)
+        client.close()
