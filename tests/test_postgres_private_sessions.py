@@ -135,3 +135,32 @@ def test_invalid_scope_and_id_fail_before_database(backend):
     for bad in ("../bad", "x" * 13, "uppercaseAB12"):
         with pytest.raises(ValueError):
             backend.get(scope(), bad)
+
+
+def test_real_http_routing_uses_signed_principal_scope(backend):
+    """Live PostgreSQL permissions + isolated HTTP endpoints together."""
+    from fastapi.testclient import TestClient
+    from desktop.service.hosted_app import create_hosted_app
+    from tests.test_hosted_identity_api import TestVerifier, headers
+
+    app = create_hosted_app(verifier=TestVerifier(), store=backend)
+    with TestClient(app) as client:
+        response = client.post("/api/v2/sessions", json={"title": "live-private"},
+                               headers=headers("alice"))
+        assert response.status_code == 201
+        sid = response.json()["id"]
+        try:
+            assert client.get("/api/v2/sessions", headers=headers("alice")).status_code == 200
+            assert client.get(f"/api/v2/sessions/{sid}", headers=headers("bob")).status_code == 404
+            assert client.get(f"/api/v2/sessions/{sid}", headers=headers("other-user")).status_code == 404
+            response = client.put(f"/api/v2/sessions/{sid}",
+                                  headers=headers("alice"),
+                                  json={"expected_version": 1, "snapshot": {"phase": "tested"}})
+            assert response.status_code == 200
+            assert response.json()["version"] == 2
+            assert client.put(f"/api/v2/sessions/{sid}", headers=headers("bob"),
+                              json={"expected_version": 2, "snapshot": {"bad": 1}}).status_code == 409
+            assert backend.get(scope("t1", "u1", "p1"), sid).snapshot == {"phase": "tested"}
+        finally:
+            assert client.delete(f"/api/v2/sessions/{sid}",
+                                 headers=headers("alice")).status_code == 204
