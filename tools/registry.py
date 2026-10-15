@@ -747,12 +747,18 @@ class ToolRegistry:
 
         # Tool对象描述
         for tool in tuple(self._tools.values()):
-            if self._tool_allowed(tool.name):
+            if (self._tool_allowed(tool.name)
+                    and self._discovery_mode_allowed(tool.name)
+                    and (self._discovery_state is None
+                         or self._discovery_state.is_visible(tool.name))):
                 descriptions.append(f"- {tool.name}: {tool.description}")
 
         # 函数工具描述
         for name, info in tuple(self._functions.items()):
-            if self._tool_allowed(name):
+            if (self._tool_allowed(name)
+                    and self._discovery_mode_allowed(name)
+                    and (self._discovery_state is None
+                         or self._discovery_state.is_visible(name))):
                 descriptions.append(f"- {name}: {info['description']}")
 
         return "\n".join(descriptions) if descriptions else "暂无可用工具"
