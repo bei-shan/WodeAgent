@@ -29,4 +29,9 @@ class SessionFeature(AgentFeature):
             (getattr(self, "_standalone_service", None) or SessionService()).close(agent)
 
     def on_model_changed(self, agent, old_model, new_model):
-        return self._resolve(agent).on_model_changed(agent, old_model, new_model)
+        # Observer calls must not start a SessionManager or write files.
+        # Legacy callers also invoke this method without calling init().
+        graph = getattr(agent, "_runtime_services", None)
+        service = (graph.get("session") if graph is not None
+                   else getattr(self, "_standalone_service", None))
+        return (service or SessionService()).on_model_changed(agent, old_model, new_model)
