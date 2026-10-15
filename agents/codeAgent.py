@@ -76,10 +76,10 @@ class CodeAgent(Agent):
         self._skill_catalog_root = str(Path(project_root).resolve())
         self.tool_registry = tool_registry
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
-        if self._sandbox_mode not in {"local_trusted", "docker"}:
-            raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted or docker")
-        if self._sandbox_mode == "docker" and getattr(self.config, "enable_agent_teams", False):
-            raise ValueError("Docker sandbox mode does not support AgentTeams yet")
+        if self._sandbox_mode not in {"local_trusted", "docker", "boxlite"}:
+            raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker or boxlite")
+        if self._sandbox_mode != "local_trusted" and getattr(self.config, "enable_agent_teams", False):
+            raise ValueError("Isolated sandbox mode does not support AgentTeams yet")
         self.logger = logger or setup_logger(
             name=f"agent.{self.name}",
             level=self.config.log_level,
@@ -217,29 +217,38 @@ class CodeAgent(Agent):
             team_registered = register_team_tools(bootstrap)
             self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
 
-        if self._sandbox_mode == "docker":
-            # Install the isolated executor before the first model request.
-            # Fail-closed registry policy also covers any tools registered
-            # later by Features, MCP or custom clients.
-            from core.sandbox.docker_provider import DockerCommandProvider
+        if self._sandbox_mode != "local_trusted":
+            # Both Docker and BoxLite seal the registry before the first model
+            # step; no host Read/Write/Skill/MCP/plugin tool bypass is allowed.
             from core.sandbox.command_tool import SandboxBashTool
-            provider = DockerCommandProvider(
-                self.project_root,
-                image=self.config.sandbox_docker_image,
-                memory=self.config.sandbox_memory,
-                cpus=self.config.sandbox_cpus,
-                pids_limit=self.config.sandbox_pids_limit,
-            )
+            if self._sandbox_mode == "docker":
+                from core.sandbox.docker_provider import DockerCommandProvider
+                provider = DockerCommandProvider(
+                    self.project_root,
+                    image=self.config.sandbox_docker_image,
+                    memory=self.config.sandbox_memory,
+                    cpus=self.config.sandbox_cpus,
+                    pids_limit=self.config.sandbox_pids_limit,
+                )
+            else:
+                from core.sandbox.boxlite_provider import BoxliteCommandProvider
+                provider = BoxliteCommandProvider(
+                    self.project_root,
+                    image=self.config.sandbox_boxlite_image,
+                    memory_mib=self.config.sandbox_boxlite_memory_mib,
+                    cpus=self.config.sandbox_boxlite_cpus,
+                )
             self.tool_registry.register_tool(SandboxBashTool(provider))
             self.tool_registry.restrict_to_tools({"Bash"})
             self.logger.warning(
-                "Docker sandbox mode: only container Bash is exposed; "
-                "host file, MCP, skill and subagent tools are denied"
+                "%s sandbox mode: only isolated Bash is exposed; "
+                "host file, MCP, skill and subagent tools are denied",
+                self._sandbox_mode,
             )
 
         # MCP prompt sync (tools registered by MCPFeature.init)
         self.context_builder.set_mcp_tools_prompt(
-            "" if self._sandbox_mode == "docker" else self._mcp_tools_prompt
+            "" if self._sandbox_mode != "local_trusted" else self._mcp_tools_prompt
         )
 
     # ------------------------------------------------------------------
@@ -497,7 +506,7 @@ class CodeAgent(Agent):
 
     def _rebind_project_root(self, project_root: str) -> None:
         """Rebind path-aware runtime components after worktree root changes."""
-        if self._sandbox_mode == "docker":
+        if self._sandbox_mode != "local_trusted":
             raise RuntimeError(
                 "Worktree root switching is disabled in Docker sandbox mode; "
                 "configure a new isolated session workspace instead"
