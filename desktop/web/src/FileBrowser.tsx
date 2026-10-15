@@ -171,7 +171,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
                       className="text-xs text-blue-600 disabled:opacity-40">对比最新</button>
                   )}
                   {selected && diffMode && (
-                    <button type="button" onClick={() => setDiffMode(false); setGitMode(false)} className="text-xs text-gray-600">原文</button>
+                    <button type="button" onClick={() => { setDiffMode(false); setGitMode(false) }} className="text-xs text-gray-600">原文</button>
                   )}
                   {selected && comparison !== null && (
                     <button type="button" onClick={() => { setBaseline(comparison); setDiffMode(false); setGitMode(false); setComparison(null) }}
