@@ -191,6 +191,7 @@ def test_plugin_http_install_activate_uninstall_and_data_only_default(tmp_path, 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("RIDGE_ALLOW_PLUGIN_CODE", raising=False)
+    monkeypatch.delenv("RIDGE_ALLOW_TRUSTED_HOOKS", raising=False)
     app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
     with TestClient(app) as client:
         assert client.get("/api/plugins").json() == []
