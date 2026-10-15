@@ -41,6 +41,9 @@ class Config(BaseModel):
     max_steps: int = 50  # ReAct loop max steps
     tool_parallel_reads_enabled: bool = True
     tool_max_concurrency: int = 4
+    # Opt-in bounded deferred catalog; default keeps all existing tool schemas.
+    tool_deferred_discovery_enabled: bool = False
+    tool_discovery_max_promoted: int = 18
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
     sandbox_mode: str = "local_trusted"  # local_trusted | docker | boxlite | e2b
@@ -176,6 +179,8 @@ class Config(BaseModel):
             max_steps=env_int("MAX_STEPS", 50),
             tool_parallel_reads_enabled=env_bool("TOOL_PARALLEL_READS_ENABLED", True),
             tool_max_concurrency=max(1, min(8, env_int("TOOL_MAX_CONCURRENCY", 4))),
+            tool_deferred_discovery_enabled=env_bool("TOOL_DEFERRED_DISCOVERY_ENABLED", False),
+            tool_discovery_max_promoted=max(1, min(48, env_int("TOOL_DISCOVERY_MAX_PROMOTED", 18))),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
