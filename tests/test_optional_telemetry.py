@@ -46,7 +46,7 @@ class DummyHost:
                 }}
         ModelGateway(Model(), streaming=False).invoke(
             messages=[{"role": "user", "content": pending_input}],
-            tools_schema=[], tool_choice="auto", features=[],
+            tools_schema=[], tool_choice="auto", interceptors=[],
             agent=self, on_delta=lambda *_: None,
         )
         class Tool:
