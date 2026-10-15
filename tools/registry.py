@@ -246,6 +246,13 @@ class ToolRegistry:
         with self._registration_lock:
             return self._tool_owners.get(name)
 
+    def registered_owners(self, *, prefix: str = "") -> tuple[str, ...]:
+        with self._registration_lock:
+            return tuple(sorted({
+                owner for owner in self._tool_owners.values()
+                if owner.startswith(prefix)
+            }))
+
     def replace_owned_tools(self, owner: str, tools: list[Tool]) -> None:
         """Atomically swap one source's entire inventory after discovery succeeds.
 
