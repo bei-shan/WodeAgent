@@ -85,8 +85,9 @@ class RedisE2BCapacity:
         self._redis = redis_client
         self._owner = secrets.token_hex(32)
         self.limit = limit
-        self._key = f"ridgecode:e2b:{deployment}:reservations"
-        self._limit_key = f"ridgecode:e2b:{deployment}:limit"
+        # Hash tags keep both Lua KEYS in one Redis Cluster slot.
+        self._key = f"ridgecode:e2b:{{{deployment}}}:reservations"
+        self._limit_key = f"ridgecode:e2b:{{{deployment}}}:limit"
 
     def _eval(self, script: str, token: str, *args: object) -> str:
         if not isinstance(token, str) or not _TOKEN.fullmatch(token):
