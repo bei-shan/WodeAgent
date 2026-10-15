@@ -146,6 +146,31 @@ python -m pytest tests/test_sandbox_e2b_guest_files.py -q
 The optional billable live E2B suite additionally verifies the actual
 guest read/list path; it requires both approval flags below.
 
+## Non-destructive reconciliation audit
+
+`core/sandbox/e2b_reconciliation.py` provides a bounded,
+**read-only** inventory auditor: at most 128 records, three Redis HSCAN
+pages and three seconds by default. An optional operator-supplied
+`remote_inventory` callable supplies a *complete scoped* E2B VM listing;
+if it fails, hangs, is too large, contains foreign/malformed entries,
+or the Redis snapshot is truncated, mismatches are left **unknown**.
+
+Reports contain only counts and 12-hex SHA-256 VM fingerprints, not raw
+remote sandbox identifiers, Redis owner secrets, local file paths or API keys.
+Even an apparently complete listing is a **nontransactional observation**,
+not proof that a VM is dead: `possible_missing_remote` and
+`possible_untracked_remote` are diagnostic hints. This auditor has no
+`kill`, `release` or `adopt` method and must never be used as an
+automated cleanup decision.
+
+```bash
+python -m pytest tests/test_sandbox_e2b_reconciliation.py -q
+```
+
+Full recovery requires a separate operator-reviewed procedure with remote
+control-plane destruction evidence, subsequent fenced Redis release, and
+cross-process user/session ownership attestation.
+
 ## Intentionally missing (required for production parity)
 
 - Redis-backed atomic capacity and token-fenced release are optional, but there is **no full distributed session ownership or gateway failover** yet.
