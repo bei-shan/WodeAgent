@@ -1,0 +1,219 @@
+name: Release acceptance evidence
+
+on:
+  pull_request:
+    paths:
+      - "scripts/release_acceptance.py"
+      - "tests/test_release_acceptance.py"
+      - "tests/test_sandbox_e2b_*.py"
+      - "docs/releases/production-gates.md"
+      - ".github/workflows/release-acceptance.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/release_acceptance.py"
+      - "tests/test_release_acceptance.py"
+      - "docs/releases/production-gates.md"
+      - ".github/workflows/release-acceptance.yml"
+  workflow_dispatch:
+    inputs:
+      run_e2b:
+        type: boolean
+        default: false
+        description: "Use REAL billable E2B cloud VMs (requires separate approval)"
+      approve_e2b_billing:
+        type: boolean
+        default: false
+        description: "I approve E2B cloud usage and its charges in isolated staging"
+      run_staging:
+        type: boolean
+        default: false
+        description: "Run two-principal HTTPS metadata-only staging contract"
+      run_soak:
+        type: boolean
+        default: false
+        description: "Run 30-minute OFFLINE mock Agent resource soak"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ridge-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  component:
+    name: Offline component contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt -r requirements-hosted.txt
+      - name: Run acceptance runner and self-tests
+        run: |
+          python -m pytest tests/test_release_acceptance.py -q
+          python scripts/release_acceptance.py --scope component
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-component
+          path: acceptance-evidence/component.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  docker:
+    name: Real Docker sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - run: docker pull python:3.12-alpine
+      - run: python scripts/release_acceptance.py --scope docker
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-docker
+          path: acceptance-evidence/docker.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  redis:
+    name: Real Redis E2B fencing
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=6
+    env:
+      E2B_REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt "redis>=5,<7"
+      - run: python scripts/release_acceptance.py --scope redis
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-redis
+          path: acceptance-evidence/redis.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  e2b:
+    name: Opt-in billable E2B
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2b == true && inputs.approve_e2b_billing == true
+    runs-on: ubuntu-latest
+    environment: staging-acceptance
+    timeout-minutes: 20
+    env:
+      E2B_API_KEY: ${{ secrets.RIDGE_E2B_TEST_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt "e2b-code-interpreter>=1,<3"
+      - run: python scripts/release_acceptance.py --scope e2b --approve-e2b-billing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-e2b
+          path: acceptance-evidence/e2b.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  staging:
+    name: Opt-in two-principal staging metadata
+    if: github.event_name == 'workflow_dispatch' && inputs.run_staging == true
+    runs-on: ubuntu-latest
+    environment: staging-acceptance
+    timeout-minutes: 8
+    env:
+      RIDGE_STAGING_BASE_URL: ${{ vars.RIDGE_STAGING_BASE_URL }}
+      RIDGE_STAGING_TOKEN_A: ${{ secrets.RIDGE_STAGING_TOKEN_A }}
+      RIDGE_STAGING_TOKEN_B: ${{ secrets.RIDGE_STAGING_TOKEN_B }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/release_acceptance.py --scope staging
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-staging
+          path: acceptance-evidence/staging.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  soak:
+    name: Opt-in 30-minute offline resource soak
+    if: github.event_name == 'workflow_dispatch' && inputs.run_soak == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/release_acceptance.py --scope soak
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-soak
+          path: acceptance-evidence/soak.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    name: Evidence manifest (NEVER production GO)
+    if: always()
+    needs: [component, docker, redis, e2b, staging, soak]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        continue-on-error: true  # missing evidence is BLOCKED by the final report
+        with:
+          pattern: ridge-acceptance-*
+          path: acceptance-evidence
+          merge-multiple: true
+      - name: Produce SHA-bound NO-GO report and enforce required CI components
+        run: python scripts/release_acceptance.py --scope summary --require-component-gates
+      - name: Publish compact report to GitHub Actions job summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f acceptance-evidence/summary.md; then
+            cat acceptance-evidence/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-report
+          path: |
+            acceptance-evidence/summary.json
+            acceptance-evidence/summary.md
+          if-no-files-found: warn
+          retention-days: 90
