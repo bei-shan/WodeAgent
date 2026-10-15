@@ -23,7 +23,7 @@ class NativeStdin:
         self.written.append(data)
 
     async def close(self):
-        self.closed += 1
+        type(self).closed += 1
 
 
 class NativeExecution:
