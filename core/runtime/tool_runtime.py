@@ -60,6 +60,22 @@ class ToolRuntime:
         parameters = dict(tool_input) if isinstance(tool_input, dict) else {"input": tool_input}
         interceptors = tuple(features)
         started = time.monotonic()
+        # Mandatory core policies execute BEFORE potentially mutating plugin
+        # hooks; no plugin ordering or monkeypatched Feature list can bypass
+        # plan/delegate/budget limits.
+        policy = getattr(agent, "_policy_middleware", None)
+        if policy is not None:
+            pre_result = policy.before_tool(tool_name, parameters)
+            if pre_result and pre_result.get("blocked"):
+                payload = error_envelope(
+                    str(pre_result.get("error_code", "PERMISSION_DENIED")),
+                    str(pre_result.get("reason", "Blocked by core policy.")),
+                    parameters,
+                )
+                return PreparedToolCall(
+                    tool_name, parameters, interceptors, started,
+                    json.dumps(payload, ensure_ascii=False),
+                )
         for feature in interceptors:
             pre_result = feature.pre_tool_use(agent, tool_name, parameters)
             if pre_result and pre_result.get("blocked"):
