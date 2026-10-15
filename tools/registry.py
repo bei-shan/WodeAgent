@@ -120,6 +120,22 @@ class ToolRegistry:
             # Mode and capability lookup are security-sensitive.
             return False
 
+    def activate_discovered_tools(self) -> None:
+        """Publish pending search results only when building the next model step.
+
+        A ToolSearch call in a multi-call response must not make a guessed
+        tool executable in that same response, before the model has seen its
+        validated schema. Revoked or broken registrations are never activated.
+        """
+        state = self._discovery_state
+        if state is None or not state.pending_names():
+            return
+        available = {
+            spec["function"]["name"]
+            for spec in self.get_openai_tools(include_deferred=True)
+        }
+        state.activate_pending(lambda name: name in available and self._discovery_mode_allowed(name))
+
     def register_tool(self, tool: Tool):
         """
         注册Tool对象
