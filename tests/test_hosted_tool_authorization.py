@@ -198,3 +198,52 @@ def test_real_isolated_codeagent_binds_hosted_authority(tmp_path, monkeypatch):
         assert registry.get_tool("Bash") is None
     finally:
         agent.close()
+
+
+def test_hosted_constructor_never_bootstraps_host_plugins_hooks_or_mcp(tmp_path, monkeypatch):
+    """Only framework-owned sandbox starts; untrusted Python cannot initialize."""
+    from agents.codeAgent import CodeAgent
+    from core.config import Config
+    from core.sandbox.docker_provider import DockerCommandProvider
+    from core.sandbox.docker_lifecycle import DockerLeaseManager
+    from core.runtime.service_sandbox import SandboxService
+    from tests.test_e2e_agent import ScriptedMockLLM, make_response
+
+    scope = MemoryScope("secure-tenant", "u1", "project")
+    membership = MembershipStore({("secure-tenant", "u1", "project")})
+    authority = trusted_hosted_tool_authority(HostedIdentity(scope), membership)
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Untrusted host-side adapter must not initialize")
+
+    monkeypatch.setattr("core.plugin_loader.PluginLoader.discover", unexpected)
+    monkeypatch.setattr("tools.mcp.loader.register_mcp_servers", unexpected)
+    monkeypatch.setattr("core.tool_bootstrap.ToolBootstrap.discover_and_register", unexpected)
+    monkeypatch.setattr("core.hook_system.HookManager", unexpected)
+    provider = DockerCommandProvider(
+        tmp_path, docker_binary="/usr/bin/docker",
+        runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ok", ""),
+        lease_manager=DockerLeaseManager("/usr/bin/docker", b"x" * 32),
+    )
+    monkeypatch.setattr("core.sandbox.docker_provider.DockerCommandProvider",
+                        lambda *args, **kwargs: provider)
+    agent = CodeAgent(
+        name="hosted-fail-closed",
+        llm=ScriptedMockLLM([make_response(content="done")]),
+        tool_registry=ToolRegistry(),
+        project_root=str(tmp_path),
+        config=Config(sandbox_mode="docker", enable_agent_teams=False,
+                      llm_streaming=False, show_react_steps=False,
+                      show_progress=False),
+        hosted_tool_authority=authority,
+    )
+    try:
+        assert agent._runtime_services.started == ("sandbox",)
+        assert {f.name for f in agent._features} == {
+            "delegate_mode", "budget", "plan_mode",
+        }
+        assert [t["function"]["name"] for t in agent._get_openai_tools_for_current_mode()] == ["Bash"]
+        assert getattr(agent, "_session_manager", None) is None
+        with pytest.raises(PermissionError, match="authenticated fenced worker"):
+            agent.run("execute a tenant instruction")
+    finally:
+        agent.close()
