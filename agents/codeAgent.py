@@ -77,8 +77,8 @@ class CodeAgent(Agent):
         self._skill_catalog_root = str(Path(project_root).resolve())
         self.tool_registry = tool_registry
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
-        if self._sandbox_mode not in {"local_trusted", "docker", "boxlite"}:
-            raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker or boxlite")
+        if self._sandbox_mode not in {"local_trusted", "docker", "boxlite", "e2b"}:
+            raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker, boxlite or e2b")
         if self._sandbox_mode != "local_trusted" and getattr(self.config, "enable_agent_teams", False):
             raise ValueError("Isolated sandbox mode does not support AgentTeams yet")
         self.logger = logger or setup_logger(
@@ -231,7 +231,7 @@ class CodeAgent(Agent):
                     cpus=self.config.sandbox_cpus,
                     pids_limit=self.config.sandbox_pids_limit,
                 )
-            else:
+            elif self._sandbox_mode == "boxlite":
                 from core.sandbox.boxlite_provider import BoxliteCommandProvider
                 provider = BoxliteCommandProvider(
                     self.project_root,
@@ -246,6 +246,15 @@ class CodeAgent(Agent):
                         max_replicas=1,
                         idle_timeout=self.config.sandbox_boxlite_warm_idle_seconds,
                     )
+            else:
+                from core.sandbox.e2b_provider import E2BCommandProvider
+                provider = E2BCommandProvider(
+                    self.project_root,
+                    template=self.config.sandbox_e2b_template,
+                    sandbox_ttl=self.config.sandbox_e2b_ttl_seconds,
+                    capacity_limit=self.config.sandbox_e2b_capacity,
+                    single_gateway_ack=self.config.sandbox_e2b_single_gateway_ack,
+                )
             self._sandbox_provider = provider
             self.tool_registry.register_tool(SandboxBashTool(provider))
             self.tool_registry.restrict_to_tools({"Bash"})
