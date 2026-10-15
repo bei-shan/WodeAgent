@@ -120,11 +120,27 @@ def create_hosted_app(
         token = authorization[len("Bearer "):]
         if not token or " " in token:
             raise HTTPException(status_code=401, detail="Invalid bearer authorization")
+        import asyncio
         try:
-            import asyncio
-            return await asyncio.to_thread(verifier.verify, token)
+            identity = await asyncio.to_thread(verifier.verify, token)
         except InvalidPrincipal:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
+        # A cryptographically valid token does not confer permanent membership.
+        # Read the authoritative, forced-RLS membership row on every request;
+        # never cache permissions for the token's remaining lifetime.
+        try:
+            is_member = await asyncio.to_thread(
+                store.authorize_membership, identity.scope
+            )
+        except Exception:
+            # Missing table, revoked DB credentials or a network outage must
+            # NEVER silently fall back to signed claims alone.
+            raise HTTPException(
+                status_code=503, detail="Authorization store unavailable"
+            )
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Project membership required")
+        return identity
 
     def project(record):
         return {"id": record.id, "title": record.title,
