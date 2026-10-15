@@ -103,6 +103,42 @@ def test_select_off_by_default_and_fail_closed_on_missing_adapters(tmp_path):
     backend = registry.for_scope(alice)
     backend.add(alice, "a preference")
     assert backend.search(alice, "preference")
-    assert backend.search(bob, "preference") == []
+    with pytest.raises(PermissionError):
+        backend.search(bob, "preference")
+    with pytest.raises(PermissionError):
+        backend.add(bob, "attempted cross-scope write")
+    with pytest.raises(PermissionError):
+        backend.delete(bob, "fake-other-record")
     registry.select(alice, "off")
+    # A cached handle can never bypass revocation by retaining the old
+    # SQLite/Mem0 backend reference after a user disables memory.
+    assert backend.search(alice, "preference") == []
+    with pytest.raises(MemoryProviderUnavailable):
+        backend.add(alice, "must remain disabled")
     assert registry.for_scope(alice).search(alice, "preference") == []
+    registry.select(alice, "sqlite")
+    assert [r.content for r in backend.search(alice, "preference")] == ["a preference"]
+
+
+
+def test_concurrent_memory_provider_toggle_never_permits_cross_scope(tmp_path):
+    registry = MemoryProviderRegistry({"sqlite": SQLiteMemoryBackend(tmp_path / "db.sqlite")})
+    alice = scope(user="alice")
+    bob = scope(user="bob")
+    registry.select(alice, "sqlite")
+    handle = registry.for_scope(alice)
+    handle.add(alice, "private scope only")
+
+    def probe(index):
+        if index % 3 == 0:
+            registry.select(alice, "off")
+        elif index % 3 == 1:
+            registry.select(alice, "sqlite")
+        try:
+            handle.search(bob, "private")
+        except PermissionError:
+            return True
+        return False
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert all(pool.map(probe, range(64)))
