@@ -12,7 +12,7 @@
 | Agent 任务评测 | [确定性离线评测基准](design/2026-10-15-agent-eval-baseline.md) |
 | 工具返回协议 | [通用工具响应协议](通用工具响应协议.md)（设计参考；以实现与协议测试为准） |
 | 本地鉴权 | [Web 认证设计](design/2026-10-13-local-web-auth-phase1.md)、[TUI 鉴权](design/2026-10-13-ridge-tui-local-auth.md) |
-| Sandbox 与 VM | [Docker 命令隔离](design/2026-10-13-docker-sandbox-phase1.md)、[容器租约](design/2026-10-15-docker-lease-reaper.md)、[BoxLite micro-VM](design/2026-10-15-boxlite-vm-provider.md) |
+| Sandbox 与 VM | [Docker 命令隔离](design/2026-10-13-docker-sandbox-phase1.md)、[容器租约](design/2026-10-15-docker-lease-reaper.md)、[BoxLite micro-VM](design/2026-10-15-boxlite-vm-provider.md) 与 [VM 热池](design/2026-10-15-boxlite-session-pool.md) |
 | 工作区访问安全 | [Descriptor-anchored workspace](design/2026-10-13-descriptor-anchored-workspaces.md) |
 | 项目外文件授权作用域 | [按读取/修改分离的权限缓存](design/2026-10-14-operation-scoped-permissions.md) |
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
