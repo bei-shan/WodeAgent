@@ -242,6 +242,12 @@ def test_real_redis_atomic_capacity_and_fenced_release():
         with pytest.raises(SandboxUnavailable):
             b.reserve(token(2))
         a.track(token(1), "live-test-remote")
+        fence = a.begin_command(token(1), "live-test-remote")
+        with pytest.raises(SandboxUnavailable):
+            a.begin_command(token(1), "live-test-remote")
+        with pytest.raises(SandboxUnavailable):
+            b.end_command(token(1), "live-test-remote", fence)
+        a.end_command(token(1), "live-test-remote", fence)
         with pytest.raises(SandboxUnavailable):
             b.release(token(1))
         a.release(token(1))
