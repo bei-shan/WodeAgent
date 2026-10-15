@@ -83,6 +83,16 @@ occurs if Redis denies, disconnects, times out or reports a capacity limit
 mismatch. The Redis hash records `token -> owner:remote_id`, with atomic
 owner-token check before deleting a slot. Reservations have **no automatic
 TTL**; a gateway crash never means the remote VM is known to be dead.
+Both Redis keys share a hash tag for Redis Cluster Lua compatibility.
+For authorized test Redis environments, an independent *real Redis* check is:
+
+```bash
+AGENT_E2B_REDIS_INTEGRATION=1 E2B_REDIS_URL=rediss://... python -m pytest tests/test_sandbox_e2b_redis.py -q
+```
+
+This test creates a randomly named, isolated test ledger and deletes only
+its own keys after completion. The standard CI suite uses credential-free
+in-memory Redis script simulation instead; it is not live Redis evidence.
 
 This gives a bounded *deployment-wide reservation ledger*, not the entire
 DeerFlow distributed sandbox ownership solution. Remote VM adoption,
