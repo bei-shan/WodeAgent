@@ -176,3 +176,18 @@ def test_real_jwt_signature_issuer_audience_scope_and_expiry():
         verifier.verify(encoded(valid, "untrusted-secret", "HS256"))
     with pytest.raises(InvalidPrincipal):
         verifier.verify("bad.jwt.token")
+
+
+def test_hosted_liveness_is_not_a_false_readiness_claim():
+    app = create_hosted_app(verifier=TestVerifier(), store=TestPrivateStore())
+    with TestClient(app) as client:
+        assert client.get("/api/health/live").status_code == 200
+        # A storage adapter without security probe cannot declare readiness.
+        assert client.get("/api/health/ready").status_code == 503
+
+
+def test_local_web_refuses_hosted_mode(tmp_path, monkeypatch):
+    from desktop.service.app import create_app
+    monkeypatch.setenv("RIDGE_DEPLOYMENT_MODE", "hosted")
+    with pytest.raises(RuntimeError, match="Legacy local Agent API"):
+        create_app(project_root=str(tmp_path), agent_factory=lambda: None)
