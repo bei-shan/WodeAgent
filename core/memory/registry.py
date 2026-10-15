@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from typing import Mapping
 
 from .contracts import MemoryBackend, MemoryRecord, MemoryScope
@@ -25,6 +26,7 @@ class DisabledMemoryBackend:
         return False
 
 
+@dataclass(frozen=True, slots=True)
 class ScopedMemoryHandle:
     """A scope-bound view, not a raw provider or an authentication credential.
 
@@ -34,9 +36,8 @@ class ScopedMemoryHandle:
     to 'off' revokes even cached handles for subsequent calls.
     """
 
-    def __init__(self, registry: "MemoryProviderRegistry", scope: MemoryScope):
-        self._registry = registry
-        self.scope = scope
+    _registry: "MemoryProviderRegistry"
+    scope: MemoryScope
 
     def _resolve(self, scope: MemoryScope) -> MemoryBackend:
         if not isinstance(scope, MemoryScope) or scope != self.scope:
