@@ -80,6 +80,12 @@ class RuntimeServices:
             self._entered.append(name)
             service.start(self.agent)
             return service
+        except BaseException:
+            # Do not leave a half-started graph capable of being reused.
+            # Teardown includes the service whose start() itself raised.
+            if self._entered:
+                self.close()
+            raise
         finally:
             self._starting.remove(name)
 
