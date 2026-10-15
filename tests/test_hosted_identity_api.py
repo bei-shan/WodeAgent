@@ -33,6 +33,14 @@ class TestVerifier:
 class TestPrivateStore:
     def __init__(self):
         self.records = {}
+        # These are TEST-ONLY pre-provisioned memberships. The real hosted
+        # service consults a PostgreSQL table populated by privileged admin.
+        self.memberships = {
+            ("t1", "u1", "p1"), ("t2", "u1", "p1"), ("t1", "u2", "p1"),
+        }
+
+    def authorize_membership(self, scope):
+        return (scope.tenant_id, scope.user_id, scope.project_id) in self.memberships
 
     @staticmethod
     def key(scope, sid):
@@ -214,3 +222,38 @@ def test_hosted_production_dsn_requires_verified_tls(monkeypatch):
         monkeypatch.setenv("RIDGE_POSTGRES_DSN", dsn)
         with pytest.raises(RuntimeError, match="sslmode=verify-full"):
             create_hosted_app(verifier=TestVerifier())
+
+
+def test_revoked_membership_is_rejected_even_with_valid_token():
+    store = TestPrivateStore()
+    app = create_hosted_app(verifier=TestVerifier(), store=store)
+    with TestClient(app) as client:
+        created = client.post("/api/v2/sessions", headers=headers("alice"), json={})
+        assert created.status_code == 201
+        sid = created.json()["id"]
+        store.memberships.remove(("t1", "u1", "p1"))
+
+        # The same still-valid signed token immediately loses session access.
+        assert client.get("/api/v2/sessions", headers=headers("alice")).status_code == 403
+        assert client.get(f"/api/v2/sessions/{sid}", headers=headers("alice")).status_code == 403
+        assert client.put(f"/api/v2/sessions/{sid}", headers=headers("alice"),
+                          json={"expected_version": 1, "snapshot": {}}).status_code == 403
+        assert client.delete(f"/api/v2/sessions/{sid}", headers=headers("alice")).status_code == 403
+        assert client.get("/api/v2/sessions", headers=headers("bob")).status_code == 200
+
+        store.memberships.add(("t1", "u1", "p1"))
+        assert client.get(f"/api/v2/sessions/{sid}", headers=headers("alice")).status_code == 200
+        assert client.delete(f"/api/v2/sessions/{sid}", headers=headers("alice")).status_code == 204
+
+
+def test_authorization_backend_outage_fails_closed_not_signed_claims_only():
+    store = TestPrivateStore()
+    def outage(_scope):
+        raise ConnectionError("sensitive-db-host")
+    store.authorize_membership = outage
+    app = create_hosted_app(verifier=TestVerifier(), store=store)
+    with TestClient(app) as client:
+        response = client.post("/api/v2/sessions", headers=headers("alice"), json={})
+        assert response.status_code == 503
+        assert "sensitive-db-host" not in response.text
+        assert store.records == {}
