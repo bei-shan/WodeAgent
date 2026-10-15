@@ -22,3 +22,8 @@ class ForbiddenError(ServiceError):
 
 class PayloadTooLargeError(ServiceError):
     kind = "too_large"
+
+
+class CapacityError(ServiceError):
+    """A bounded local worker pool refused a turn; retry after it drains."""
+    kind = "capacity"

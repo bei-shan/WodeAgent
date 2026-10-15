@@ -1,0 +1,2 @@
+# Optional development/hosted database adapter; never required by local mode.
+psycopg[binary]>=3.2,<4

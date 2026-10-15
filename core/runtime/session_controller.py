@@ -37,6 +37,7 @@ from typing import Any, Callable, Optional
 from core.events import AgentEvent, EventSink
 from core.runtime.execution_history import ExecutionHistory
 from core.runtime.event_journal import EventJournal
+from core.runtime.admission import TurnAdmission, TurnPermit
 from core.runtime.turn_state import TurnOutcome, TurnStatus, failure_outcome, persist_turn_outcome, load_turn_outcome
 
 logger = logging.getLogger(__name__)
@@ -68,8 +69,14 @@ class AgentSession:
         session_id: str,
         agent_factory: Callable[[], Any],  # () -> CodeAgent
         workspace_base: str = ".mycodeagent/sessions",
+        *,
+        admission: TurnAdmission | None = None,
+        admission_owner: str = "local",
     ):
         self.session_id = session_id
+        self._admission = admission
+        self._admission_owner = admission_owner
+        self._turn_permit: TurnPermit | None = None
         self.title: str = ""  # auto-set from first user message
         self.workspace_dir: str = ""  # set in _ensure_agent, used by file download
         self._agent_factory = agent_factory
@@ -109,45 +116,44 @@ class AgentSession:
     # ── Public API ────────────────────────────────────────────────────
 
     def send_message(self, content: str) -> bool:
-        """Kick off an agent turn in the worker thread.
+        """Start one turn without allowing unbounded parallel worker threads.
 
-        Auto-names the session from the first user message.
-        Returns ``True`` if the turn started, ``False`` if the agent is
-        already busy (the caller should wait for ``turn.completed``).
+        Returns False for an already-busy/closed session. Capacity exhaustion
+        raises TurnCapacityExceeded *before* creating or mutating a new agent.
         """
         with self._busy_lock:
             if self._busy or self._closed:
                 return False
+            permit = self._admission.acquire(self._admission_owner) if self._admission else None
+            self._turn_permit = permit
             self._interaction_cancelled.clear()
             self._busy = True
 
-        # Auto-name session from first user message.
-        if not self.title or self.title == "新会话":
-            self.title = content.strip()[:40]
-
         try:
+            if not self.title or self.title == "新会话":
+                self.title = content.strip()[:40]
             self.ensure_agent()
-        except Exception:
-            with self._busy_lock:
-                self._busy = False
-            raise
-        # An interrupt may have arrived while the lazy Agent was initializing.
-        # Propagate it before the worker starts, rather than losing the request.
-        if self._interaction_cancelled.is_set() and hasattr(self._agent, "interrupt"):
-            self._agent.interrupt()
-        self._thread = threading.Thread(
-            target=self._run_turn,
-            args=(content,),
-            daemon=True,
-            name=f"agent-{self.session_id[:8]}",
-        )
-        try:
+            # An interrupt during slow initialization must be propagated.
+            if self._interaction_cancelled.is_set() and hasattr(self._agent, "interrupt"):
+                self._agent.interrupt()
+            self._thread = threading.Thread(
+                target=self._run_turn,
+                args=(content,),
+                daemon=True,
+                name=f"agent-{self.session_id[:8]}",
+            )
             self._thread.start()
-        except Exception:
+            return True
+        except BaseException:
+            # Every cold-start failure (init, interrupt, thread start) must
+            # free capacity and return the session to the idle state.
             with self._busy_lock:
+                permit = self._turn_permit
+                self._turn_permit = None
+                if permit is not None:
+                    permit.release()
                 self._busy = False
             raise
-        return True
 
     def resolve_permission(self, request_id: str, decision: str) -> bool:
         """Unblock a pending permission request.
@@ -360,6 +366,10 @@ class AgentSession:
             self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
         finally:
             with self._busy_lock:
+                permit = self._turn_permit
+                self._turn_permit = None
+                if permit is not None:
+                    permit.release()
                 self._busy = False
 
     def close(self) -> None:
@@ -380,10 +390,19 @@ class AgentSession:
 class SessionController:
     """Manage multiple AgentSession instances."""
 
-    def __init__(self, workspace_base: str = ".mycodeagent/sessions"):
+    def __init__(
+        self,
+        workspace_base: str = ".mycodeagent/sessions",
+        *,
+        max_active_turns: int = 8,
+    ):
         self._sessions: dict[str, AgentSession] = {}
         self._lock = threading.Lock()
         self._workspace_base = workspace_base
+        # Shared by every active session on this controller instance.
+        # Local single-user mode is one owner; hosted auth must supply
+        # server-verified owner identities and distributed admission.
+        self.admission = TurnAdmission(max_active=max_active_turns)
         self._closing = False
 
     def create_session(self, agent_factory: Callable[[], Any]) -> str:
@@ -394,7 +413,10 @@ class SessionController:
             if self._closing:
                 raise RuntimeError("Session controller is shutting down")
             session_id = SessionManager().create_session()
-            session = AgentSession(session_id, agent_factory, workspace_base=self._workspace_base)
+            session = AgentSession(
+                session_id, agent_factory, workspace_base=self._workspace_base,
+                admission=self.admission,
+            )
             self._sessions[session_id] = session
         logger.info("Session created: %s", session_id)
         return session_id
@@ -416,6 +438,7 @@ class SessionController:
             if session is None:
                 session = AgentSession(
                     session_id, agent_factory, workspace_base=self._workspace_base,
+                    admission=self.admission,
                 )
                 session.title = title
                 self._sessions[session_id] = session
