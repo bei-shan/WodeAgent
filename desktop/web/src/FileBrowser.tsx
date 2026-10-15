@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import FileDiff from './components/FileDiff'
 import { files, type FileEntry } from './api'
 
 /** Session-scoped, read-only file explorer. Never uses paths outside the session workspace. */
@@ -7,15 +8,25 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [content, setContent] = useState('')
+  const [baseline, setBaseline] = useState<string | null>(null)
+  const [comparison, setComparison] = useState<string | null>(null)
+  const [diffMode, setDiffMode] = useState(false)
+  const [fileTruncated, setFileTruncated] = useState(false)
+  const revision = useRef(0)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [truncated, setTruncated] = useState(false)
   const [refresh, setRefresh] = useState(0)
 
   useEffect(() => {
+    revision.current++
     setPath('.')
     setSelected(null)
     setContent('')
+    setBaseline(null)
+    setComparison(null)
+    setDiffMode(false)
+    setFileTruncated(false)
   }, [sessionId])
 
   useEffect(() => {
@@ -33,22 +44,58 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
     return () => { cancelled = true }
   }, [sessionId, path, refresh])
 
+  // The API returns numbered preview lines (1\\t...); remove the display prefix
+  // only for snapshot comparison. Both revisions must come from the same file.
+  const normalize = (value: string) => value.split('\n')
+    .map(line => line.replace(/^\d+\t/, '')).join('\n')
+
   const view = async (entry: FileEntry) => {
     if (!sessionId) return
+    const serial = ++revision.current
     if (entry.type === 'directory') {
       setSelected(null)
+      setBaseline(null)
+      setComparison(null)
+      setDiffMode(false)
       setPath(entry.path)
       return
     }
     setSelected(entry.path)
     setContent('')
+    setBaseline(null)
+    setComparison(null)
+    setDiffMode(false)
     setError('')
     try {
       const result = await files.content(sessionId, entry.path)
+      if (serial !== revision.current) return
       setContent(result.content + (result.truncated ? '\n…文件内容已截断' : ''))
+      setFileTruncated(result.truncated)
+      if (!result.truncated) setBaseline(normalize(result.content))
     } catch (err: any) {
+      if (serial !== revision.current) return
       setContent('')
       setError(err.message || '无法预览此文件')
+    }
+  }
+
+  const compareLatest = async () => {
+    if (!sessionId || !selected || baseline === null) return
+    const serial = ++revision.current
+    setError('')
+    try {
+      const latest = await files.content(sessionId, selected)
+      if (serial !== revision.current) return
+      if (latest.truncated) {
+        setComparison(null)
+        setError('文件预览已截断，不能进行完整快照对比')
+        return
+      }
+      setComparison(normalize(latest.content))
+      setContent(latest.content)
+      setDiffMode(true)
+    } catch (err: any) {
+      if (serial === revision.current) setError(err.message || '获取最新快照失败')
     }
   }
 
@@ -69,7 +116,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
           <div className="grid md:grid-cols-2 gap-4">
             <div className="bg-white border rounded-xl overflow-hidden">
               <div className="flex items-center gap-2 border-b p-3 text-sm font-mono">
-                <button onClick={() => { setPath(parent); setSelected(null) }} disabled={path === '.'} className="text-blue-600 disabled:text-gray-300">上一级</button>
+                <button onClick={() => { setPath(parent); setSelected(null); setBaseline(null); setComparison(null); setDiffMode(false); revision.current++ }} disabled={path === '.'} className="text-blue-600 disabled:text-gray-300">上一级</button>
                 <span className="truncate ml-2">{path === '.' || path === './' ? '/' : '/' + path}</span>
               </div>
               {loading && <p className="p-4 text-sm text-gray-500">加载中…</p>}
@@ -90,10 +137,29 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
             <div className="bg-white border rounded-xl min-h-[240px] overflow-hidden">
               <div className="flex items-center justify-between p-3 border-b gap-2">
                 <span className="font-mono text-xs truncate">{selected || '文件预览'}</span>
-                {selected && <a className="text-blue-600 text-xs shrink-0" download href={`/api/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(selected)}`}>下载</a>}
+                <div className="flex items-center gap-2 shrink-0">
+                  {selected && baseline !== null && (
+                    <button type="button" onClick={() => void compareLatest()} disabled={fileTruncated}
+                      className="text-xs text-blue-600 disabled:opacity-40">对比最新</button>
+                  )}
+                  {selected && diffMode && (
+                    <button type="button" onClick={() => setDiffMode(false)} className="text-xs text-gray-600">原文</button>
+                  )}
+                  {selected && comparison !== null && (
+                    <button type="button" onClick={() => { setBaseline(comparison); setDiffMode(false); setComparison(null) }}
+                      className="text-xs text-gray-600" title="更新此浏览器会话中的文件对比基线">更新基线</button>
+                  )}
+                  {selected && <a className="text-blue-600 text-xs" download
+                    href={`/api/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(selected)}`}>下载</a>}
+                </div>
               </div>
-              {selected ? <pre className="p-4 overflow-auto whitespace-pre-wrap text-xs max-h-[65vh]">{content}</pre> :
-                <p className="p-4 text-sm text-gray-400">选择一个文件以查看内容。</p>}
+              {selected ? (diffMode && baseline !== null && comparison !== null
+                ? <FileDiff before={baseline} after={comparison} />
+                : <pre className="p-4 overflow-auto whitespace-pre-wrap text-xs max-h-[65vh]">{content}</pre>)
+                : <p className="p-4 text-sm text-gray-400">选择一个文件以查看内容。</p>}
+              {selected && <p className="px-3 py-2 border-t text-[11px] text-gray-400">
+                Diff 对比的是当前浏览器会话首次查看时与再次读取时的文件快照，不是 Git 提交历史。
+              </p>}
             </div>
           </div>
         )}
