@@ -127,7 +127,7 @@ function AppCore() {
       const recorded = await api.sessions.executionHistory(sid).catch(() => ({ tools: [] }))
       if (isCurrent()) {
         setTools(live => {
-          const byId = new Map(recorded.tools.map(t => [t.id, t]))
+          const byId = new Map((Array.isArray(recorded.tools) ? recorded.tools : []).map(t => [t.id, t]))
           for (const item of live) byId.set(item.id, item)
           return Array.from(byId.values())
         })
