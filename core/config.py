@@ -61,6 +61,8 @@ class Config(BaseModel):
     sandbox_e2b_ttl_seconds: int = 300
     sandbox_e2b_capacity: int = 2
     sandbox_e2b_single_gateway_ack: bool = False
+    sandbox_e2b_redis_ledger_enabled: bool = False
+    sandbox_e2b_deployment: str = "default"
 
     # ===== AgentTeams =====
     enable_agent_teams: bool = False
@@ -189,6 +191,8 @@ class Config(BaseModel):
             sandbox_e2b_ttl_seconds=env_int("AGENT_SANDBOX_E2B_TTL_SECONDS", 300),
             sandbox_e2b_capacity=env_int("AGENT_SANDBOX_E2B_CAPACITY", 2),
             sandbox_e2b_single_gateway_ack=env_bool("AGENT_SANDBOX_E2B_SINGLE_GATEWAY_ACK", False),
+            sandbox_e2b_redis_ledger_enabled=env_bool("AGENT_SANDBOX_E2B_REDIS_LEDGER_ENABLED", False),
+            sandbox_e2b_deployment=env_str("AGENT_SANDBOX_E2B_DEPLOYMENT", "default"),
             # AgentTeams
             enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),
