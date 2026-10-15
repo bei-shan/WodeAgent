@@ -116,6 +116,8 @@ class SessionService:
         if workspace.exists():
             shutil.rmtree(workspace)
         (self.catalog._dir / f"{sid}.turn.json").unlink(missing_ok=True)
+        from core.runtime.execution_history import ExecutionHistory
+        ExecutionHistory(self.data_dir / 'sessions').delete(sid)
         self._pinned.discard(sid)
         return {"status": "deleted"}
 
