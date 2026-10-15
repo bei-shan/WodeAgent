@@ -16,6 +16,51 @@ from core.persistence import PostgresPrivateSessionStore, SessionVersionConflict
 from desktop.service.hosted_identity import HostedIdentity, InvalidPrincipal, OIDCSettings, OIDCVerifier
 
 
+class _BodyTooLarge(Exception):
+    pass
+
+
+class RequestBodyLimit:
+    """ASGI ingress bound; protects JSON/Pydantic parsing under hostile load."""
+
+    def __init__(self, app, max_bytes: int = 4_300_000):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        from starlette.responses import JSONResponse
+        headers = dict(scope.get("headers", []))
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                declared = int(raw_length)
+            except ValueError:
+                declared = -1
+            if declared < 0 or declared > self.max_bytes:
+                return await JSONResponse({"detail": "Request too large"}, status_code=413)(
+                    scope, receive, send
+                )
+        length = 0
+
+        async def bounded_receive():
+            nonlocal length
+            message = await receive()
+            if message["type"] == "http.request":
+                length += len(message.get("body", b""))
+                if length > self.max_bytes:
+                    raise _BodyTooLarge()
+            return message
+
+        try:
+            return await self.app(scope, bounded_receive, send)
+        except _BodyTooLarge:
+            return await JSONResponse({"detail": "Request too large"}, status_code=413)(
+                scope, receive, send
+            )
+
+
 class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(default="", max_length=256)
@@ -47,6 +92,8 @@ def create_hosted_app(
         verifier = OIDCVerifier(OIDCSettings.from_env())
 
     app = FastAPI(title="Ridge Hosted Private Session API", version="0.1.0")
+    app.add_middleware(RequestBodyLimit)
+
     app.state.store = store
     app.state.verifier = verifier
 
