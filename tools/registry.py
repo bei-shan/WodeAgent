@@ -762,8 +762,17 @@ class ToolRegistry:
         return self._circuit_breaker.get_disabled_tools()
 
     def get_all_tools(self) -> list[Tool]:
-        """获取所有Tool对象"""
+        """获取所有Tool对象（internal view, including deferred definitions）."""
         return [tool for tool in tuple(self._tools.values()) if self._tool_allowed(tool.name)]
+
+    def get_prompt_tools(self) -> list[Tool]:
+        """Only tools currently visible to the model may inject usage notes."""
+        return [
+            tool for tool in self.get_all_tools()
+            if self._discovery_mode_allowed(tool.name)
+            and (self._discovery_state is None or self._discovery_state.is_visible(tool.name))
+            and self._circuit_breaker.is_available(tool.name)
+        ]
 
     def clear(self):
         """清空所有工具"""
