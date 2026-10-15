@@ -43,9 +43,13 @@ class PreparedToolCall:
 class ToolRuntime:
     """Feature decision, dispatch and publication, with explicit boundaries."""
 
-    def __init__(self, dispatcher: ToolDispatcher, logger: logging.Logger):
+    def __init__(
+        self, dispatcher: ToolDispatcher, logger: logging.Logger, *,
+        step_snapshot: Any = None,
+    ):
         self.dispatcher = dispatcher
         self.logger = logger
+        self.step_snapshot = step_snapshot
 
     def prepare(
         self, tool_name: str, tool_input: Any, *,
@@ -86,7 +90,14 @@ class ToolRuntime:
             if call.blocked_output is not None:
                 output = call.blocked_output
             else:
-                output = str(self.dispatcher.execute_tool(call.name, call.parameters))
+                if self.step_snapshot is not None:
+                    # Snapshot is supported by the canonical ToolRegistry.
+                    # Standalone integrations preserve their legacy port.
+                    output = str(self.dispatcher.execute_tool(
+                        call.name, call.parameters, snapshot=self.step_snapshot,
+                    ))
+                else:
+                    output = str(self.dispatcher.execute_tool(call.name, call.parameters))
             try:
                 status = json.loads(output).get("status")
                 if status in ("success", "partial", "error"):

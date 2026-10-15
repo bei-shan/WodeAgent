@@ -7,6 +7,7 @@ import json
 import time
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING, Optional, Any, Callable, TypedDict
 
 from .base import Tool, ToolStatus, ErrorCode, ToolParameter
@@ -14,6 +15,9 @@ from .circuit_breaker import CircuitBreaker
 from core.env import load_env
 from core.runtime.config_scope import active_config
 from core.runtime.tool_contracts import validate_tool_input
+from core.runtime.tool_snapshot import (
+    ToolStepBinding, ToolStepSnapshot, encode_tool_schema, schema_fingerprint,
+)
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -55,6 +59,9 @@ class ToolRegistry:
 
     def __init__(self, config: "Optional[Config]" = None):
         self._config = config or active_config() or _config
+        # Structural changes and model schema capture share one short-lived lock.
+        # Tool execution never holds it across external I/O.
+        self._registration_lock = threading.RLock()
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
         # Optional session-owned deferred catalog; never stores executors.
@@ -143,20 +150,21 @@ class ToolRegistry:
         Args:
             tool: Tool实例
         """
-        if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
-            raise PermissionError("Cannot replace an approved sandbox tool")
-        # One public name must resolve to exactly one execution adapter.
-        if tool.name in self._functions:
-            raise ValueError(f"Tool name '{tool.name}' is already registered as a function")
-        if tool.name in self._tools:
-            if tool.name == "ToolSearch" and self._discovery_state is not None:
-                raise PermissionError("Cannot replace the active ToolSearch control tool")
-            logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
-            if self._discovery_state is not None:
-                self._discovery_state.invalidate(tool.name)
+        with self._registration_lock:
+            if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
+                raise PermissionError("Cannot replace an approved sandbox tool")
+            # One public name must resolve to exactly one execution adapter.
+            if tool.name in self._functions:
+                raise ValueError(f"Tool name '{tool.name}' is already registered as a function")
+            if tool.name in self._tools:
+                if tool.name == "ToolSearch" and self._discovery_state is not None:
+                    raise PermissionError("Cannot replace the active ToolSearch control tool")
+                logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
+                if self._discovery_state is not None:
+                    self._discovery_state.invalidate(tool.name)
 
-        self._tools[tool.name] = tool
-        logger.info("工具 '%s' 已注册。", tool.name)
+            self._tools[tool.name] = tool
+            logger.info("工具 '%s' 已注册。", tool.name)
 
     def register_function(self, name: str, description: str, func: Callable[[str], str]):
         """
@@ -167,37 +175,76 @@ class ToolRegistry:
             description: 工具描述
             func: 工具函数，接受字符串参数，返回字符串结果
         """
-        if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
-            raise PermissionError("Cannot override an approved sandbox tool")
-        if name in self._tools:
-            raise ValueError(f"Tool name '{name}' is already registered as an object")
-        if name in self._functions:
-            logger.warning("工具 '%s' 已存在，将被覆盖。", name)
-            if self._discovery_state is not None:
-                self._discovery_state.invalidate(name)
+        with self._registration_lock:
+            if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
+                raise PermissionError("Cannot override an approved sandbox tool")
+            if name in self._tools:
+                raise ValueError(f"Tool name '{name}' is already registered as an object")
+            if name in self._functions:
+                logger.warning("工具 '%s' 已存在，将被覆盖。", name)
+                if self._discovery_state is not None:
+                    self._discovery_state.invalidate(name)
 
-        self._functions[name] = {
-            "description": description,
-            "func": func
-        }
-        logger.info("工具 '%s' 已注册。", name)
+            self._functions[name] = {
+                "description": description,
+                "func": func
+            }
+            logger.info("工具 '%s' 已注册。", name)
 
     def unregister(self, name: str):
         """注销工具"""
-        if name == "ToolSearch" and self._discovery_state is not None:
-            raise PermissionError("Cannot remove ToolSearch while discovery is enabled")
-        if self._discovery_state is not None:
-            self._discovery_state.invalidate(name)
-        if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
-            raise PermissionError("Cannot remove the approved sandbox tool")
-        if name in self._tools:
-            del self._tools[name]
-            logger.info("工具 '%s' 已注销。", name)
-        elif name in self._functions:
-            del self._functions[name]
-            logger.info("工具 '%s' 已注销。", name)
-        else:
-            logger.warning("工具 '%s' 不存在。", name)
+        with self._registration_lock:
+            if name == "ToolSearch" and self._discovery_state is not None:
+                raise PermissionError("Cannot remove ToolSearch while discovery is enabled")
+            if self._discovery_state is not None:
+                self._discovery_state.invalidate(name)
+            if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
+                raise PermissionError("Cannot remove the approved sandbox tool")
+            if name in self._tools:
+                del self._tools[name]
+                logger.info("工具 '%s' 已注销。", name)
+            elif name in self._functions:
+                del self._functions[name]
+                logger.info("工具 '%s' 已注销。", name)
+            else:
+                logger.warning("工具 '%s' 不存在。", name)
+
+    def capture_tool_step(
+        self, *, allowed: Callable[[str], bool] | None = None,
+    ) -> ToolStepSnapshot:
+        """Atomically seal the exact model-facing schemas and adapter identities.
+
+        A model step must execute only these names with these definitions.
+        Dynamic sandbox/mode/circuit checks are still evaluated at dispatch.
+        """
+        with self._registration_lock:
+            schemas_json: list[str] = []
+            bindings: dict[str, ToolStepBinding] = {}
+            for spec in self.get_openai_tools():
+                function = spec.get("function", {})
+                name = function.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                if allowed is not None:
+                    try:
+                        if not bool(allowed(name)):
+                            continue
+                    except Exception:
+                        # Failure to retrieve active mode/authorization fails closed.
+                        continue
+                adapter = self._tools.get(name)
+                if adapter is None:
+                    adapter = self._functions.get(name)
+                if adapter is None:
+                    continue
+                try:
+                    encoded = encode_tool_schema(spec)
+                except (TypeError, ValueError):
+                    logger.warning("Skipping tool %s with non-JSON schema", name)
+                    continue
+                schemas_json.append(encoded)
+                bindings[name] = ToolStepBinding(adapter, schema_fingerprint(spec))
+            return ToolStepSnapshot.create(self, schemas_json, bindings)
 
     def get_openai_tools(self, *, include_deferred: bool = False) -> list[dict[str, Any]]:
         """
@@ -206,71 +253,72 @@ class ToolRegistry:
         Returns:
             list of {"type": "function", "function": {name, description, parameters}}
         """
-        tools: list[dict[str, Any]] = []
-
-        for tool in tuple(self._tools.values()):
-            if not self._tool_allowed(tool.name) or not self._circuit_breaker.is_available(tool.name):
-                continue
-            if not self._discovery_mode_allowed(tool.name):
-                continue
-            if (not include_deferred and self._discovery_state is not None
-                    and not self._discovery_state.is_visible(tool.name)):
-                continue
-            try:
-                params = tool.get_parameters()
-            except Exception:
-                # Missing/broken declarations must not become an empty input
-                # schema: that would mislead the model and expose the tool.
-                logger.warning("Skipping tool %s with unavailable parameters", tool.name)
-                continue
-            schema_provider = getattr(tool, "get_input_schema", None)
-            if callable(schema_provider):
-                try:
-                    params_schema = schema_provider()
-                except Exception:
-                    # Never advertise an MCP tool whose source schema cannot
-                    # be validated: a later runtime call will fail closed too.
-                    logger.warning("Skipping tool %s with invalid input schema", tool.name)
+        with self._registration_lock:
+            tools: list[dict[str, Any]] = []
+    
+            for tool in tuple(self._tools.values()):
+                if not self._tool_allowed(tool.name) or not self._circuit_breaker.is_available(tool.name):
                     continue
-            else:
-                params_schema = self._parameters_to_schema(params)
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "parameters": params_schema,
-                },
-            })
-
-        for name, info in tuple(self._functions.items()):
-            if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
-                continue
-            if not self._discovery_mode_allowed(name):
-                continue
-            if (not include_deferred and self._discovery_state is not None
-                    and not self._discovery_state.is_visible(name)):
-                continue
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": info.get("description", "") if isinstance(info, dict) else "",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "input": {
-                                "type": "string",
-                                "description": "raw input string",
-                            }
-                        },
-                        "required": ["input"],
-                        "additionalProperties": False,
+                if not self._discovery_mode_allowed(tool.name):
+                    continue
+                if (not include_deferred and self._discovery_state is not None
+                        and not self._discovery_state.is_visible(tool.name)):
+                    continue
+                try:
+                    params = tool.get_parameters()
+                except Exception:
+                    # Missing/broken declarations must not become an empty input
+                    # schema: that would mislead the model and expose the tool.
+                    logger.warning("Skipping tool %s with unavailable parameters", tool.name)
+                    continue
+                schema_provider = getattr(tool, "get_input_schema", None)
+                if callable(schema_provider):
+                    try:
+                        params_schema = schema_provider()
+                    except Exception:
+                        # Never advertise an MCP tool whose source schema cannot
+                        # be validated: a later runtime call will fail closed too.
+                        logger.warning("Skipping tool %s with invalid input schema", tool.name)
+                        continue
+                else:
+                    params_schema = self._parameters_to_schema(params)
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": params_schema,
                     },
-                },
-            })
-
-        return tools
+                })
+    
+            for name, info in tuple(self._functions.items()):
+                if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
+                    continue
+                if not self._discovery_mode_allowed(name):
+                    continue
+                if (not include_deferred and self._discovery_state is not None
+                        and not self._discovery_state.is_visible(name)):
+                    continue
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": info.get("description", "") if isinstance(info, dict) else "",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "input": {
+                                    "type": "string",
+                                    "description": "raw input string",
+                                }
+                            },
+                            "required": ["input"],
+                            "additionalProperties": False,
+                        },
+                    },
+                })
+    
+            return tools
 
     @staticmethod
     def _parameters_to_schema(params: list[ToolParameter]) -> dict[str, Any]:
@@ -337,7 +385,9 @@ class ToolRegistry:
         func_info = self._functions.get(name)
         return func_info["func"] if func_info else None
 
-    def execute_tool(self, name: str, input_text) -> str:
+    def execute_tool(
+        self, name: str, input_text, *, snapshot: ToolStepSnapshot | None = None,
+    ) -> str:
         """
         执行工具
 
@@ -392,6 +442,42 @@ class ToolRegistry:
                 "context": {"cwd": ".", "params_input": parameters},
             }, ensure_ascii=False)
 
+        # Bind the executor *under the same lock* as registration mutations.
+        # Release before adapter I/O: safe reads must remain parallelizable.
+        with self._registration_lock:
+            tool = self._tools.get(name)
+            function_info = self._functions.get(name)
+            if snapshot is not None:
+                binding = (
+                    snapshot.bindings.get(name)
+                    if isinstance(snapshot, ToolStepSnapshot) and snapshot.registry is self
+                    else None
+                )
+                adapter = tool if tool is not None else function_info
+                valid = binding is not None and adapter is binding.adapter
+                if valid:
+                    # Also deny in-place schema changes and changed permissions
+                    # (including revocation during the model's response time).
+                    current = next(
+                        (spec for spec in self.get_openai_tools()
+                         if spec["function"]["name"] == name), None,
+                    )
+                    try:
+                        valid = (
+                            current is not None
+                            and schema_fingerprint(current) == binding.schema_hash
+                        )
+                    except (TypeError, ValueError):
+                        valid = False
+                if not valid:
+                    message = f"Tool '{name}' changed or was not advertised in this model step."
+                    return json.dumps({
+                        "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                        "error": {"code": "STALE_TOOL_SCHEMA", "message": message},
+                        "stats": {"time_ms": 0},
+                        "context": {"cwd": ".", "params_input": parameters},
+                    }, ensure_ascii=False)
+
         # =====================================================================
         # 乐观锁自动注入：为 Write/Edit 注入 expected_mtime_ms / expected_size_bytes
         # =====================================================================
@@ -417,7 +503,6 @@ class ToolRegistry:
         # Hooks have already rewritten inputs in ToolRuntime; optimistic-lock
         # metadata has already been injected. Neither may bypass this gate.
         # Sandbox allowlist and open circuits are checked above, first.
-        tool = self._tools.get(name)
         if tool is not None and getattr(tool, "strict_input_contract", False):
             try:
                 validation_error = validate_tool_input(parameters, tool.get_parameters())
@@ -437,7 +522,7 @@ class ToolRegistry:
         # Legacy function tools publish a single string-valued 'input' field.
         # Validate that exact contract and unwrap it before calling the
         # registered Callable[[str], str]; never forward an arbitrary dict.
-        if name in self._functions and name not in self._tools:
+        if function_info is not None and tool is None:
             if set(parameters) != {"input"} or not isinstance(parameters["input"], str):
                 return json.dumps({
                     "status": ToolStatus.ERROR.value,
@@ -452,8 +537,7 @@ class ToolRegistry:
                 }, ensure_ascii=False)
 
         # 优先查找Tool对象
-        if name in self._tools:
-            tool = self._tools[name]
+        if tool is not None:
             try:
                 result = tool.run(parameters)
                 result_payload = self._normalize_result(name, result, parameters)
@@ -465,8 +549,8 @@ class ToolRegistry:
                 )
 
         # 查找函数工具
-        elif name in self._functions:
-            func = self._functions[name]["func"]
+        elif function_info is not None:
+            func = function_info["func"]
             try:
                 result = func(parameters["input"])
                 result_payload = self._normalize_result(name, result, parameters)
@@ -802,14 +886,15 @@ class ToolRegistry:
 
     def clear(self):
         """清空所有工具"""
-        if self._sandbox_allowed_tools is not None:
-            raise PermissionError("Cannot clear registry while sandbox policy is active")
-        if self._discovery_state is not None:
-            for name in self.list_tools():
-                self._discovery_state.invalidate(name)
-        self._tools.clear()
-        self._functions.clear()
-        logger.info("所有工具已清空。")
+        with self._registration_lock:
+            if self._sandbox_allowed_tools is not None:
+                raise PermissionError("Cannot clear registry while sandbox policy is active")
+            if self._discovery_state is not None:
+                for name in self.list_tools():
+                    self._discovery_state.invalidate(name)
+            self._tools.clear()
+            self._functions.clear()
+            logger.info("所有工具已清空。")
 
 # 全局工具注册表
 global_registry = ToolRegistry()
