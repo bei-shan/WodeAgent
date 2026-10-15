@@ -178,8 +178,15 @@ def create_app(
     app.state.data_dir = _os.path.abspath(
         _os.getenv("MYCODEAGENT_DATA_DIR", _os.path.join(project_root, ".mycodeagent"))
     )
+    # Single-process admission only: distributed deployments need shared leases.
+    raw_turn_limit = os.getenv("RIDGE_MAX_ACTIVE_TURNS", "8")
+    try:
+        max_active_turns = int(raw_turn_limit)
+    except ValueError as exc:
+        raise ValueError("RIDGE_MAX_ACTIVE_TURNS must be an integer in 1..256") from exc
     app.state.controller = SessionController(
-        workspace_base=os.path.join(app.state.data_dir, "sessions")
+        workspace_base=os.path.join(app.state.data_dir, "sessions"),
+        max_active_turns=max_active_turns,
     )
     app.state.agent_factory = agent_factory
     app.state.session_service = SessionService(
@@ -203,8 +210,13 @@ def create_app(
     # ── Lifespan ──────────────────────────────────────────────────
     @app.exception_handler(ServiceError)
     async def _application_error(_request: Request, exc: ServiceError):
-        status = {"not_found": 404, "conflict": 409, "invalid_input": 400, "forbidden": 403, "too_large": 413}.get(exc.kind, 500)
-        return JSONResponse(status_code=status, content={"detail": str(exc) if status < 500 else "Internal error"})
+        status = {"not_found": 404, "conflict": 409, "invalid_input": 400, "forbidden": 403, "too_large": 413, "capacity": 429}.get(exc.kind, 500)
+        headers = {"Retry-After": "1"} if exc.kind == "capacity" else None
+        return JSONResponse(
+            status_code=status,
+            content={"detail": str(exc) if status < 500 else "Internal error"},
+            headers=headers,
+        )
 
     @app.on_event("startup")
     async def _startup():
@@ -276,6 +288,11 @@ def create_app(
             "status": "ok",
             "uptime": int(time.time() - app.state._started_at),
             "sessions": len(ctrl.list_sessions()),
+            "turn_admission": {
+                "active": ctrl.admission.snapshot().active,
+                "limit": ctrl.admission.snapshot().limit,
+                "rejected": ctrl.admission.snapshot().rejected,
+            },
         }
 
     # ═══════════════════════════════════════════════════════════════
