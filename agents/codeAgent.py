@@ -897,10 +897,16 @@ class CodeAgent(Agent):
         max_workers = max(1, min(8, int(getattr(config, "tool_max_concurrency", 4))))
         hook_manager = getattr(self, "_hook_manager", None)
         hooks_active = bool(hook_manager and hook_manager.has_any_hooks)
-        # Untrusted Python extensions are not loaded. Declarative command
-        # hooks still disable parallel execution to preserve ordering.
+        # Declarative hooks and any unknown interceptor are serial barriers.
+        # Only the framework-owned HookService is reviewed for concurrent
+        # read semantics. A test or local integration cannot gain parallel
+        # permission by merely inserting an arbitrary interceptor.
+        known_interceptors = all(
+            type(interceptor) is HookService
+            for interceptor in getattr(self, "_tool_interceptors", ())
+        )
         policy_allows_parallel = (
-            enabled and not hooks_active
+            enabled and not hooks_active and known_interceptors
             and not getattr(self, "delegate_mode", False)
             and not getattr(config, "budget_enforce", False)
         )
