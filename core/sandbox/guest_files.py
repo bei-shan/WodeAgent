@@ -36,7 +36,7 @@ def emit(data):
     print(json.dumps(data, ensure_ascii=True, separators=(",", ":")))
 
 def operate():
-    operation, path, payload = sys.argv[1:4]
+    operation, path = sys.argv[1:3]
     pieces = path.split("/")
     if (not path.startswith("/workspace/") and path != "/workspace") or any(
         p in (".", "..") for p in pieces
@@ -77,7 +77,9 @@ def operate():
         elif operation == "write":
             if not segments:
                 raise PermissionError("cannot write workspace root")
-            data = base64.b64decode(payload, validate=True)
+            # Raw bytes arrive over guest stdin, never in argv, shell source,
+            # process environment, Docker labels or container logs.
+            data = sys.stdin.buffer.read(READ_LIMIT + 1)
             if len(data) > READ_LIMIT:
                 raise ValueError("file too large")
             name = segments[-1]
@@ -150,17 +152,31 @@ class GuestFilesystem:
         self._provider = provider
 
     def _request(
-        self, operation: str, path: str, payload: str = "",
+        self, operation: str, path: str, payload: bytes | None = None,
         *, timeout_seconds: float = 30, cancel_event: Event | None = None,
     ) -> dict:
         guest_path = _guest_path(path)
         command = "exec python3 -c " + " ".join(
-            shlex.quote(part) for part in (_GUEST_SCRIPT, operation, guest_path, payload)
+            shlex.quote(part) for part in (_GUEST_SCRIPT, operation, guest_path)
         )
-        outcome = self._provider.execute(
-            command, timeout_seconds=timeout_seconds,
-            cancel_event=cancel_event,
-        )
+        if payload is None:
+            outcome = self._provider.execute(
+                command, timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+            )
+        else:
+            # Never put binary data in process argv even as encoded base64.
+            # SDKs without a verified stdin channel (currently BoxLite's
+            # SimpleBox adapter) must fail closed rather than falling back.
+            execute_stdin = getattr(self._provider, "execute_stdin", None)
+            if not callable(execute_stdin):
+                raise SandboxUnavailable(
+                    "Selected sandbox backend has no safe guest stdin transport"
+                )
+            outcome = execute_stdin(
+                command, payload, timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+            )
         if outcome.interrupted:
             raise InterruptedError("Guest file operation interrupted")
         if outcome.timed_out:
@@ -199,7 +215,7 @@ class GuestFilesystem:
         if not isinstance(data, bytes) or len(data) > MAX_FILE_BYTES:
             raise ValueError("Guest write must be bytes of at most 64 KiB")
         record = self._request(
-            "write", path, base64.b64encode(data).decode("ascii"),
+            "write", path, data,
             timeout_seconds=timeout_seconds, cancel_event=cancel_event,
         )
         if type(record.get("written")) is not int or record["written"] != len(data):
