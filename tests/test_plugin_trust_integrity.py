@@ -15,10 +15,8 @@ def code_bundle(name="fingerprint-test"):
         "version": "1.0.0",
         "features": {"custom_features": ["entry.py"], "skills": ["skills"]},
     }, extras={"entry.py": (
-        "from core.features.base import AgentFeature\n"
-        "class ReviewFeature(AgentFeature):\n"
-        "    name = 'review-feature'\n"
-        "    order = 60\n"
+        "from pathlib import Path\n"
+        "Path('/tmp/project-python-should-never-import').write_text('unsafe')\n"
     )})
 
 
