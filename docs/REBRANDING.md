@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `.mycode/`、`.mycodeagent/` | 保留 | 已有插件、技能和会话数据路径 |
 | `MYCODEAGENT_DATA_DIR` | 保留 | 现有 Web 服务环境配置 |
-| `WODEAGENT_SERVER` | 作为 TUI v2 回退继续支持 | 现有脚本兼容 |
+| `WODEAGENT_SERVER`、`WODEAGENT_AUTH_TOKEN` | 已删除旧回退 | 仅接受 `RIDGECODE_SERVER`、`RIDGECODE_AUTH_TOKEN` |
 | `wodeagent-auth-expired` | 保留在前端内部事件 | 避免破坏现有组件通讯 |
 | `agents/codeAgent.py` 与 `CodeAgent` | 保留 | Python 导入和公共调用链 |
 | GitHub 仓库 `bei-shan/WodeAgent` | **尚未改名** | 仓库设置层面另行操作 |
