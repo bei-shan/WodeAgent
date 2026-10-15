@@ -225,3 +225,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (max-width: 767px) {
   .execution-panel { position: fixed; inset: 0 0 0 auto; z-index: 47; width: min(440px, 100vw); max-width: 100%; box-shadow: -3px 0 30px rgba(0,0,0,.18); }
 }
+
+.markdown-html > :first-child { margin-top: 0; }
+.markdown-html > :last-child { margin-bottom: 0; }
+.markdown-html p { margin: 0 0 12px; white-space: pre-wrap; }
+.markdown-html h1, .markdown-html h2, .markdown-html h3 { font-weight: 700; line-height: 1.4; margin: 14px 0 8px; }
+.markdown-html h1 { font-size: 22px; } .markdown-html h2 { font-size: 19px; } .markdown-html h3 { font-size: 17px; }
+.markdown-html ul { list-style: disc; } .markdown-html ol { list-style: decimal; }
+.markdown-html ul, .markdown-html ol { padding-left: 24px; margin: 8px 0 14px; }
+.markdown-html blockquote { border-left: 3px solid #dedede; padding-left: 14px; color: #666; }
+.markdown-html a { color: #3166b2; text-decoration: underline; text-underline-offset: 2px; }
+.markdown-html table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.markdown-html th, .markdown-html td { padding: 6px 10px; border: 1px solid #dedede; text-align: left; }
+.markdown-html th { background: #f5f5f5; }
+.markdown-html input[type="checkbox"] { margin-right: 6px; pointer-events: none; }
+.markdown-html :not(pre) > code { color: #ab3c50; background: #f3f3f3; padding: 2px 5px; border-radius: 5px; }
