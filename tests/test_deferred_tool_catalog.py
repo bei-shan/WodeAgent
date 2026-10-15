@@ -66,6 +66,11 @@ def test_hidden_tool_cannot_run_until_toolsearch_promotes_it():
     result = json.loads(registry.execute_tool("ToolSearch", {"query": "files"}))
     assert result["status"] == "success"
     assert [match["name"] for match in result["data"]["matches"]] == ["mcp__files_lookup"]
+    # A guess in the same model tool batch still has no executable schema.
+    assert "mcp__files_lookup" not in names(registry)
+    assert json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))["error"]["code"] == "DISCOVERY_REQUIRED"
+    assert remote.calls == 0
+    registry.activate_discovered_tools()  # next model turn / schema binding
     assert "mcp__files_lookup" in names(registry)
     assert json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))["status"] == "success"
     assert remote.calls == 1
@@ -78,6 +83,7 @@ def test_dynamic_policy_hides_and_blocks_previously_promoted_tools():
         return allowed.get(name, True)
     registry, state, _, remote = make_registry(scope=scope)
     assert json.loads(registry.execute_tool("ToolSearch", {"query": "lookup"}))["status"] == "success"
+    registry.activate_discovered_tools()
     allowed["mcp__files_lookup"] = False
     assert "mcp__files_lookup" not in names(registry)
     denied = json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))
@@ -91,12 +97,14 @@ def test_dynamic_policy_hides_and_blocks_previously_promoted_tools():
 def test_replacement_or_unregistration_revokes_discovered_executor():
     registry, state, _, original = make_registry()
     registry.execute_tool("ToolSearch", {"query": "lookup"})
+    registry.activate_discovered_tools()
     replacement = Probe("mcp__files_lookup", "Different implementation")
     registry.register_tool(replacement)
     assert state.promoted_names() == frozenset()
     assert json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))["error"]["code"] == "DISCOVERY_REQUIRED"
     assert replacement.calls == original.calls == 0
     registry.execute_tool("ToolSearch", {"query": "lookup"})
+    registry.activate_discovered_tools()
     assert "mcp__files_lookup" in names(registry)
     registry.unregister("mcp__files_lookup")
     assert state.promoted_names() == frozenset()
@@ -110,6 +118,9 @@ def test_query_limit_validation_and_promotion_budget():
         assert response["error"]["code"] == "INVALID_PARAM"
     response = json.loads(registry.execute_tool("ToolSearch", {"query": "files", "limit": 6}))
     assert response["data"]["count"] == 1
+    assert len(state.promoted_names()) == 0
+    assert len(state.pending_names()) == 1
+    registry.activate_discovered_tools()
     assert len(state.promoted_names()) == 1
     assert set(names(registry)) - {"Read", "ToolSearch"} == state.promoted_names()
 
@@ -118,6 +129,7 @@ def test_distinct_agent_registries_cannot_share_promotions():
     first, s1, _, _ = make_registry()
     second, s2, _, _ = make_registry()
     first.execute_tool("ToolSearch", {"query": "lookup"})
+    first.activate_discovered_tools()
     assert "mcp__files_lookup" in names(first)
     assert "mcp__files_lookup" not in names(second)
     assert s2.promoted_names() == frozenset()
@@ -132,6 +144,7 @@ def test_prompt_usage_notes_are_hidden_until_promotion(tmp_path):
     first = ctx.get_system_messages()[0]["content"]
     assert "PRIVATE MCP USAGE TEXT" not in first
     registry.execute_tool("ToolSearch", {"query": "lookup"})
+    registry.activate_discovered_tools()
     second = ctx.get_system_messages()[0]["content"]
     assert "PRIVATE MCP USAGE TEXT" in second
 
@@ -158,7 +171,10 @@ def test_agent_setup_uses_same_mode_guard_for_discovery_and_direct_execution():
     assert "ToolSearch" in names(registry)
     assert prompt
     registry.execute_tool("ToolSearch", {"query": "files"})
-    assert "mcp__files_lookup" in names(registry)
+    # The model-facing Agent method explicitly commits pending schemas.
+    assert "mcp__files_lookup" in {
+        item["function"]["name"] for item in agent._get_openai_tools_for_current_mode()
+    }
 
     agent._in_plan_mode = True
     assert "mcp__files_lookup" not in names(registry)
@@ -196,3 +212,19 @@ def test_failed_authorization_callback_does_not_disclose_or_promote():
     denied = json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))
     assert denied["error"]["code"] == "PERMISSION_DENIED"
     assert remote.calls == 0
+
+
+def test_pending_promotion_requires_next_schema_and_revocation_works():
+    registry, state, _, remote = make_registry()
+    registry.execute_tool("ToolSearch", {"query": "lookup"})
+    assert state.promoted_names() == frozenset()
+    assert state.pending_names() == frozenset({"mcp__files_lookup"})
+    # Tool-call scheduling may dispatch additional calls in the same model
+    # response; pending names are still denied at the registry boundary.
+    denied = json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))
+    assert denied["error"]["code"] == "DISCOVERY_REQUIRED"
+    assert remote.calls == 0
+    registry.unregister("mcp__files_lookup")
+    assert state.pending_names() == frozenset()
+    registry.activate_discovered_tools()
+    assert state.promoted_names() == frozenset()
