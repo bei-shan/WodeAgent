@@ -8,6 +8,7 @@ before exposing multi-user memory as a production feature.
 from .contracts import MemoryBackend, MemoryRecord, MemoryScope
 from .registry import MemoryProviderRegistry, MemoryProviderUnavailable
 from .sqlite_backend import SQLiteMemoryBackend
+from .mem0_backend import Mem0MemoryBackend
 
 __all__ = [
     "MemoryBackend",
@@ -16,4 +17,5 @@ __all__ = [
     "MemoryProviderRegistry",
     "MemoryProviderUnavailable",
     "SQLiteMemoryBackend",
+    "Mem0MemoryBackend",
 ]
