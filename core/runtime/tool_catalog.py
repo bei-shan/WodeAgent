@@ -68,6 +68,13 @@ class ToolDiscoveryState:
         words = re.findall(r"[\w-]+", query.casefold())[:8]
         if not words:
             return []
+        def permitted(name: str) -> bool:
+            try:
+                return bool(can_promote(name))
+            except Exception:
+                # Never reveal a tool when an authorization callback fails.
+                return False
+
         ranked: list[tuple[int, str, str]] = []
         for tool in catalog:
             fn = tool.get("function", {})
@@ -75,9 +82,11 @@ class ToolDiscoveryState:
             description = fn.get("description", "")
             if not isinstance(name, str) or not isinstance(description, str):
                 continue
-            if self.is_visible(name) or not can_promote(name):
+            if self.is_visible(name) or not permitted(name):
                 continue
-            haystack = (name + " " + description).casefold()
+            # Bound work over third-party tool descriptions. The final model
+            # schema may be larger, but search never indexes unbounded text.
+            haystack = (name + " " + description[:1024]).casefold()
             name_lower = name.casefold()
             # Strong name matches beat broad description matches; prevent
             # unrelated tools from becoming promoted on a single token.
@@ -94,7 +103,7 @@ class ToolDiscoveryState:
             for _, name, description in ranked:
                 if len(matches) >= limit or len(self._promoted) >= self.max_promoted:
                     break
-                if name in self._promoted or not can_promote(name):
+                if name in self._promoted or not permitted(name):
                     continue
                 self._promoted[name] = None
                 matches.append({"name": name, "description": description[:240]})
