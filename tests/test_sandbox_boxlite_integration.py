@@ -13,6 +13,7 @@ import time
 import pytest
 
 from core.sandbox.boxlite_provider import BoxliteCommandProvider
+from core.sandbox.guest_files import GuestFilesystem
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("AGENT_BOXLITE_INTEGRATION") != "1",
@@ -71,3 +72,20 @@ def test_real_boxlite_stop_cancels_guest_exec(tmp_path):
         worker.join(timeout=15)
     assert not worker.is_alive(), "guest cleanup did not complete"
     assert outcomes and outcomes[0].interrupted
+
+
+def test_real_boxlite_guest_file_binary_stdin_and_symlink_denial(tmp_path):
+    """Opt-in KVM/HVF native execution stream acceptance, not CI fake evidence."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "data").mkdir()
+    provider = BoxliteCommandProvider(root, guest_stdin_enabled=True)
+    guest = GuestFilesystem(provider)
+    binary = b"\x00\xffvm-stream\n"
+    assert guest.write_file("data/binary.bin", binary, timeout_seconds=90) == len(binary)
+    assert guest.read_file("data/binary.bin", timeout_seconds=90) == binary
+    assert "binary.bin" in guest.list_dir("data", timeout_seconds=90)
+    (root / "data" / "alias.bin").symlink_to(root / "data" / "binary.bin")
+    with pytest.raises(PermissionError):
+        guest.write_file("data/alias.bin", b"blocked", timeout_seconds=90)
+    assert guest.read_file("data/binary.bin", timeout_seconds=90) == binary

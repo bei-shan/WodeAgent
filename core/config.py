@@ -52,6 +52,7 @@ class Config(BaseModel):
     sandbox_boxlite_image: str = "python:3.12-slim"
     sandbox_boxlite_memory_mib: int = 1024
     sandbox_boxlite_cpus: int = 2
+    sandbox_boxlite_stdin_enabled: bool = False  # opt in after SDK/HVF/KVM acceptance
     sandbox_boxlite_warm_enabled: bool = False  # opt in after actual HVF/KVM validation
     sandbox_boxlite_warm_idle_seconds: int = 60
 
@@ -175,6 +176,7 @@ class Config(BaseModel):
             sandbox_boxlite_image=env_str("AGENT_SANDBOX_BOXLITE_IMAGE", "python:3.12-slim"),
             sandbox_boxlite_memory_mib=env_int("AGENT_SANDBOX_BOXLITE_MEMORY_MIB", 1024),
             sandbox_boxlite_cpus=env_int("AGENT_SANDBOX_BOXLITE_CPUS", 2),
+            sandbox_boxlite_stdin_enabled=env_bool("AGENT_SANDBOX_BOXLITE_STDIN_ENABLED", False),
             sandbox_boxlite_warm_enabled=env_bool("AGENT_SANDBOX_BOXLITE_WARM_ENABLED", False),
             sandbox_boxlite_warm_idle_seconds=env_int("AGENT_SANDBOX_BOXLITE_WARM_IDLE_SECONDS", 60),
             # AgentTeams

@@ -238,6 +238,7 @@ class CodeAgent(Agent):
                     image=self.config.sandbox_boxlite_image,
                     memory_mib=self.config.sandbox_boxlite_memory_mib,
                     cpus=self.config.sandbox_boxlite_cpus,
+                    guest_stdin_enabled=self.config.sandbox_boxlite_stdin_enabled,
                 )
                 if self.config.sandbox_boxlite_warm_enabled:
                     provider.enable_warm_pool(
