@@ -152,6 +152,14 @@ def test_guest_file_protocol_is_binary_safe_and_symlink_resistant(tmp_path):
     assert guest.read_file("data/blob.bin") == data
     assert secret.read_text() == "host-private"
 
+    # Atomic replacement keeps regular-file permission bits but not setuid.
+    existing = root / "data" / "executable.sh"
+    existing.write_bytes(b"old")
+    existing.chmod(0o755)
+    assert guest.write_file("data/executable.sh", b"new") == 3
+    assert existing.read_bytes() == b"new"
+    assert existing.stat().st_mode & 0o777 == 0o755
+
     with pytest.raises(ValueError):
         guest.write_file("data/oversized.bin", b"x" * 65537)
     assert not (root / "data" / "oversized.bin").exists()
