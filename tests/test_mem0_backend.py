@@ -96,4 +96,13 @@ def test_registry_disables_mem0_until_operator_explicitly_installs():
     backend = Mem0MemoryBackend(FakeMem0(), scope_key=b"w" * 32, approved=True)
     registry.register("mem0", backend)
     registry.select(sc(), "mem0")
-    assert registry.for_scope(sc()) is backend
+    handle = registry.for_scope(sc())
+    assert handle.scope == sc()
+    record = handle.add(sc(), "opted-in memory")
+    assert [x.id for x in handle.search(sc(), "opted-in")] == [record.id]
+    with pytest.raises(PermissionError):
+        handle.search(sc(user="another"), "opted-in")
+    registry.select(sc(), "off")
+    assert handle.search(sc(), "opted-in") == []
+    with pytest.raises(Exception, match="disabled"):
+        handle.add(sc(), "no further outbound persistence")

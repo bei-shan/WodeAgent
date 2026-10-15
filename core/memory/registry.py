@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from typing import Mapping
 
 from .contracts import MemoryBackend, MemoryRecord, MemoryScope
@@ -23,6 +24,34 @@ class DisabledMemoryBackend:
 
     def delete(self, scope: MemoryScope, record_id: str) -> bool:
         return False
+
+
+@dataclass(frozen=True, slots=True)
+class ScopedMemoryHandle:
+    """A scope-bound view, not a raw provider or an authentication credential.
+
+    The authenticated application layer must derive the scope from a verified
+    principal before requesting this handle. Every operation rejects a
+    mismatched scope, and resolves the provider dynamically so switching
+    to 'off' revokes even cached handles for subsequent calls.
+    """
+
+    _registry: "MemoryProviderRegistry"
+    scope: MemoryScope
+
+    def _resolve(self, scope: MemoryScope) -> MemoryBackend:
+        if not isinstance(scope, MemoryScope) or scope != self.scope:
+            raise PermissionError("Memory handle is bound to another scope")
+        return self._registry._current_backend(self.scope)
+
+    def add(self, scope: MemoryScope, content: str, *, metadata=None) -> MemoryRecord:
+        return self._resolve(scope).add(self.scope, content, metadata=metadata)
+
+    def search(self, scope: MemoryScope, query: str, *, limit: int = 8) -> list[MemoryRecord]:
+        return self._resolve(scope).search(self.scope, query, limit=limit)
+
+    def delete(self, scope: MemoryScope, record_id: str) -> bool:
+        return self._resolve(scope).delete(self.scope, record_id)
 
 
 class MemoryProviderRegistry:
@@ -68,8 +97,16 @@ class MemoryProviderRegistry:
         with self._lock:
             return self._selection.get(scope, "off")
 
-    def for_scope(self, scope: MemoryScope) -> MemoryBackend:
+    def _current_backend(self, scope: MemoryScope) -> MemoryBackend:
+        with self._lock:
+            provider = self._selection.get(scope, "off")
+            # A provider registration may be intentionally omitted in a new
+            # deployment. Never silently switch to another memory backend.
+            if provider not in self._providers:
+                raise MemoryProviderUnavailable("Selected memory provider is not configured")
+            return self._providers[provider]
+
+    def for_scope(self, scope: MemoryScope) -> ScopedMemoryHandle:
         if not isinstance(scope, MemoryScope):
             raise TypeError("Authenticated MemoryScope required")
-        with self._lock:
-            return self._providers[self._selection.get(scope, "off")]
+        return ScopedMemoryHandle(self, scope)
