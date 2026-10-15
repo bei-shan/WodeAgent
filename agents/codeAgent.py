@@ -263,7 +263,7 @@ class CodeAgent(Agent):
                     deployment=self.config.sandbox_e2b_deployment,
                 )
             self._sandbox_provider = provider
-            self.tool_registry.register_tool(SandboxBashTool(provider))
+            self.tool_registry.register_tool(SandboxBashTool(provider), owner="builtin")
             self.tool_registry.restrict_to_tools({"Bash"})
             self.logger.warning(
                 "%s sandbox mode: only isolated Bash is exposed; "
