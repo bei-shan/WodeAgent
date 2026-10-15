@@ -166,6 +166,8 @@ class E2BCommandProvider:
         return "ok", value
 
     def _ensure_remote(self, cancel_event: threading.Event | None) -> None:
+        if self._closed or self._abort.is_set():
+            raise SandboxUnavailable("E2B provider already closing")
         if self._client is not None:
             return
         self._capacity.reserve(self._slot)
@@ -244,7 +246,7 @@ class E2BCommandProvider:
             if self._closed or self._poisoned or self._busy:
                 raise SandboxUnavailable("E2B session closed, busy, or cleanup unconfirmed")
             self._busy = True
-            try:
+        try:
                 self._ensure_remote(cancel_event)
                 client = self._client
                 def invoke():
@@ -286,19 +288,23 @@ class E2BCommandProvider:
                     self._kill_remote()
                     raise SandboxUnavailable("Invalid E2B command output")
                 return CommandResult(stdout[:_MAX_OUTPUT], stderr[:_MAX_OUTPUT], value.exit_code)
-            finally:
+        finally:
+            with self._lock:
                 self._busy = False
 
     def close(self) -> None:
+        # Signals an in-progress blocking SDK call without waiting for the
+        # same lock or pretending future.cancel terminates remote execution.
+        self._abort.set()
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            self._abort.set()
-            if self._client is not None:
-                self._kill_remote()
-            # A create timeout or unknown remote deletion never releases the
-            # reserved slot. Operator reconciliation is required.
+            busy = self._busy
+        if not busy and self._client is not None:
+            self._kill_remote()
+        # An uncertain create/kill never frees its capacity reservation.
+        # Only a confirmed remote kill does; operator review is otherwise needed.
 
     @property
     def capacity_used(self) -> int:
