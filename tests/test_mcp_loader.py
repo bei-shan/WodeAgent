@@ -338,8 +338,15 @@ def test_mcp_pending_connections_are_registry_scoped():
         assert retry_pending_server(second, "shared", timeout=2.0) is True
         assert client_two.connect_sync.call_count == 1
         assert get_pending_server_names(second) == []
-        assert first.register_tool.call_count == 1
-        assert second.register_tool.call_count == 1
+        assert first.replace_owned_tools.call_count == 1
+        assert second.replace_owned_tools.call_count == 1
+        first_owner, first_adapters = first.replace_owned_tools.call_args.args
+        second_owner, second_adapters = second.replace_owned_tools.call_args.args
+        assert first_owner == second_owner == "mcp:shared"
+        assert [adapter.name for adapter in first_adapters] == ["shared_read_first"]
+        assert [adapter.name for adapter in second_adapters] == ["shared_read_second"]
+        assert first_adapters[0].client is client_one
+        assert second_adapters[0].client is client_two
     finally:
         clear_pending_servers()
 
