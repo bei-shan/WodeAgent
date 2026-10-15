@@ -44,6 +44,7 @@ class BoxliteCommandProvider:
         network_factory: Callable[..., Any] | None = None,
         session_pool: BoxliteSessionPool | None = None,
         session_scope: str | None = None,
+        guest_stdin_enabled: bool = False,
     ) -> None:
         if sys.platform not in ("linux", "darwin"):
             raise SandboxUnavailable("BoxLite micro-VM requires a supported Linux/macOS host")
@@ -82,6 +83,9 @@ class BoxliteCommandProvider:
         self.image = image
         self.memory_mib = memory_mib
         self.cpus = cpus
+        if type(guest_stdin_enabled) is not bool:
+            raise ValueError("VM stdin capability must be explicitly enabled")
+        self._guest_stdin_enabled = guest_stdin_enabled
         if (session_pool is None) != (session_scope is None):
             raise ValueError("VM pool and session scope must be supplied together")
         self._session_pool = session_pool
@@ -175,6 +179,137 @@ class BoxliteCommandProvider:
     ) -> CommandResult:
         async with self._make_box() as box:
             return await self._execute_guest(box, command, cwd, timeout, cancel_event)
+
+    async def _execute_guest_stdin(
+        self, box: Any, command: str, cwd: str, timeout: float,
+        cancel_event: Event | None, stdin_data: bytes,
+    ) -> CommandResult:
+        """Stream guest input via BoxLite's underlying Execution stdin writer.
+
+        Upstream SimpleBox.exec has no stdin argument; its owned native Box
+        offers Execution.stdin(), send_input(bytes), close(). The provider
+        requires this exact capability and never puts bytes in argv/env.
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return CommandResult("", "", None, interrupted=True)
+        native = getattr(box, "_box", None)
+        if native is None or not callable(getattr(native, "exec", None)):
+            raise SandboxUnavailable("BoxLite native execution stdin is unavailable")
+
+        async def _stream() -> CommandResult:
+            execution = await native.exec(
+                "sh", ["-lc", command], [("HOME", "/tmp")],
+                user=str(os.getuid() or 65534),
+                timeout_secs=timeout, cwd=cwd,
+            )
+            writer = execution.stdin()
+            if (not callable(getattr(writer, "send_input", None))
+                    or not callable(getattr(writer, "close", None))):
+                raise SandboxUnavailable("BoxLite native stdin writer is unsupported")
+            output_budget = 160 * 1024
+
+            async def _collect(stream: Any) -> str:
+                pieces: list[str] = []
+                amount = 0
+                async for chunk in stream:
+                    if not isinstance(chunk, (str, bytes)):
+                        raise SandboxUnavailable("Invalid VM output chunk")
+                    text = chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else chunk
+                    amount += len(text)
+                    if amount > output_budget:
+                        raise SandboxUnavailable("VM output exceeded file response budget")
+                    pieces.append(text)
+                return "".join(pieces)
+
+            async def _send() -> None:
+                await writer.send_input(stdin_data)
+                await writer.close()
+
+            jobs = [
+                asyncio.create_task(_send()),
+                asyncio.create_task(_collect(execution.stdout())),
+                asyncio.create_task(_collect(execution.stderr())),
+            ]
+            try:
+                _, stdout, stderr = await asyncio.gather(*jobs)
+                result = await execution.wait()
+                return CommandResult(stdout, stderr, result.exit_code)
+            finally:
+                for pending in jobs:
+                    if not pending.done():
+                        pending.cancel()
+
+        task = asyncio.create_task(_stream())
+        deadline = asyncio.get_running_loop().time() + timeout
+        try:
+            while not task.done():
+                if cancel_event is not None and cancel_event.is_set():
+                    task.cancel()
+                    return CommandResult("", "", None, interrupted=True)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    task.cancel()
+                    return CommandResult("", "", None, timed_out=True)
+                await asyncio.wait({task}, timeout=min(0.1, remaining))
+            if cancel_event is not None and cancel_event.is_set():
+                return CommandResult("", "", None, interrupted=True)
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+
+    async def _run_with_stdin(
+        self, command: str, cwd: str, timeout: float,
+        cancel_event: Event | None, stdin_data: bytes,
+    ) -> CommandResult:
+        async with self._make_box() as box:
+            return await self._execute_guest_stdin(
+                box, command, cwd, timeout, cancel_event, stdin_data,
+            )
+
+    def execute_stdin(
+        self, command: str, stdin_data: bytes,
+        directory: str = ".", timeout_seconds: float = 120,
+        *, cancel_event: Event | None = None,
+    ) -> CommandResult:
+        if not self._guest_stdin_enabled:
+            raise SandboxUnavailable("BoxLite VM stdin is not enabled or hardware-verified")
+        if not isinstance(stdin_data, bytes) or len(stdin_data) > 65536:
+            raise ValueError("VM binary stdin must be at most 64 KiB")
+        if not isinstance(command, str) or not command.strip() or "\x00" in command:
+            raise ValueError("Invalid VM command")
+        if (isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds)
+                or not 0 < timeout_seconds <= 600):
+            raise ValueError("VM stdin command timeout is out of range")
+        cwd = self._working_dir(directory)
+        if cancel_event is not None and cancel_event.is_set():
+            return CommandResult("", "", None, interrupted=True)
+        try:
+            if self._session_pool is not None:
+                assert self._session_scope is not None
+                self._session_pool.acquire(self._session_scope)
+                try:
+                    return self._session_pool.execute(
+                        self._session_scope,
+                        lambda box: self._execute_guest_stdin(
+                            box, command, cwd, timeout_seconds,
+                            cancel_event, stdin_data,
+                        ),
+                        timeout_seconds=timeout_seconds,
+                    )
+                finally:
+                    self._session_pool.release(self._session_scope)
+            return asyncio.run(self._run_with_stdin(
+                command, cwd, timeout_seconds, cancel_event, stdin_data,
+            ))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            raise SandboxUnavailable(
+                "BoxLite native stdin operation failed; host fallback forbidden"
+            ) from exc
 
     def execute(
         self,
