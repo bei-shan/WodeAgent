@@ -55,8 +55,18 @@ class WorktreeFeature(AgentFeature):
         if not getattr(agent, "_worktree_disabled", False):
             return
         for tool_name in self._WORKTREE_TOOLS:
-            if agent.tool_registry.get_tool(tool_name) is not None:
-                agent.tool_registry.unregister(tool_name, owner="builtin")
+            if agent.tool_registry.get_tool(tool_name) is None:
+                continue
+            owner = agent.tool_registry.owner_of(tool_name)
+            # Compatibility: standalone callers can register the feature's
+            # tools under the legacy default. Never remove a plugin's tool.
+            if owner in {"builtin", "legacy"}:
+                agent.tool_registry.unregister(tool_name, owner=owner)
+            else:
+                logger.warning(
+                    "Not removing foreign-owned worktree tool %s (owner=%s)",
+                    tool_name, owner,
+                )
 
     def cleanup(self, agent: "CodeAgent") -> None:
         # Worktree cleanup is handled by ExitWorktree tool.
