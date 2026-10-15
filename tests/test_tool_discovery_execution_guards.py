@@ -30,9 +30,13 @@ class _ProbeTool(Tool):
         return json.dumps({"status": "success", "data": {"called": True}})
 
 
-def _run(runtime, agent, feature, tool, params):
+def _run(runtime, agent, policy, tool, params):
+    # Core policy is mandatory middleware, never an optional plugin hook.
+    agent._policy_middleware = SimpleNamespace(
+        before_tool=lambda name, args: policy.pre_tool_use(agent, name, args),
+    )
     return json.loads(runtime.execute(
-        tool, params, agent=agent, features=[feature],
+        tool, params, agent=agent, features=[],
         emit_messages=lambda _: None, record_timing=lambda *_: None,
     ))
 
