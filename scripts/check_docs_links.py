@@ -21,6 +21,7 @@ MAINTAINED = (
     "docs/AUDIT_2026-10-13.md",
     "docs/REBRANDING.md",
     "docs/COMMANDS.md",
+    "docs/REPOSITORY_INVENTORY.md",
 )
 LINK = re.compile(r"(?<!!)\]\(([^)\n]+)\)")
 
