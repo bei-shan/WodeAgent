@@ -34,6 +34,17 @@ class PolicyMiddlewarePipeline:
             policy.start(self._agent)
         self._ready = True
 
+    @property
+    def policies(self):
+        """Immutable core middleware order for context/status contributions."""
+        return self._policies
+
+    def on_model_changed(self, agent: Any, old_model: str, new_model: str) -> None:
+        for policy in self._policies:
+            observer = getattr(policy, "on_model_changed", None)
+            if callable(observer):
+                observer(agent, old_model, new_model)
+
     def before_tool(self, tool_name: str, parameters: dict) -> dict | None:
         if not self._ready:
             return {
