@@ -202,3 +202,15 @@ def test_hosted_rejects_oversized_request_before_json_parsing():
             headers={**headers("alice"), "Content-Type": "application/json"},
         )
         assert response.status_code == 413
+
+
+def test_hosted_production_dsn_requires_verified_tls(monkeypatch):
+    for dsn in (
+        "postgresql://db.example.local/ridge",
+        "postgresql://db.example.local/ridge?sslmode=disable",
+        "postgresql://db.example.local/ridge?sslmode=require",
+        "postgresql://db.example.local/ridge?sslmode=verify-ca",
+    ):
+        monkeypatch.setenv("RIDGE_POSTGRES_DSN", dsn)
+        with pytest.raises(RuntimeError, match="sslmode=verify-full"):
+            create_hosted_app(verifier=TestVerifier())
