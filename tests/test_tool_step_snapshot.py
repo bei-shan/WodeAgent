@@ -157,3 +157,49 @@ def test_agent_exposes_exact_captured_schemas_when_registry_supports_snapshots()
     assert agent._model_tool_step_snapshot.model_schemas() == schemas
     registry.register_tool(Probe())
     assert_stale(response(registry, "Inspect", {"value": "a"}, agent._model_tool_step_snapshot))
+
+
+def test_codeagent_staged_dispatch_rejects_tool_swapped_during_model_response():
+    import logging
+    import threading
+    from agents.codeAgent import CodeAgent
+
+    registry = ToolRegistry()
+    old = Probe()
+    registry.register_tool(old)
+    agent = CodeAgent.__new__(CodeAgent)
+    agent.tool_registry = registry
+    agent._in_plan_mode = False
+    agent.delegate_mode = False
+    agent.PLAN_MODE_TOOLS = {"Inspect"}
+    agent._features = []
+    agent._hook_manager = None
+    agent.config = SimpleNamespace(
+        tool_parallel_reads_enabled=False, tool_max_concurrency=2,
+        budget_enforce=False,
+    )
+    agent.logger = logging.getLogger("step-snapshot-integration")
+    agent._interrupt_requested = threading.Event()
+    agent._hook_system_messages = []
+    agent.console_verbose = False
+    agent.project_root = "."
+    observed = []
+    agent.event_sink = SimpleNamespace(emit=lambda event: None)
+    agent.history_manager = SimpleNamespace(
+        append_assistant=lambda **kwargs: None,
+        append_tool=lambda **kwargs: observed.append(kwargs),
+    )
+    agent._log_message_write = lambda *args: None
+    trace = SimpleNamespace(log_event=lambda *args, **kwargs: None)
+
+    assert agent._get_openai_tools_for_current_mode()
+    new = Probe()
+    registry.register_tool(new)
+    agent._execute_step_tools(
+        [{"name": "Inspect", "id": "old-call", "arguments": {"value": "x"}}],
+        "", None, trace, 1,
+    )
+    assert len(observed) == 1
+    assert_stale(json.loads(observed[0]["raw_result"]))
+    assert new.calls == []
+    assert old.calls == []
