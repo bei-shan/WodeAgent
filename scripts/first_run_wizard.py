@@ -1,13 +1,7 @@
-"""First-run interactive setup wizard for Ridge Code.
+"""Local interactive model-provider setup for the canonical Ridge Code CLI.
 
-Detects whether a first-run setup is needed (no .env or missing API key)
-and guides the user through configuring their LLM provider.
-
-Usage::
-
-    from scripts.first_run_wizard import run_wizard, should_run_wizard
-    if should_run_wizard():
-        run_wizard()
+Use `python -m ridgecode setup`; existing .env files require `--force`.
+No model or external service is contacted by this wizard.
 """
 
 from __future__ import annotations
@@ -82,27 +76,6 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
-def should_run_wizard() -> bool:
-    """Check whether the first-run wizard should be triggered."""
-    env_path = Path(".env")
-    if not env_path.exists():
-        return True
-    try:
-        content = env_path.read_text(encoding="utf-8")
-    except OSError:
-        return True
-    # Check if any API key is configured.
-    has_key = any(
-        keyword in content
-        for keyword in (
-            "LLM_API_KEY=", "DEEPSEEK_API_KEY=", "OPENAI_API_KEY=",
-            "ZHIPU_API_KEY=", "GLM_API_KEY=", "KIMI_API_KEY=",
-            "MOONSHOT_API_KEY=", "DASHSCOPE_API_KEY=", "OLLAMA_API_KEY=",
-        )
-    )
-    return not has_key
-
-
 def run_wizard() -> bool:
     """Run the interactive setup wizard. Returns True if .env was created."""
     _show_welcome()
@@ -113,7 +86,7 @@ def run_wizard() -> bool:
         return False
     enable_teams = _ask_features()
     if not _confirm(provider, api_key, enable_teams):
-        console.print("[yellow]Setup cancelled. Run with --wizard to try again.[/yellow]")
+        console.print("[yellow]Setup cancelled. Run python -m ridgecode setup to try again.[/yellow]")
         return False
     _write_env(provider, api_key, enable_teams)
     _show_complete()
@@ -126,7 +99,7 @@ def _show_welcome() -> None:
         Panel(
             "[bold cyan]🏔️ Welcome to Ridge Code![/bold cyan]\n\n"
             "Let's set up your environment.\n"
-            "You can skip this with [bold]--skip-wizard[/bold].\n\n"
+            "Use Ctrl+C to cancel the setup.\n\n"
             "Press Enter to continue...",
             title="First Run Setup",
             border_style="cyan",
@@ -169,7 +142,7 @@ def _prompt_api_key(provider: dict[str, str]) -> str:
 
 def _ask_features() -> bool:
     console.print()
-    console.print("[bold]Optional features:[/bold]")
+    console.print("[bold]Optional capabilities:[/bold]")
     enable_teams = Confirm.ask(
         "Enable AgentTeams (multi-agent collaboration)?",
         default=False,
@@ -191,7 +164,6 @@ def _confirm(provider: dict[str, str], api_key: str, enable_teams: bool) -> bool
 def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> None:
     model = provider["default_model"]
     base_url = provider["base_url"]
-    prefix = provider["env_prefix"]
     prov_key = provider["key"]
 
     lines = [
@@ -220,7 +192,7 @@ def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> No
     lines.append("MODEL_POINTER_MAIN=main")
     lines.extend([
         "",
-        "# ===== Features =====",
+        "# ===== Optional capabilities =====",
         f"ENABLE_AGENT_TEAMS={'true' if enable_teams else 'false'}",
         "# MCP_CONNECT_MODE=manual",
         "# AGENT_OUTPUT_STYLE=default",
