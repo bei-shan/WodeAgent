@@ -47,6 +47,27 @@ production controls have been validated.
 - Explicit contract tests live under `tests/test_hosted_identity_api.py`,
   `tests/test_postgres_turn_queue.py` and `tests/test_redis_turn_admission.py`.
 
+## Staging API black-box check (metadata scope only)
+
+After provisioning **two distinct OIDC principals from different tenants** and
+a public staging HTTPS origin, run:
+
+```bash
+RIDGE_STAGING_BASE_URL="https://staging.example" \\
+RIDGE_STAGING_TOKEN_A="<short-lived-token-for-tenant-A>" \\
+RIDGE_STAGING_TOKEN_B="<short-lived-token-for-tenant-B>" \\
+python scripts/staging_tenant_acceptance.py
+```
+
+The tool performs non-destructive readiness/route checks and creates two
+temporary private sessions to verify cross-tenant read/list/write/delete
+denial, spoofed headers, and stale revision CAS. It then deletes the temporary
+sessions, and returns exit code 1 if any check fails. It refuses plain HTTP,
+URL userinfo, and redirects, and never prints bearer tokens or session
+snapshots. Token identities must be provisioned/verified by the operator; the
+script cannot prove issuer tenant membership. **`PASS_METADATA_ONLY` is not
+a GO decision for executing Agents.**
+
 ## Acceptance method
 
 1. Deploy isolated hosted API using trusted IdP, DB runtime role (not its schema
