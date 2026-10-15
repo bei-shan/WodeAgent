@@ -23,9 +23,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Callable
 
-from core.sandbox.contracts import CommandResult
+from core.sandbox.contracts import CommandResult, SandboxUnavailable
 from core.sandbox.docker_lifecycle import installation_key_path
-from core.sandbox.docker_provider import SandboxUnavailable
 
 _IMAGE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@+-]{0,199}\Z")
 
