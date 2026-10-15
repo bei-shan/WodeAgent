@@ -1,4 +1,4 @@
-"""Model provider dispatch + ordered feature intercept chain.
+"""Model provider dispatch + ordered interceptor intercept chain.
 
 AgentLoop decides when to request a model invocation. CodeAgent retains
 recovery, usage accounting, event emission, history, and terminal outcomes.
@@ -30,7 +30,7 @@ class ModelGateway:
 
     def invoke(
         self, *, messages: list[dict], tools_schema: Any,
-        tool_choice: str, features: Iterable[ModelInterceptor],
+        tool_choice: str, interceptors: Iterable[ModelInterceptor],
         agent: Any, on_delta: Callable[[str, str], None],
     ) -> Any:
         from core.runtime.telemetry import get_telemetry
@@ -42,7 +42,7 @@ class ModelGateway:
         ) as observation:
             result = self._invoke_untraced(
                 messages=messages, tools_schema=tools_schema,
-                tool_choice=tool_choice, features=features,
+                tool_choice=tool_choice, interceptors=interceptors,
                 agent=agent, on_delta=on_delta,
             )
             # The token counts come from the provider response; prompt and
@@ -55,7 +55,7 @@ class ModelGateway:
 
     def _invoke_untraced(
         self, *, messages: list[dict], tools_schema: Any,
-        tool_choice: str, features: Iterable[ModelInterceptor],
+        tool_choice: str, interceptors: Iterable[ModelInterceptor],
         agent: Any, on_delta: Callable[[str, str], None],
     ) -> Any:
         def invoke_provider() -> Any:
@@ -72,10 +72,10 @@ class ModelGateway:
 
         invoke_next = invoke_provider
         # Materialize one iterable once; reversed order preserves the prior
-        # outer-to-inner feature pipeline.
-        for feature in reversed(tuple(features)):
+        # outer-to-inner interceptor pipeline.
+        for interceptor in reversed(tuple(interceptors)):
             prior = invoke_next
-            invoke_next = lambda f=feature, p=prior: f.llm_intercept(
+            invoke_next = lambda f=interceptor, p=prior: f.llm_intercept(
                 agent, messages, tools_schema, tool_choice, p,
             )
         return invoke_next()

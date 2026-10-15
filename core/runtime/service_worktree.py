@@ -1,12 +1,10 @@
-"""WorktreeFeature — git worktree session isolation."""
-
+"""Framework-owned WorktreeService; not a legacy Feature or a plugin extension."""
 from __future__ import annotations
 
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Optional
 
-from core.features.base import AgentFeature
 
 if TYPE_CHECKING:
     from agents.codeAgent import CodeAgent
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class WorktreeFeature(AgentFeature):
+class WorktreeService:
     """Manages git worktree lifecycle for session-level file isolation."""
 
     name = "worktree"
@@ -23,7 +21,7 @@ class WorktreeFeature(AgentFeature):
     # The two tools this feature enables — gated by git availability.
     _WORKTREE_TOOLS = ("EnterWorktree", "ExitWorktree")
 
-    def init(self, agent: "CodeAgent") -> None:
+    def start(self, agent: "CodeAgent") -> None:
         from core.worktree.manager import WorktreeError, WorktreeManager
 
         worktree_store_dir = getattr(agent.config, "worktree_store_dir", "") or os.getenv("WORKTREE_STORE_DIR", ".worktrees")
@@ -50,7 +48,7 @@ class WorktreeFeature(AgentFeature):
                 agent._original_project_root, exc.message,
             )
 
-    def post_init(self, agent: "CodeAgent") -> None:
+    def post_start(self, agent: "CodeAgent") -> None:
         # Tools are registered between init() and post_init(); remove now if disabled.
         if not getattr(agent, "_worktree_disabled", False):
             return
@@ -68,6 +66,6 @@ class WorktreeFeature(AgentFeature):
                     tool_name, owner,
                 )
 
-    def cleanup(self, agent: "CodeAgent") -> None:
+    def close(self, agent: "CodeAgent") -> None:
         # Worktree cleanup is handled by ExitWorktree tool.
         pass

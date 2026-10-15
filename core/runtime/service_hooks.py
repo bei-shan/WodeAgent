@@ -1,16 +1,14 @@
-"""HookFeature — lifecycle hook system (SessionStart/PreToolUse/PostToolUse/SessionEnd)."""
-
+"""Framework-owned HookService; not a legacy Feature or a plugin extension."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from core.features.base import AgentFeature
 
 if TYPE_CHECKING:
     from agents.codeAgent import CodeAgent
 
 
-class HookFeature(AgentFeature):
+class HookService:
     """Manages lifecycle hooks configured via ``.mycode/hooks.json``.
 
     Hooks can block/modify tool calls, inject system messages,
@@ -20,14 +18,19 @@ class HookFeature(AgentFeature):
     name = "hook"
     order = 85
 
-    def init(self, agent: "CodeAgent") -> None:
+    def start(self, agent: "CodeAgent") -> None:
         from core.hook_system import HookManager
 
         agent._hook_manager = HookManager(project_root=agent._original_project_root)
+        # Apply only declarative, explicitly trusted hook manifests. No
+        # arbitrary project Python is imported, initialized or executed.
+        from core.plugin_loader import PluginLoader
+        for contribution in PluginLoader(agent._original_project_root).discover():
+            contribution.apply(agent._hook_manager)
         agent._hook_system_messages: list[str] = []
         agent._hook_session_context: list[str] = []
 
-    def post_init(self, agent: "CodeAgent") -> None:
+    def post_start(self, agent: "CodeAgent") -> None:
         """Run SessionStart hooks after all features are initialised."""
         if agent._hook_manager.has_any_hooks:
             result = agent._hook_manager.run_session_start()
@@ -69,7 +72,7 @@ class HookFeature(AgentFeature):
         )
         return post_result.system_messages
 
-    def cleanup(self, agent: "CodeAgent") -> None:
+    def close(self, agent: "CodeAgent") -> None:
         if agent._hook_manager.has_any_hooks:
             try:
                 agent._hook_manager.run_session_end()

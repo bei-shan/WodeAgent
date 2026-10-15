@@ -6,7 +6,6 @@ Existing .mycode/plugins directories start disabled until explicitly enabled.
 """
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import hmac
 import io
@@ -21,7 +20,6 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from core.features.base import AgentFeature
 
 logger = logging.getLogger(__name__)
 PLUGINS_DIR = ".mycode/plugins"
@@ -514,7 +512,12 @@ class PluginCatalog:
 
 
 class PluginLoader:
-    """Feature discovery, with inert inspection unless explicitly trusted."""
+    """Discover trusted, declarative hook contributions without importing Python.
+
+    The historical `custom_features` manifest key is non-executable and no
+    longer supported. Python code cannot receive raw Agent/Registry handles.
+    Skills and output styles remain catalogued through their own loaders.
+    """
 
     def __init__(self, project_root: str):
         self.catalog = PluginCatalog(project_root)
@@ -522,55 +525,24 @@ class PluginLoader:
     def list_plugins(self) -> list[dict[str, Any]]:
         return self.catalog.list_plugins()
 
-    def discover(self) -> list[AgentFeature]:
-        features: list[AgentFeature] = []
-        for m in self.catalog.enabled_manifests():
-            # Skills are discovered independently by SkillLoader on each scan.
-            # Hooks and Python code require BOTH operator env and explicit trust.
-            if not self.catalog.code_trusted(m.name):
+    def discover(self) -> list["PluginHookContribution"]:
+        contributions: list[PluginHookContribution] = []
+        for manifest in self.catalog.enabled_manifests():
+            # Enabled alone is insufficient for host command hooks.
+            if not self.catalog.code_trusted(manifest.name):
                 continue
-            if m.hooks_config:
-                features.append(_PluginHookFeature(m))
-            for rel in m.custom_features:
-                feature = self._load_custom_feature(m, rel)
-                if feature:
-                    features.append(feature)
-        return features
-
-    def _load_custom_feature(self, manifest: PluginManifest, rel: str) -> AgentFeature | None:
-        source = manifest.plugin_dir / rel
-        if (source.suffix != ".py" or not source.is_file()
-                or not _inside(self.catalog.root, source)):
-            return None
-        try:
-            spec = importlib.util.spec_from_file_location(
-                "ridge_plugin_" + manifest.name.replace("-", "_") + "_" + source.stem,
-                source,
-            )
-            if spec is None or spec.loader is None:
-                return None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            for value in vars(module).values():
-                if (isinstance(value, type) and issubclass(value, AgentFeature)
-                        and value is not AgentFeature and value.__module__ == module.__name__):
-                    return value()
-        except Exception:
-            logger.warning("Failed to load trusted plugin feature %s", manifest.name)
-        return None
+            if manifest.hooks_config:
+                contributions.append(PluginHookContribution(manifest))
+        return contributions
 
 
-class _PluginHookFeature(AgentFeature):
-    """In-memory hook contribution. Never mutate .mycode/hooks.json."""
+class PluginHookContribution:
+    """Declarative, operator-approved contribution; never executes on load."""
 
     name = "plugin_hooks"
-    order = 86
 
     def __init__(self, manifest: PluginManifest):
-        super().__init__()
         self._manifest = manifest
 
-    def init(self, agent: Any) -> None:
-        hook_manager = getattr(agent, "_hook_manager", None)
-        if hook_manager is not None:
-            hook_manager.register_plugin_hooks(self._manifest.hooks_config)
+    def apply(self, hook_manager: Any) -> None:
+        hook_manager.register_plugin_hooks(self._manifest.hooks_config)

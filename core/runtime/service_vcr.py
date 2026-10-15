@@ -1,16 +1,14 @@
-"""VCRFeature — LLM API call recording and replay for deterministic tests."""
-
+"""Framework-owned VCRService; not a legacy Feature or a plugin extension."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from core.features.base import AgentFeature
 
 if TYPE_CHECKING:
     from agents.codeAgent import CodeAgent
 
 
-class VCRFeature(AgentFeature):
+class VCRService:
     """Intercepts LLM calls to replay cached fixtures or record new ones.
 
     Only active when ``VCR_ENABLED=true``.
@@ -19,7 +17,7 @@ class VCRFeature(AgentFeature):
     name = "vcr"
     order = 90
 
-    def init(self, agent: "CodeAgent") -> None:
+    def start(self, agent: "CodeAgent") -> None:
         from core.vcr import VCR
 
         agent._vcr = VCR.from_env()
@@ -41,3 +39,7 @@ class VCRFeature(AgentFeature):
             tool_choice=tool_choice,
             fallback=fallback,
         )
+
+    def close(self, agent) -> None:
+        """Owned manager is process-local and has no external close action."""
+        pass

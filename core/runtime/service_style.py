@@ -1,17 +1,15 @@
-"""OutputStyleFeature — response style switching (default/explanatory/learning)."""
-
+"""Framework-owned StyleService; not a legacy Feature or a plugin extension."""
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
 
-from core.features.base import AgentFeature
 
 if TYPE_CHECKING:
     from agents.codeAgent import CodeAgent
 
 
-class OutputStyleFeature(AgentFeature):
+class StyleService:
     """Injects output-style prompts into the L1 system message.
 
     Uses the ``{output_style}`` placeholder in L1_system_prompt.py.
@@ -20,7 +18,7 @@ class OutputStyleFeature(AgentFeature):
     name = "output_style"
     order = 80
 
-    def init(self, agent: "CodeAgent") -> None:
+    def start(self, agent: "CodeAgent") -> None:
         from core.output_styles import OutputStyleManager
 
         env_style = getattr(agent.config, "output_style", "") or os.getenv("AGENT_OUTPUT_STYLE", "")
@@ -30,7 +28,11 @@ class OutputStyleFeature(AgentFeature):
             env_style=env_style if env_style else None,
         )
 
-    def post_init(self, agent: "CodeAgent") -> None:
+    def post_start(self, agent: "CodeAgent") -> None:
         """Push style prompt into context builder (needs context_builder ready)."""
         prompt = agent._output_style_manager.get_current_prompt()
         agent.context_builder.set_output_style_prompt(prompt)
+
+    def close(self, agent) -> None:
+        """Owned manager is process-local and has no external close action."""
+        pass

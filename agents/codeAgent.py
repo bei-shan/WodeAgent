@@ -34,15 +34,17 @@ from core.session_store import save_session_snapshot, load_session_snapshot
 from core.team_engine.display_mode import resolve_teammate_mode
 from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
-from core.features import collect_all_features
-from core.features.base import AgentFeature
-from core.features.lifecycle import FeatureLifecycle
 from core.runtime.services import RuntimeServices
 from core.runtime.middleware import PolicyMiddlewarePipeline
 from core.runtime.service_mcp import MCPService
 from core.runtime.service_teams import TeamService
 from core.runtime.service_sessions import SessionService
 from core.runtime.service_sandbox import SandboxService
+from core.runtime.service_worktree import WorktreeService
+from core.runtime.service_background import BackgroundService
+from core.runtime.service_style import StyleService
+from core.runtime.service_hooks import HookService
+from core.runtime.service_vcr import VCRService
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
@@ -121,7 +123,7 @@ class CodeAgent(Agent):
         self.delegate_mode = bool(getattr(self.config, "delegate_mode", False))
         if self.teammate_mode_warning:
             self.logger.warning(self.teammate_mode_warning)
-        # TeamManager is initialized by AgentTeamsFeature to keep feature lifecycle single-owned.
+        # TeamService creates TeamManager when enabled.
         self.team_manager = None
         self.logger.info(
             "AgentTeams enabled=%s, team_store_dir=%s, task_store_dir=%s, teammate_mode=%s, teammate_runtime_mode=%s, delegate_mode=%s",
@@ -136,33 +138,42 @@ class CodeAgent(Agent):
         # ── Core initialisation ──
         self._init_core()
 
-        # Explicit, per-Agent service owners; features remain compatibility
-        # bridges and middleware, not owners of MCP/session/team/sandbox.
+        # Framework-owned state with explicit lifecycle; no AgentFeature ABI.
         self._runtime_services = RuntimeServices(self)
+        self._runtime_services.register("worktree", WorktreeService)
         self._runtime_services.register("mcp", MCPService)
         self._runtime_services.register("teams", TeamService, requires=("mcp",))
+        self._runtime_services.register("background", BackgroundService)
+        self._runtime_services.register("style", StyleService)
+        self._runtime_services.register("hooks", HookService)
+        self._runtime_services.register("vcr", VCRService)
         self._runtime_services.register("session", SessionService)
         self._runtime_services.register("sandbox", SandboxService)
         self._worktree_manager = None
         self._background_runner = None
+        self._hook_system_messages = []
+        self._hook_session_context = []
+        self._tool_interceptors = ()
+        self._model_interceptors = ()
 
-        # Security policies are mandatory and initialize before optional
-        # Feature/Plugin adapters; they cannot be displaced by plugin order.
         self._policy_middleware = PolicyMiddlewarePipeline(self)
         self._policy_middleware.initialize()
 
-        # Explicit feature transaction. Partially initialized features must
-        # be cleaned up if any later init/post-init or tool bootstrap fails.
-        self._features: list[AgentFeature] = collect_all_features(self)
-        self._feature_lifecycle = FeatureLifecycle(self, self._features)
         try:
-            self._feature_lifecycle.initialize()
+            # Hosted identities may only provision an isolated shell; never
+            # initialize host file, plugin, MCP, hook or session resources.
+            if self._hosted_tool_authority is None:
+                for service in (
+                    "worktree", "mcp", "teams", "background",
+                    "style", "hooks", "vcr", "session",
+                ):
+                    self._runtime_services.ensure(service)
 
-            # ── Tool registration (needs feature dependencies) ──
             self._init_tools()
-
-            # ── Features post-init (needs tools + context builder) ──
-            self._feature_lifecycle.post_initialize()
+            self._runtime_services.post_start()
+            if self._hosted_tool_authority is None:
+                self._tool_interceptors = (self._runtime_services.get("hooks"),)
+                self._model_interceptors = (self._runtime_services.get("vcr"),)
 
             # Deferred catalog sees fully registered tools.
             self._configure_tool_discovery()
@@ -481,16 +492,19 @@ class CodeAgent(Agent):
                 model_id=model_name,
             )
 
-        # Dispatch the on_model_changed event to all features. Errors per
-        # feature are swallowed so one reactor's bug doesn't break the switch.
-        for feat in getattr(self, "_features", []):
-            try:
-                feat.on_model_changed(self, previous, model_name)
-            except Exception as exc:  # pragma: no cover - defensive
-                self.logger.warning(
-                    "Feature %s.on_model_changed raised: %s",
-                    getattr(feat, "name", type(feat).__name__), exc,
-                )
+        # Observers belong to explicitly owned runtime components.
+        for observer in (
+            getattr(self, "_policy_middleware", None),
+            getattr(self, "_runtime_services", None) and self._runtime_services.get("session"),
+        ):
+            if observer is None:
+                continue
+            callback = getattr(observer, "on_model_changed", None)
+            if callable(callback):
+                try:
+                    callback(self, previous, model_name)
+                except Exception as exc:
+                    self.logger.warning("Model-change observer unavailable: %s", exc)
 
     # ------------------------------------------------------------------
     # Output Styles
@@ -616,52 +630,15 @@ class CodeAgent(Agent):
         return AgentTurnLifecycle(self).run(input_text, **kwargs)
 
     def close(self):
-        """Close the Agent: run feature cleanups in reverse-init order,
-        then finalize framework-level state (trace logger).
-
-        Idempotent: calling close() more than once is a no-op after the
-        first invocation. Per-feature exceptions are logged but do not
-        abort the chain — every feature gets its chance to clean up
-        even if an earlier one fails.
-
-        Cleanup flow (LIFO over self._features by order):
-            100 SessionFeature  → save final snapshot
-             90 VCRFeature      → (no-op)
-             85 HookFeature     → run SessionEnd hooks
-             70 BackgroundTask  → (no-op)
-             60 PlanMode        → (no-op)
-             55 Budget          → (no-op)
-             40 DelegateMode    → (no-op)
-             30 AgentTeams      → team_manager.shutdown()
-             25 MCP             → close all mcp clients
-             20 Worktree        → (no-op; ExitWorktree tool handles its own)
-            [framework]         → trace_logger.finalize()
-        """
+        """Idempotently dispose owned services, sandbox and tracing."""
         if getattr(self, "_closed", False):
             return
         self._closed = True
 
-        # Only entered features are disposed, including one that failed
-        # partway through init(). An unentered feature must never run cleanup.
-        lifecycle = getattr(self, "_feature_lifecycle", None)
-        if lifecycle is not None:
-            lifecycle.close()
-        else:
-            for feat in reversed(getattr(self, "_features", []) or []):
-                try:
-                    feat.cleanup(self)
-                except Exception as exc:
-                    self.logger.warning(
-                        "Feature %s.cleanup failed: %s",
-                        getattr(feat, "name", type(feat).__name__), exc,
-                    )
-
-        # A failed constructor also closes partially-started services.
         runtime_services = getattr(self, "_runtime_services", None)
         if runtime_services is not None:
             runtime_services.close()
-
-        # Close owned VM resources even if another feature cleanup raised.
+        # Only cover constructor failures before SandboxService was installed.
         sandbox_provider = getattr(self, "_sandbox_provider", None)
         if sandbox_provider is not None:
             try:
@@ -671,8 +648,6 @@ class CodeAgent(Agent):
             except Exception:
                 self.logger.warning("Isolated sandbox cleanup failed")
             self._sandbox_provider = None
-
-        # Framework-level teardown (not associated with any feature).
         if getattr(self, "trace_logger", None):
             try:
                 self.trace_logger.finalize()
@@ -698,15 +673,21 @@ class CodeAgent(Agent):
     # ------------------------------------------------------------------
 
     def _collect_runtime_blocks(self, step: int) -> None:
-        """Collect system prompt blocks from all Features.
-
-        Each Feature contributes zero or more system-level text blocks
-        that are injected into the next LLM call without polluting the
-        user message history.
-        """
+        """Collect core policy, resource status and approved hook context."""
         blocks: list[str] = []
-        for feat in self._features:
-            blocks.extend(feat.runtime_blocks(self, step))
+        services = getattr(self, "_runtime_services", None)
+        for name in ("mcp", "teams"):
+            service = services.get(name) if services else None
+            if service is not None:
+                blocks.extend(service.runtime_blocks(self, step))
+        for policy in self._policy_middleware.policies:
+            runtime_blocks = getattr(policy, "runtime_blocks", None)
+            if callable(runtime_blocks):
+                blocks.extend(runtime_blocks(self, step))
+        for name in ("background", "hooks"):
+            service = services.get(name) if services else None
+            if service is not None:
+                blocks.extend(service.runtime_blocks(self, step))
         if blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
             self.context_builder.set_runtime_system_blocks(blocks)
 
@@ -748,7 +729,7 @@ class CodeAgent(Agent):
                     self.llm, streaming=bool(getattr(self.config, "llm_streaming", True)),
                 ).invoke(
                     messages=messages, tools_schema=tools_schema,
-                    tool_choice=tool_choice, features=self._features,
+                    tool_choice=tool_choice, interceptors=self._model_interceptors,
                     agent=self, on_delta=_on_delta,
                 )
             except Exception:
@@ -859,7 +840,6 @@ class CodeAgent(Agent):
         Events, traces and history remain on the owning Agent thread. Unsafe
         calls are barriers, even if the model returned several calls at once.
         """
-        from core.features import BUILTIN_FEATURES
         from core.runtime.tool_scheduler import plan_tool_batches, run_tool_batch
         from core.runtime.tool_contracts import error_envelope
         from core.runtime.tool_runtime import ToolRuntime
@@ -917,11 +897,16 @@ class CodeAgent(Agent):
         max_workers = max(1, min(8, int(getattr(config, "tool_max_concurrency", 4))))
         hook_manager = getattr(self, "_hook_manager", None)
         hooks_active = bool(hook_manager and hook_manager.has_any_hooks)
-        # Plugin features may add mutable interceptors. Keep every tool serial
-        # unless the entire feature list consists of built-in implementations.
-        builtins_only = all(type(feature) in BUILTIN_FEATURES for feature in getattr(self, "_features", ()))
+        # Declarative hooks and any unknown interceptor are serial barriers.
+        # Only the framework-owned HookService is reviewed for concurrent
+        # read semantics. A test or local integration cannot gain parallel
+        # permission by merely inserting an arbitrary interceptor.
+        known_interceptors = all(
+            type(interceptor) is HookService
+            for interceptor in getattr(self, "_tool_interceptors", ())
+        )
         policy_allows_parallel = (
-            enabled and not hooks_active and builtins_only
+            enabled and not hooks_active and known_interceptors
             and not getattr(self, "delegate_mode", False)
             and not getattr(config, "budget_enforce", False)
         )
@@ -979,7 +964,7 @@ class CodeAgent(Agent):
                     try:
                         prepared[item["index"]] = staged_runtime.prepare(
                             item["name"], item["input"], agent=self,
-                            features=self._features,
+                            features=getattr(self, "_tool_interceptors", ()),
                             emit_messages=self._hook_system_messages.extend,
                         )
                     except Exception as exc:
@@ -1320,7 +1305,7 @@ class CodeAgent(Agent):
                 tool_name,
                 tool_input,
                 agent=self,
-                features=self._features,
+                features=getattr(self, "_tool_interceptors", ()),
                 emit_messages=self._hook_system_messages.extend,
                 record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
             )

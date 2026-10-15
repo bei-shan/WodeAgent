@@ -15,10 +15,8 @@ def code_bundle(name="fingerprint-test"):
         "version": "1.0.0",
         "features": {"custom_features": ["entry.py"], "skills": ["skills"]},
     }, extras={"entry.py": (
-        "from core.features.base import AgentFeature\n"
-        "class ReviewFeature(AgentFeature):\n"
-        "    name = 'review-feature'\n"
-        "    order = 60\n"
+        "from pathlib import Path\n"
+        "Path('/tmp/project-python-should-never-import').write_text('unsafe')\n"
     )})
 
 
@@ -32,7 +30,7 @@ def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monke
     catalog.set_trusted("fingerprint-test", True)
     assert catalog.list_plugins()[0]["trust_valid"]
     assert catalog.code_trusted("fingerprint-test")
-    assert [f.name for f in PluginLoader(str(tmp_path)).discover()] == ["review-feature"]
+    assert PluginLoader(str(tmp_path)).discover() == []  # no Python entrypoints
 
     entry = tmp_path / ".mycode/plugins/fingerprint-test/entry.py"
     entry.write_text(entry.read_text() + "\n# changed after review\n")
@@ -46,7 +44,7 @@ def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monke
     catalog.set_trusted("fingerprint-test", False)
     catalog.set_trusted("fingerprint-test", True)
     assert catalog.code_trusted("fingerprint-test")
-    assert [f.name for f in PluginLoader(str(tmp_path)).discover()] == ["review-feature"]
+    assert PluginLoader(str(tmp_path)).discover() == []  # no Python entrypoints
 
 
 def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkeypatch):
@@ -71,7 +69,7 @@ def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkey
     assert not catalog.code_trusted("asset-review")
 
 
-def test_legacy_trusted_boolean_is_not_sufficient(tmp_path, monkeypatch):
+def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("legacy-review"))

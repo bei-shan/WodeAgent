@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.codeAgent import CodeAgent
-from core.features.plan_mode import PlanModeFeature
+from core.runtime.policy_middleware import PlanModeMiddleware
 from core.runtime.tool_runtime import ToolRuntime
 from tools.base import Tool, ToolParameter
 from tools.registry import ToolRegistry
@@ -30,9 +30,13 @@ class _ProbeTool(Tool):
         return json.dumps({"status": "success", "data": {"called": True}})
 
 
-def _run(runtime, agent, feature, tool, params):
+def _run(runtime, agent, policy, tool, params):
+    # Core policy is mandatory middleware, never an optional plugin hook.
+    agent._policy_middleware = SimpleNamespace(
+        before_tool=lambda name, args: policy.pre_tool_use(agent, name, args),
+    )
     return json.loads(runtime.execute(
-        tool, params, agent=agent, features=[feature],
+        tool, params, agent=agent, features=[],
         emit_messages=lambda _: None, record_timing=lambda *_: None,
     ))
 
@@ -43,9 +47,9 @@ def test_plan_mode_not_just_schema_filter_but_hard_execution_guard():
     bash = _ProbeTool("Bash")
     registry.register_tool(read)
     registry.register_tool(bash)
-    feature = PlanModeFeature()
+    feature = PlanModeMiddleware()
     agent = SimpleNamespace()
-    feature.init(agent)
+    feature.start(agent)
     agent._in_plan_mode = True
 
     runtime = ToolRuntime(registry, logging.getLogger("plan-execution-guard"))
@@ -75,7 +79,7 @@ def test_plan_mode_tool_discovery_matches_runtime_policy():
     agent.tool_registry = registry
     agent._in_plan_mode = True
     agent.delegate_mode = False
-    agent.PLAN_MODE_TOOLS = PlanModeFeature.PLAN_MODE_TOOLS
+    agent.PLAN_MODE_TOOLS = PlanModeMiddleware.PLAN_MODE_TOOLS
     names = {t["function"]["name"] for t in agent._get_openai_tools_for_current_mode()}
     assert names == {"Read"}
 

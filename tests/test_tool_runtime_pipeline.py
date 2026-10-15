@@ -108,7 +108,7 @@ def test_codeagent_delegates_to_tool_runtime_without_full_engine():
     events = []
     agent.tool_registry = FakeDispatcher(events)
     agent.logger = logging.getLogger("test")
-    agent._features = [FakeFeature("one", events)]
+    agent._tool_interceptors = [FakeFeature("one", events)]
     agent._hook_system_messages = []
     result = agent._execute_tool("Read", {"path": "."})
     assert result == '{"status":"success"}'
