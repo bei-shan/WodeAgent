@@ -135,7 +135,9 @@ class ContextBuilder:
         # Tool usage notes from live registry (pure memory, always fresh)
         usage_lines: List[str] = []
         try:
-            tools = self.tool_registry.get_all_tools()
+            visible_tools = getattr(self.tool_registry, "get_prompt_tools", None)
+            tools = (visible_tools() if callable(visible_tools)
+                     else self.tool_registry.get_all_tools())
         except Exception:
             tools = []
 
