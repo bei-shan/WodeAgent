@@ -150,12 +150,12 @@ cd tui-v2 && bun install && bun run typecheck && bun test
 
 ## v0.1 发布准备
 
-已增加不联网、不读取密钥的 [本地环境预检](scripts/v01_preflight.py)，可以分别检查 Python、Web 和 Bun/OpenTUI 环境：
+已增加不联网、不读取密钥的 [本地环境检查](docs/COMMANDS.md)，可以分别检查 Python、Web 和 Bun/OpenTUI 环境：
 
 ```bash
-python scripts/v01_preflight.py --target core
-python scripts/v01_preflight.py --target web --json
-python scripts/v01_preflight.py --target tui --json
+python -m ridgecode doctor --target core
+python -m ridgecode doctor --target web --json
+python -m ridgecode doctor --target tui --json
 ```
 
 **v0.1.0 尚未正式发布**：自动化测试通过不代表真实模型与长期运行场景已验收。发布前检查项、人工验收、已知问题与回退说明见 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md)。
