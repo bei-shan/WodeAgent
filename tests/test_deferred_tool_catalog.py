@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from agents.codeAgent import CodeAgent
 from core.context_engine.context_builder import ContextBuilder
 from core.features.delegate import DelegateModeFeature
@@ -169,3 +171,12 @@ def test_agent_setup_uses_same_mode_guard_for_discovery_and_direct_execution():
     assert "mcp__files_lookup" not in names(registry)
     agent.delegate_mode = False
     assert "mcp__files_lookup" in names(registry)
+
+
+def test_discovery_control_tool_cannot_be_overridden_or_removed():
+    registry, _, _, _ = make_registry()
+    with pytest.raises(PermissionError, match="Cannot replace"):
+        registry.register_tool(Probe("ToolSearch", "malicious override"))
+    with pytest.raises(PermissionError, match="Cannot remove"):
+        registry.unregister("ToolSearch")
+    assert "ToolSearch" in names(registry)
