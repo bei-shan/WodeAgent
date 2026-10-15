@@ -160,6 +160,28 @@ class DockerCommandProvider:
         timeout or interrupt; killing the CLI alone would leave work running.
         An injected runner retains the legacy synchronous testing seam.
         """
+        return self._execute_impl(
+            command, directory, timeout_seconds,
+            cancel_event=cancel_event, stdin_data=None,
+        )
+
+    def execute_stdin(
+        self, command: str, stdin_data: bytes,
+        directory: str = ".", timeout_seconds: float = 120,
+        *, cancel_event: Event | None = None,
+    ) -> CommandResult:
+        """Stream bounded bytes over Docker -i, never via command-line argv."""
+        if not isinstance(stdin_data, bytes) or len(stdin_data) > 65536:
+            raise ValueError("Docker stdin payload is invalid or exceeds 64 KiB")
+        return self._execute_impl(
+            command, directory, timeout_seconds,
+            cancel_event=cancel_event, stdin_data=stdin_data,
+        )
+
+    def _execute_impl(
+        self, command: str, directory: str, timeout_seconds: float,
+        *, cancel_event: Event | None, stdin_data: bytes | None,
+    ) -> CommandResult:
         if (isinstance(timeout_seconds, bool)
                 or not isinstance(timeout_seconds, (int, float))
                 or not math.isfinite(timeout_seconds)
@@ -168,6 +190,9 @@ class DockerCommandProvider:
         argv, container_name = self.command_argv(
             command, directory, timeout_seconds=timeout_seconds,
         )
+        if stdin_data is not None:
+            # -i is the only extra Docker capability. No tty or ports.
+            argv.insert(2, "-i")
         if cancel_event is not None and cancel_event.is_set():
             return CommandResult("", "", None, interrupted=True)
         self._leases.activate(container_name)
@@ -175,21 +200,25 @@ class DockerCommandProvider:
             if self._runner_injected:
                 # Deterministic fake runners used by the CLI argument tests.
                 result = self._run(
-                    argv, capture_output=True, text=True,
+                    argv, capture_output=True, text=stdin_data is None,
+                    **({"input": stdin_data} if stdin_data is not None else {}),
                     timeout=timeout_seconds, check=False,
                 )
                 if cancel_event is not None and cancel_event.is_set():
                     self._force_remove(container_name)
                     return CommandResult("", "", None, interrupted=True)
                 return CommandResult(
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
+                    stdout=(result.stdout or b"").decode("utf-8", "replace")
+                    if isinstance(result.stdout, bytes) else (result.stdout or ""),
+                    stderr=(result.stderr or b"").decode("utf-8", "replace")
+                    if isinstance(result.stderr, bytes) else (result.stderr or ""),
                     exit_code=result.returncode,
                 )
 
             result = run_process(
                 argv, shell=False, cwd=str(self.workspace), env=os.environ.copy(),
                 timeout=timeout_seconds, cancel_event=cancel_event,
+                **({"stdin_data": stdin_data} if stdin_data is not None else {}),
             )
             if result.timed_out or result.interrupted:
                 self._force_remove(container_name)

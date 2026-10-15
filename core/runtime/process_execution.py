@@ -55,12 +55,15 @@ def run_process(
     timeout: float,
     cancel_event: Event | None = None,
     poll_interval: float = 0.1,
+    stdin_data: bytes | None = None,
 ) -> ProcessOutcome:
     """Run a process with a hard deadline and optional cooperative interrupt.
 
     No external stdout/stderr callbacks are invoked on worker threads.
     Cancellation is scoped to one invocation, not a global process list.
     """
+    if stdin_data is not None and not isinstance(stdin_data, bytes):
+        raise ValueError("stdin_data must be bytes")
     if cancel_event is not None and cancel_event.is_set():
         return ProcessOutcome("", "", None, interrupted=True)
     opts: dict[str, Any] = {"start_new_session": True} if os.name == "posix" else {}
@@ -70,9 +73,12 @@ def run_process(
         opts["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(
         args, shell=shell, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if stdin_data is not None else None,
+        text=stdin_data is None,
         **opts,
     )
+    input_pending = stdin_data
     deadline = time.monotonic() + timeout
     timed_out = False
     interrupted = False
@@ -87,7 +93,15 @@ def run_process(
                 break
             wait = min(remaining, poll_interval) if cancel_event is not None else remaining
             try:
-                stdout, stderr = process.communicate(timeout=wait)
+                try:
+                    stdout, stderr = process.communicate(
+                        input=input_pending, timeout=wait,
+                    )
+                finally:
+                    # CPython's communicate resumes pending pipe writes after
+                    # a TimeoutExpired; resending the bytes would duplicate
+                    # data or raise ValueError on the second invocation.
+                    input_pending = None
                 return ProcessOutcome(_as_text(stdout), _as_text(stderr), process.returncode)
             except subprocess.TimeoutExpired:
                 continue

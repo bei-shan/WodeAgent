@@ -31,7 +31,7 @@ from a privileged daemon/operator.
 - A directory listing is capped at **128 entries**, failing rather than
   silently producing an incomplete result.
 - Result payloads are capped at 160 KiB and validated before decoding.
-- All data is binary-safe using base64 over a bounded JSON guest response.
+- Reads are binary-safe using base64 over a bounded JSON guest response.\n- **Docker writes transport bytes via an attached stdin stream** with `docker run -i`, not CLI argument text, process environment or Docker labels. Command arguments contain only the trusted guest Python script and validated relative path.\n- **BoxLite writes currently fail closed**: its selected `SimpleBox.exec()` adapter does not expose a verified binary stdin stream, so file contents are never embedded in command argv. Reads and directory listing remain available on BoxLite.
 - Guest command timeout/interrupt is forwarded through the existing Docker
   cancellation or BoxLite VM path. Failures never run local filesystem tools.
 - Both supported default Python images provide `python3` in the guest.
@@ -45,11 +45,11 @@ capability/permission, auditing and write-conflict tests.
 ## Verification
 
 ```bash
-python -m pytest tests/test_sandbox_guest_files.py -q
+python -m pytest tests/test_sandbox_guest_files.py tests/test_sandbox_stdin.py -q
 AGENT_DOCKER_INTEGRATION=1 python -m pytest tests/test_sandbox_docker_integration.py -q
 ```
 
-CI covers mocked protocol failures and a **real Docker** symlink and binary
+CI covers secure stdin protocol and failure regressions plus a **real Docker** symlink and binary
 round trip. Real BoxLite KVM/HVF acceptance, file upload/download larger than
 the single-command budget, safe artifact publication, and concurrent VM
 workspace mutation audits are remaining Issue #75 tasks.
