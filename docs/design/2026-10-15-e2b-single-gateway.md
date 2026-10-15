@@ -64,9 +64,36 @@ server-side VM timeout is a secondary cleanup guard. A stuck SDK worker may
 outlive the caller until the network recovers. The local ledger is deliberately
 *not* represented as an organization-wide capacity limit.
 
+## Optional Redis-atomic capacity ledger
+
+As a separate opt-in, `core/sandbox/e2b_redis_capacity.py` implements
+atomic Lua `reserve/track/release` operations with owner-token comparison,
+a deployment-wide configured hard cap, and persisted remote VM IDs.
+
+```dotenv
+AGENT_SANDBOX_E2B_REDIS_LEDGER_ENABLED=true
+AGENT_SANDBOX_E2B_DEPLOYMENT=staging
+E2B_REDIS_URL=rediss://...  # supply via secret manager
+```
+
+Install the optional `redis` SDK and configure a dedicated, trusted Redis
+deployment. Redis credentials remain in the process environment and are not
+copied into `Config` or model prompts. No fallback to local reservations
+occurs if Redis denies, disconnects, times out or reports a capacity limit
+mismatch. The Redis hash records `token -> owner:remote_id`, with atomic
+owner-token check before deleting a slot. Reservations have **no automatic
+TTL**; a gateway crash never means the remote VM is known to be dead.
+
+This gives a bounded *deployment-wide reservation ledger*, not the entire
+DeerFlow distributed sandbox ownership solution. Remote VM adoption,
+lease heartbeat/fencing for SDK commands, reconciling owner crashes, and
+verified operator-controlled recovery of stuck reservations are still
+required. Therefore `AGENT_SANDBOX_E2B_SINGLE_GATEWAY_ACK=true` remains
+mandatory even with Redis enabled. **Do not run multiple gateways yet.**
+
 ## Intentionally missing (required for production parity)
 
-- No Redis-backed **atomic distributed capacity and fenced ownership** yet.
+- Redis-backed atomic capacity and token-fenced release are optional, but there is **no full distributed session ownership or gateway failover** yet.
   These are prerequisites before enabling multi-Gateway operation. Never
   initialize multiple processes and rely on this per-process limiter.
 - No remote VM discovery, cross-process adoption, or opportunistic deletion.
