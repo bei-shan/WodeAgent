@@ -41,4 +41,9 @@ def test_plugin_loader_cannot_import_project_python_entrypoints():
     source = inspect.getsource(PluginLoader)
     assert "exec_module" not in source
     assert "spec_from_file_location" not in source
-    assert "custom_features" in source  # explicitly documented inert legacy field
+    # The loader never recognizes an executable Python plugin contribution.
+    assert "custom_features" not in source
+    from core.plugin_loader import PluginManifest
+    validator = inspect.getsource(PluginManifest)
+    assert '"custom_features" in parts' in validator
+    assert "not supported" in validator
