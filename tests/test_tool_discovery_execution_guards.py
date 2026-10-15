@@ -45,7 +45,7 @@ def test_plan_mode_not_just_schema_filter_but_hard_execution_guard():
     registry.register_tool(bash)
     feature = PlanModeMiddleware()
     agent = SimpleNamespace()
-    feature.init(agent)
+    feature.start(agent)
     agent._in_plan_mode = True
 
     runtime = ToolRuntime(registry, logging.getLogger("plan-execution-guard"))
