@@ -77,6 +77,17 @@ def create_hosted_app(
     async def liveness():
         return {"status": "alive"}
 
+    @app.get("/api/health/ready")
+    async def readiness():
+        """Fail closed if DB, runtime role or row-level protection is missing."""
+        import asyncio
+        try:
+            if await asyncio.to_thread(store.production_probe):
+                return {"status": "ready"}
+        except Exception:
+            pass
+        raise HTTPException(503, "Storage security check failed")
+
     @app.get("/api/v2/sessions")
     async def list_sessions(identity: HostedIdentity = Depends(authenticated)):
         import asyncio
