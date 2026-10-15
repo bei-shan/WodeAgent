@@ -180,3 +180,19 @@ def test_discovery_control_tool_cannot_be_overridden_or_removed():
     with pytest.raises(PermissionError, match="Cannot remove"):
         registry.unregister("ToolSearch")
     assert "ToolSearch" in names(registry)
+
+
+def test_failed_authorization_callback_does_not_disclose_or_promote():
+    def broken_scope(name):
+        if name == "mcp__files_lookup":
+            raise RuntimeError("backend auth provider unavailable")
+        return True
+
+    registry, state, _, remote = make_registry(scope=broken_scope)
+    response = json.loads(registry.execute_tool("ToolSearch", {"query": "files"}))
+    assert response["status"] == "success"
+    assert response["data"]["matches"] == []
+    assert state.promoted_names() == frozenset()
+    denied = json.loads(registry.execute_tool("mcp__files_lookup", {"value": "x"}))
+    assert denied["error"]["code"] == "PERMISSION_DENIED"
+    assert remote.calls == 0
