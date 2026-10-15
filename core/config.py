@@ -43,7 +43,7 @@ class Config(BaseModel):
     tool_max_concurrency: int = 4
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
-    sandbox_mode: str = "local_trusted"  # "local_trusted", "docker", "boxlite"
+    sandbox_mode: str = "local_trusted"  # local_trusted | docker | boxlite | e2b
     sandbox_docker_image: str = "python:3.12-alpine"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
@@ -55,6 +55,12 @@ class Config(BaseModel):
     sandbox_boxlite_stdin_enabled: bool = False  # opt in after SDK/HVF/KVM acceptance
     sandbox_boxlite_warm_enabled: bool = False  # opt in after actual HVF/KVM validation
     sandbox_boxlite_warm_idle_seconds: int = 60
+    # Remote E2B VM requires explicit single-gateway risk acceptance.
+    # E2B_API_KEY is read ONLY by the provider, not copied into config/logs.
+    sandbox_e2b_template: str = "code-interpreter-v1"
+    sandbox_e2b_ttl_seconds: int = 300
+    sandbox_e2b_capacity: int = 2
+    sandbox_e2b_single_gateway_ack: bool = False
 
     # ===== AgentTeams =====
     enable_agent_teams: bool = False
@@ -179,6 +185,10 @@ class Config(BaseModel):
             sandbox_boxlite_stdin_enabled=env_bool("AGENT_SANDBOX_BOXLITE_STDIN_ENABLED", False),
             sandbox_boxlite_warm_enabled=env_bool("AGENT_SANDBOX_BOXLITE_WARM_ENABLED", False),
             sandbox_boxlite_warm_idle_seconds=env_int("AGENT_SANDBOX_BOXLITE_WARM_IDLE_SECONDS", 60),
+            sandbox_e2b_template=env_str("AGENT_SANDBOX_E2B_TEMPLATE", "code-interpreter-v1"),
+            sandbox_e2b_ttl_seconds=env_int("AGENT_SANDBOX_E2B_TTL_SECONDS", 300),
+            sandbox_e2b_capacity=env_int("AGENT_SANDBOX_E2B_CAPACITY", 2),
+            sandbox_e2b_single_gateway_ack=env_bool("AGENT_SANDBOX_E2B_SINGLE_GATEWAY_ACK", False),
             # AgentTeams
             enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),
