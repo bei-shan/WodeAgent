@@ -21,6 +21,10 @@ class CommandResult:
     interrupted: bool = False
 
 
+class SandboxUnavailable(RuntimeError):
+    """An isolated backend cannot be used; never fall back to host execution."""
+
+
 class SandboxCommandProvider(Protocol):
     workspace: Path
     kind: str
