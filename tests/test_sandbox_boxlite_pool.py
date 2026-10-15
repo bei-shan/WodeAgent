@@ -58,9 +58,11 @@ def test_released_vm_reused_for_its_own_session_only():
     try:
         assert p.acquire("session-a") == "session-a"
         assert p.counts == (1, 0, 0)
-        first = p.execute("session-a", lambda box: box.exec("sh", "-lc", "echo good"),
-                          timeout_seconds=3)
-        assert first.stdout == "guest-ok" if isinstance(first, CommandResult) else True
+        async def eval_command(box):
+            raw = await box.exec("sh", "-lc", "echo good")
+            return CommandResult(raw.stdout, raw.stderr, raw.exit_code)
+        first = p.execute("session-a", eval_command, timeout_seconds=3)
+        assert first.stdout == "guest-ok"
         p.release("session-a")
         assert p.counts == (0, 1, 0)
         p.acquire("session-a")
