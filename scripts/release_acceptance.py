@@ -271,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", required=True, choices=(*SCOPES, "summary"))
     parser.add_argument("--output-dir", default="acceptance-evidence")
     parser.add_argument("--approve-e2b-billing", action="store_true")
+    parser.add_argument("--require-component-gates", action="store_true",
+                        help="Fail CI unless component, docker and live Redis pass")
     args = parser.parse_args(argv)
     sha = commit_sha()
     directory = Path(args.output_dir)
@@ -284,6 +286,11 @@ def main(argv: list[str] | None = None) -> int:
             markdown_report(result), encoding="utf-8",
         )
         print(markdown_report(result))
+        if args.require_component_gates and any(
+            result["gate_evidence"][name]["status"] != "PASS"
+            for name in ("component", "docker", "redis")
+        ):
+            return 2
         return 0  # Summary generation is not production authorization.
     outcome = run_scope(
         args.scope, sha, directory, approved_billing=args.approve_e2b_billing,
