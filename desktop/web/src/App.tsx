@@ -3,6 +3,7 @@ import * as api from './api'
 import FileBrowser from './FileBrowser'
 import ChatComposer from './components/ChatComposer'
 import MessageContent from './components/MessageContent'
+import ExecutionPanel from './components/ExecutionPanel'
 import TracePanel from './components/TracePanel'
 import PluginsPanel from './components/PluginsPanel'
 import { createSessionEventHandler } from './state/sessionEvents'
@@ -48,6 +49,7 @@ function AppCore() {
   const [activeSid, setActiveSid] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [tools, setTools] = useState<ToolEntry[]>([])
+  const [executionOpen, setExecutionOpen] = useState(false)
   const [permReq, setPermReq] = useState<PermRequest | null>(null)
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
@@ -111,6 +113,7 @@ function AppCore() {
     activeSidRef.current = sid
     const isCurrent = () => activeSidRef.current === sid && selectionVersion.current === version
     setActiveSid(sid); setMessages([]); setTools([]); setPermReq(null); setAskReq(null)
+    setExecutionOpen(false)
     setGeneratedFiles([]); setSubagentStatus('')
     try {
       await api.sessions.activate(sid)
@@ -160,6 +163,8 @@ function AppCore() {
       ++selectionVersion.current
       activeSidRef.current = null
       setActiveSid(null)
+      setExecutionOpen(false)
+      setTools([])
       disconnectSession()
     }
     try { await api.sessions.delete(sid) } catch (e: any) {
@@ -451,6 +456,14 @@ function AppCore() {
                 {streamConnected ? '实时连接正常' : '连接中 / 自动重连…'}
               </div>
             )}
+            {activeSid && sidebarTab === 'sessions' && (
+              <button type="button" className="execution-launch" aria-expanded={executionOpen}
+                onClick={() => setExecutionOpen(value => !value)}>
+                <Svg d={Icons.clock} size={16} />
+                <span className="hidden sm:inline">执行详情</span>
+                {tools.length > 0 && <span className="execution-count">{tools.length}</span>}
+              </button>
+            )}
             {sending && (
               <button type="button" onClick={interrupt}
                 className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">停止生成</button>
@@ -544,6 +557,7 @@ function AppCore() {
           </div>
         )}
       </main>
+      {sidebarTab === 'sessions' && <ExecutionPanel tools={tools} open={executionOpen} onClose={() => setExecutionOpen(false)} />}
 
       {/* Confirm delete modal */}
       {confirmDelete && (
