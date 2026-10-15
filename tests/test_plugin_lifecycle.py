@@ -340,3 +340,22 @@ def test_skill_list_response_retains_standard_timing_envelope(tmp_path):
     result = parse_response(tool.run({"action": "list"}))
     assert result["status"] == "success"
     assert result["data"]["skills"] == []
+
+
+def test_unmanaged_local_python_feature_manifest_cannot_be_enabled(tmp_path, monkeypatch):
+    """Fail closed even if an old project directory bypasses ZIP installation."""
+    folder = tmp_path / ".mycode/plugins/unmanaged-python"
+    folder.mkdir(parents=True)
+    (folder / "plugin.json").write_text(json.dumps({
+        "name": "unmanaged-python",
+        "features": {"custom_features": ["run.py"]},
+    }))
+    (folder / "run.py").write_text("raise RuntimeError('should never import')")
+    catalog = PluginCatalog(tmp_path)
+    assert catalog.manifests() == []
+    assert catalog.list_plugins() == []
+    with pytest.raises(KeyError, match="not found"):
+        catalog.set_enabled("unmanaged-python", True)
+    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    assert PluginLoader(str(tmp_path)).discover() == []
