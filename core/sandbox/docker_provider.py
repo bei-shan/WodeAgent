@@ -18,6 +18,8 @@ from threading import Event
 from typing import Callable
 
 from core.runtime.process_execution import run_process
+from core.sandbox.docker_lifecycle import (DockerLeaseManager, SandboxLeaseError,
+    installation_key_path, shared_lease_manager)
 
 
 class SandboxUnavailable(RuntimeError):
@@ -44,6 +46,7 @@ class DockerCommandProvider:
         pids_limit: int = 64,
         docker_binary: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
+        lease_manager: DockerLeaseManager | None = None,
     ):
         if os.name != "posix":
             raise SandboxUnavailable("Docker sandbox currently requires a POSIX host")
@@ -73,8 +76,31 @@ class DockerCommandProvider:
         self.pids_limit = pids_limit
         self._run = runner or subprocess.run
         self._runner_injected = runner is not None
+        try:
+            if lease_manager is not None:
+                self._leases = lease_manager
+            elif runner is not None:
+                # Fake runners never touch the operator's persistent key.
+                self._leases = DockerLeaseManager(
+                    binary, secrets.token_bytes(32), runner=runner,
+                )
+            else:
+                secret_path = installation_key_path()
+                try:
+                    secret_path.relative_to(self.workspace)
+                except ValueError:
+                    pass
+                else:
+                    raise SandboxUnavailable(
+                        "Workspace would expose the private sandbox owner key"
+                    )
+                self._leases = shared_lease_manager(binary)
+        except SandboxLeaseError as exc:
+            raise SandboxUnavailable(
+                "Private Docker ownership cannot be established"
+            ) from exc
 
-    def command_argv(self, command: str, directory: str = ".") -> tuple[list[str], str]:
+    def command_argv(self, command: str, directory: str = ".", *, timeout_seconds: float = 120) -> tuple[list[str], str]:
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Command must be a non-empty string")
         if "\x00" in command:
@@ -92,6 +118,7 @@ class DockerCommandProvider:
             raise ValueError("Working directory is not a directory")
 
         name = f"wodeagent-{secrets.token_hex(10)}"
+        labels = self._leases.labels(name, timeout_seconds)
         # Never inherit root identity into the container, even if the host
         # launches the service as root. Non-root projects should use the
         # workspace owner's UID/GID; root hosts fall back to nobody.
@@ -103,6 +130,8 @@ class DockerCommandProvider:
         argv = [
             self.docker_binary, "run",
             "--rm", "--pull=never", "--name", name,
+            *(flag for key, value in labels.items()
+              for flag in ("--label", f"{key}={value}")),
             "--network=none", "--read-only", "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--pids-limit", str(self.pids_limit),
@@ -148,9 +177,12 @@ class DockerCommandProvider:
                 or not math.isfinite(timeout_seconds)
                 or not 0 < timeout_seconds <= 600):
             raise ValueError("Command timeout is out of range")
-        argv, container_name = self.command_argv(command, directory)
+        argv, container_name = self.command_argv(
+            command, directory, timeout_seconds=timeout_seconds,
+        )
         if cancel_event is not None and cancel_event.is_set():
             return CommandResult("", "", None, interrupted=True)
+        self._leases.activate(container_name)
         try:
             if self._runner_injected:
                 # Deterministic fake runners used by the CLI argument tests.
@@ -186,3 +218,5 @@ class DockerCommandProvider:
             return CommandResult(stdout, stderr, None, timed_out=True)
         except OSError as exc:
             raise SandboxUnavailable("Docker invocation failed; host fallback is forbidden") from exc
+        finally:
+            self._leases.deactivate(container_name)
