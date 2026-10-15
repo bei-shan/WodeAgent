@@ -145,7 +145,9 @@ class ToolRegistry:
         }
         state.activate_pending(lambda name: name in available and self._discovery_mode_allowed(name))
 
-    def register_tool(self, tool: Tool, *, owner: str = "legacy"):
+    def register_tool(
+        self, tool: Tool, *, owner: str = "legacy", replace_legacy_at_boot: bool = False,
+    ):
         """
         注册Tool对象
 
@@ -156,9 +158,17 @@ class ToolRegistry:
             self._validate_owner(owner)
             previous = self._tool_owners.get(tool.name)
             if previous is not None and previous != owner:
-                raise PermissionError(
-                    f"Tool '{tool.name}' belongs to '{previous}', not '{owner}'"
+                # The trusted built-in bootstrap historically rebinds injected
+                # host tools to attach current dependencies and permission gates.
+                # This single explicit handoff is unavailable after discovery.
+                boot_handoff = (
+                    replace_legacy_at_boot and owner == "builtin"
+                    and previous == "legacy" and self._discovery_state is None
                 )
+                if not boot_handoff:
+                    raise PermissionError(
+                        f"Tool '{tool.name}' belongs to '{previous}', not '{owner}'"
+                    )
             if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
                 raise PermissionError("Cannot replace an approved sandbox tool")
             # One public name must resolve to exactly one execution adapter.
