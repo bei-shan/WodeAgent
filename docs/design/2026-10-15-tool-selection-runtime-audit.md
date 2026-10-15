@@ -30,6 +30,7 @@ unadvertised tool names; execution must fail closed independently of filtering.
 | Public tool-name ownership | Object and function tables could contain the same name, leading to ambiguous schemas | Cross-kind collision rejected at registration |
 | Legacy function schema | Declared one string `input`, but forwarded the entire dict and did not validate | Exact one-string contract validated and unwrapped; raw string legacy call remains supported |
 | Broken parameter discovery | `get_parameters()` failure silently became empty schema | Broken tool omitted from model-visible catalog instead |
+| Recovered MCP tool discovery | ReAct retrieved function schema before runtime MCP reconnection | Build each step's schema after runtime Feature registration |
 | Circuit breaker | Bad model inputs must not become tool faults | Invalid function inputs return INVALID_PARAM before dispatch, without recording adapter failure |
 
 Only **cross-kind** registration conflicts are rejected here. Replacing an
