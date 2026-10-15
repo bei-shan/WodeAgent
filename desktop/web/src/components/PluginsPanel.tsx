@@ -58,7 +58,7 @@ export default function PluginsPanel() {
           }} />
         <p className="text-xs text-gray-500">
           ZIP 根目录需有 plugin.json（或 .claude-plugin/plugin.json）。
-          启用后插件 Skills 会进入 Agent 的 Skill 列表；已有会话的代码型扩展需要重新创建会话。
+          启用后插件 Skills 会进入 Agent 的 Skill 列表；命令 Hook 仅能在受信任的本地模式下，经显式审核后加载；Python Feature 插件不再支持。
         </p>
       </div>
       {error && <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-700">{error}</div>}
@@ -72,7 +72,7 @@ export default function PluginsPanel() {
             </h3>
             {plugin.description && <p className="text-xs text-gray-500 mt-1">{plugin.description}</p>}
             <p className="text-xs text-gray-500 mt-1">
-              {plugin.skills} 个 Skill 目录 {plugin.has_code ? '· 包含可执行 Hook / Python 扩展' : '· 仅声明式组件'}
+              {plugin.skills} 个 Skill 目录 {plugin.has_code ? '· 包含需授权的命令 Hook' : '· 仅声明式组件'}
             </p>
             <p className="text-xs text-gray-400 mt-1 break-all">
               来源：{plugin.source || 'local_directory'}
@@ -95,20 +95,20 @@ export default function PluginsPanel() {
         </div>
         {plugin.has_code && <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
           {plugin.trusted && !plugin.trust_valid && <p role="alert" className="mb-2 font-semibold">
-            插件文件在授权后发生变化（或使用旧版授权记录），代码执行授权已失效，请审查文件后取消并重新信任。
+            插件文件在授权后发生变化（或授权记录无效），Hook 信任已失效，请审查文件后重新授权。
           </p>}
-          插件代码可能访问本地文件与执行命令。信任状态与启用状态独立，且服务端仍须显式设置 RIDGE_ALLOW_PLUGIN_CODE=1；未经信任时只加载 Skills。
+          本地命令 Hook 可访问宿主资源，不属于沙箱。必须同时启用插件、审查内容指纹并在服务端设置 RIDGE_ALLOW_TRUSTED_HOOKS=1；托管 Worker 不加载此类 Hook。
           <label className="flex items-center gap-2 mt-2">
             <input type="checkbox" checked={plugin.trusted} disabled={busy}
               aria-label={`信任 ${plugin.name}`} onChange={event => {
                 const next = event.target.checked
-                if (next && !window.confirm(`确认信任插件 ${plugin.name} 的可执行代码？仅在审查来源后进行此操作。`)) return
+                if (next && !window.confirm(`确认授权插件 ${plugin.name} 的本地命令 Hook？它可以在宿主执行命令，请先审查来源。`)) return
                 setItems(previous => previous.map(item =>
                   item.name === plugin.name ? { ...item, trusted: next } : item
                 ))
                 void execute(() => api.plugins.trust(plugin.name, next))
               }} />
-            信任代码
+            信任命令 Hook
           </label>
         </div>}
         <div className="flex flex-wrap items-center gap-3 text-xs">

@@ -82,7 +82,11 @@ class PluginManifest:
         default_skills = ["skills"] if (plugin_dir / "skills").is_dir() else []
         self.skills_dirs = _paths(parts.get("skills", default_skills))
         self.output_styles_dirs = _paths(parts.get("output_styles", []))
-        self.custom_features = _paths(parts.get("custom_features", []))
+        if "custom_features" in parts:
+            # There is no privileged Python Feature ABI in runtime v2.
+            # Refusing manifests at install/discovery time prevents a plugin
+            # from looking enabled while a dangerous capability is ignored.
+            raise ValueError("Python plugin feature entrypoints are not supported")
         hooks = parts.get("hooks", data.get("hooks", {}))
         if not isinstance(hooks, dict):
             raise ValueError("Plugin hooks must be an object")
@@ -171,7 +175,7 @@ class PluginCatalog:
                     "trusted": flags.get("trusted") is True,
                     "trust_valid": self.trust_valid(m, flags),
                     "skills": len(self.skill_dirs_for(m)),
-                    "has_code": bool(m.custom_features or m.hooks_config),
+                    "has_code": bool(m.hooks_config),
                     "source": flags.get("source", "local_directory"),
                     "sha256": flags.get("sha256"),
                     "pinned": bool(flags.get("pinned")),
@@ -194,9 +198,8 @@ class PluginCatalog:
         """Fingerprint reviewed plugin source without executing any code.
 
         Including all non-cache plugin assets prevents an attacker from
-        replacing imports, shell hooks or the manifest while retaining a
-        previous approval. Bytecode caches are ignored because Python creates
-        them during import; source-backed loads remain the supported mode.
+        replacing a shell hook or manifest while retaining prior approval.
+        The runtime does not import project Python plugins.
         """
         directory = manifest.plugin_dir
         if not _inside(self.root, directory):
@@ -260,8 +263,10 @@ class PluginCatalog:
             and state[m.name].get("enabled") is True
         ]
 
-    def code_trusted(self, name: str) -> bool:
-        if os.environ.get("RIDGE_ALLOW_PLUGIN_CODE", "").lower() not in ("1", "true", "yes"):
+    def hooks_trusted(self, name: str) -> bool:
+        # Operator opt-in is for explicitly reviewed command Hooks only.
+        # The former RIDGE_ALLOW_PLUGIN_CODE switch grants nothing.
+        if os.environ.get("RIDGE_ALLOW_TRUSTED_HOOKS", "").lower() not in ("1", "true", "yes"):
             return False
         try:
             manifest = self._find(name)
@@ -514,8 +519,8 @@ class PluginCatalog:
 class PluginLoader:
     """Discover trusted, declarative hook contributions without importing Python.
 
-    The historical `custom_features` manifest key is non-executable and no
-    longer supported. Python code cannot receive raw Agent/Registry handles.
+    Executable Python extension declarations fail manifest validation.
+    This loader exposes only consented declarative Hook contributions.
     Skills and output styles remain catalogued through their own loaders.
     """
 
@@ -529,7 +534,7 @@ class PluginLoader:
         contributions: list[PluginHookContribution] = []
         for manifest in self.catalog.enabled_manifests():
             # Enabled alone is insufficient for host command hooks.
-            if not self.catalog.code_trusted(manifest.name):
+            if not self.catalog.hooks_trusted(manifest.name):
                 continue
             if manifest.hooks_config:
                 contributions.append(PluginHookContribution(manifest))

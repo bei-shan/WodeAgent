@@ -55,38 +55,42 @@ def test_install_disabled_by_default_then_scan_skill_enable_disable(tmp_path):
     assert loader.refresh_if_stale() == []
 
 
-def test_disabled_untrusted_python_never_imported_even_after_enable(tmp_path, monkeypatch):
-    marker = tmp_path / "EXECUTED"
+def test_python_extension_manifest_is_rejected_at_install(tmp_path):
     manifest = {
-        "name": "code-kit",
-        "features": {"skills": ["skills"], "custom_features": ["danger.py"]},
+        "name": "no-python",
+        "features": {"custom_features": ["danger.py"]},
     }
-    script = f"from pathlib import Path\nPath({str(marker)!r}).write_text('bad')\n"
-    catalog = PluginCatalog(tmp_path)
-    catalog.install_zip(bundle("code-kit", manifest=manifest, extras={"danger.py": script}))
-    assert PluginLoader(str(tmp_path)).discover() == []
-    catalog.set_enabled("code-kit", True)
-    assert PluginLoader(str(tmp_path)).discover() == []
+    marker = tmp_path / "executed"
+    script = f"from pathlib import Path\\nPath({str(marker)!r}).write_text('unsafe')\\n"
+    with pytest.raises(ValueError, match="Python plugin feature entrypoints"):
+        PluginCatalog(tmp_path).install_zip(
+            bundle("no-python", manifest=manifest, extras={"danger.py": script})
+        )
     assert not marker.exists()
-    catalog.set_trusted("code-kit", True)
-    assert PluginLoader(str(tmp_path)).discover() == []  # env not set
-    assert not marker.exists()
-    catalog.set_trusted("code-kit", False)
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
-    assert PluginLoader(str(tmp_path)).discover() == []  # trust revoked
-    assert not marker.exists()
+    assert PluginCatalog(tmp_path).list_plugins() == []
 
 
-def test_project_python_is_never_imported_even_with_full_trust(tmp_path, monkeypatch):
-    marker = tmp_path / "arbitrary-import"
-    manifest = {"name": "no-python", "features": {"custom_features": ["script.py"]}}
-    script = f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n"
+def test_inert_python_asset_never_imports_even_with_trusted_hook(tmp_path, monkeypatch):
+    manifest = {
+        "name": "safe-hooks",
+        "features": {"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [
+                {"type": "command", "command": "echo explicit-review"}
+            ]}
+        ]}},
+    }
+    marker = tmp_path / "asset-imported"
+    script = f"from pathlib import Path\\nPath({str(marker)!r}).write_text('unsafe')\\n"
     catalog = PluginCatalog(tmp_path)
-    catalog.install_zip(bundle("no-python", manifest=manifest, extras={"script.py": script}))
-    catalog.set_enabled("no-python", True)
-    catalog.set_trusted("no-python", True)
+    catalog.install_zip(bundle("safe-hooks", manifest=manifest, extras={"unused.py": script}))
+    catalog.set_enabled("safe-hooks", True)
+    catalog.set_trusted("safe-hooks", True)
     monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    # A removed code switch does not grant command hook execution.
     assert PluginLoader(str(tmp_path)).discover() == []
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    hooks = PluginLoader(str(tmp_path)).discover()
+    assert len(hooks) == 1 and hooks[0].name == "plugin_hooks"
     assert not marker.exists()
 
 
@@ -103,7 +107,7 @@ def test_trusted_plugin_hooks_register_in_memory_no_user_config_changes(tmp_path
     catalog.install_zip(bundle("hooks-addon", manifest=manifest))
     catalog.set_enabled("hooks-addon", True)
     catalog.set_trusted("hooks-addon", True)
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
     features = PluginLoader(str(tmp_path)).discover()
     assert len(features) == 1
     from core.hook_system import HookManager
@@ -187,6 +191,7 @@ def test_plugin_http_install_activate_uninstall_and_data_only_default(tmp_path, 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("RIDGE_ALLOW_PLUGIN_CODE", raising=False)
+    monkeypatch.delenv("RIDGE_ALLOW_TRUSTED_HOOKS", raising=False)
     app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
     with TestClient(app) as client:
         assert client.get("/api/plugins").json() == []
@@ -335,3 +340,22 @@ def test_skill_list_response_retains_standard_timing_envelope(tmp_path):
     result = parse_response(tool.run({"action": "list"}))
     assert result["status"] == "success"
     assert result["data"]["skills"] == []
+
+
+def test_unmanaged_local_python_feature_manifest_cannot_be_enabled(tmp_path, monkeypatch):
+    """Fail closed even if an old project directory bypasses ZIP installation."""
+    folder = tmp_path / ".mycode/plugins/unmanaged-python"
+    folder.mkdir(parents=True)
+    (folder / "plugin.json").write_text(json.dumps({
+        "name": "unmanaged-python",
+        "features": {"custom_features": ["run.py"]},
+    }))
+    (folder / "run.py").write_text("raise RuntimeError('should never import')")
+    catalog = PluginCatalog(tmp_path)
+    assert catalog.manifests() == []
+    assert catalog.list_plugins() == []
+    with pytest.raises(KeyError, match="not found"):
+        catalog.set_enabled("unmanaged-python", True)
+    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    assert PluginLoader(str(tmp_path)).discover() == []

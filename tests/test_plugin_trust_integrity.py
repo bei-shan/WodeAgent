@@ -13,7 +13,14 @@ def code_bundle(name="fingerprint-test"):
     return bundle(name, manifest={
         "name": name,
         "version": "1.0.0",
-        "features": {"custom_features": ["entry.py"], "skills": ["skills"]},
+        "features": {
+            "skills": ["skills"],
+            "hooks": {"PreToolUse": [
+                {"matcher": "Bash", "hooks": [
+                    {"type": "command", "command": "echo reviewed"}
+                ]}
+            ]},
+        },
     }, extras={"entry.py": (
         "from pathlib import Path\n"
         "Path('/tmp/project-python-should-never-import').write_text('unsafe')\n"
@@ -21,7 +28,7 @@ def code_bundle(name="fingerprint-test"):
 
 
 def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monkeypatch):
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle())
     catalog.set_enabled("fingerprint-test", True)
@@ -29,48 +36,48 @@ def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monke
     assert PluginLoader(str(tmp_path)).discover() == []
     catalog.set_trusted("fingerprint-test", True)
     assert catalog.list_plugins()[0]["trust_valid"]
-    assert catalog.code_trusted("fingerprint-test")
-    assert PluginLoader(str(tmp_path)).discover() == []  # no Python entrypoints
+    assert catalog.hooks_trusted("fingerprint-test")
+    assert [item.name for item in PluginLoader(str(tmp_path)).discover()] == ["plugin_hooks"]
 
     entry = tmp_path / ".mycode/plugins/fingerprint-test/entry.py"
     entry.write_text(entry.read_text() + "\n# changed after review\n")
     listed = catalog.list_plugins()[0]
     assert listed["trusted"] is True  # recorded consent still visible
     assert listed["trust_valid"] is False
-    assert not catalog.code_trusted("fingerprint-test")
+    assert not catalog.hooks_trusted("fingerprint-test")
     assert PluginLoader(str(tmp_path)).discover() == []
 
     # Re-review and re-consent to the updated content.
     catalog.set_trusted("fingerprint-test", False)
     catalog.set_trusted("fingerprint-test", True)
-    assert catalog.code_trusted("fingerprint-test")
-    assert PluginLoader(str(tmp_path)).discover() == []  # no Python entrypoints
+    assert catalog.hooks_trusted("fingerprint-test")
+    assert [item.name for item in PluginLoader(str(tmp_path)).discover()] == ["plugin_hooks"]
 
 
 def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkeypatch):
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("asset-review"))
     catalog.set_enabled("asset-review", True)
     catalog.set_trusted("asset-review", True)
     folder = tmp_path / ".mycode/plugins/asset-review"
-    assert catalog.code_trusted("asset-review")
+    assert catalog.hooks_trusted("asset-review")
 
     ref = folder / "skills/review/references/checklist.md"
     ref.write_text(ref.read_text() + "\nnew instructions\n")
-    assert not catalog.code_trusted("asset-review")
+    assert not catalog.hooks_trusted("asset-review")
     ref.write_text("DO NOT DROP RESOURCE")
-    assert catalog.code_trusted("asset-review")
+    assert catalog.hooks_trusted("asset-review")
 
     manifest = folder / "plugin.json"
     data = json.loads(manifest.read_text())
     data["description"] = "modified manifest"
     manifest.write_text(json.dumps(data))
-    assert not catalog.code_trusted("asset-review")
+    assert not catalog.hooks_trusted("asset-review")
 
 
 def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("legacy-review"))
     catalog.set_enabled("legacy-review", True)
@@ -80,12 +87,12 @@ def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
     catalog._write_state(state)
     assert catalog.list_plugins()[0]["trusted"] is True
     assert catalog.list_plugins()[0]["trust_valid"] is False
-    assert not catalog.code_trusted("legacy-review")
+    assert not catalog.hooks_trusted("legacy-review")
     assert PluginLoader(str(tmp_path)).discover() == []
 
 
 def test_symlinked_file_after_consent_invalidates_executable_trust(tmp_path, monkeypatch):
-    monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("link-review"))
     catalog.set_enabled("link-review", True)
@@ -97,7 +104,7 @@ def test_symlinked_file_after_consent_invalidates_executable_trust(tmp_path, mon
         ref.symlink_to(outside)
     except (NotImplementedError, OSError):
         pytest.skip("symlinks unavailable")
-    assert not catalog.code_trusted("link-review")
+    assert not catalog.hooks_trusted("link-review")
     assert PluginLoader(str(tmp_path)).discover() == []
     assert outside.read_text() == "print('not executed')\n"
 
