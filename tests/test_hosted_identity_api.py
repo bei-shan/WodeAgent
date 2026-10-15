@@ -191,3 +191,14 @@ def test_local_web_refuses_hosted_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_DEPLOYMENT_MODE", "hosted")
     with pytest.raises(RuntimeError, match="Legacy local Agent API"):
         create_app(project_root=str(tmp_path), agent_factory=lambda: None)
+
+
+def test_hosted_rejects_oversized_request_before_json_parsing():
+    app = create_hosted_app(verifier=TestVerifier(), store=TestPrivateStore())
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v2/sessions",
+            content=b"x" * 4_300_001,
+            headers={**headers("alice"), "Content-Type": "application/json"},
+        )
+        assert response.status_code == 413
