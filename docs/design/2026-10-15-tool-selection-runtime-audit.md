@@ -31,6 +31,7 @@ unadvertised tool names; execution must fail closed independently of filtering.
 | Legacy function schema | Declared one string `input`, but forwarded the entire dict and did not validate | Exact one-string contract validated and unwrapped; raw string legacy call remains supported |
 | Broken parameter discovery | `get_parameters()` failure silently became empty schema | Broken tool omitted from model-visible catalog instead |
 | Recovered MCP tool discovery | ReAct retrieved function schema before runtime MCP reconnection | Build each step's schema after runtime Feature registration |
+| Pending MCP lifecycle | Process-wide pending map keyed by server name allowed cross-session collisions; successful retry remained pending | Key by owner registry + server name; scoped query/cleanup and consume successful retries |
 | Circuit breaker | Bad model inputs must not become tool faults | Invalid function inputs return INVALID_PARAM before dispatch, without recording adapter failure |
 
 Only **cross-kind** registration conflicts are rejected here. Replacing an
@@ -89,6 +90,9 @@ Recommended delivery order (separate reviews, with test gates):
   schema matches the exact runtime adapter contract.
 - Invalid, missing, extra, wrong-type, nested and hook-modified inputs never
   reach side-effecting tools; denied/invalid calls do not trip a circuit.
+- Two separate registries with equal MCP server names cannot retry or
+  register the other Agent's MCP client; a successful retry disappears and
+  per-Agent cleanup preserves another Agent's pending state.
 - Parallel read batching never crosses a write, interactive approval or
   unknown-tool barrier; cancellation closes every tool-call ID.
 - Execute realistic tests against live MCP stdio/HTTP, sandbox environments,
@@ -96,9 +100,11 @@ Recommended delivery order (separate reviews, with test gates):
 
 ## Tests for this patch
 
-`python -m pytest tests/test_tool_discovery_execution_guards.py tests/test_tool_input_contracts.py tests/test_tool_runtime_pipeline.py tests/test_tool_three_stage_dispatch.py tests/test_tool_scheduler.py -q`
+`python -m pytest tests/test_tool_discovery_execution_guards.py tests/test_agent_loop_ports.py tests/test_mcp_loader.py tests/test_tool_input_contracts.py tests/test_tool_runtime_pipeline.py tests/test_tool_three_stage_dispatch.py tests/test_tool_scheduler.py -q`
 
 The pull-request `web-mvp.yml` full Python lane runs `pytest tests/ -q`.
 This patch was prepared through the GitHub connector, without a locally
 executed Python checkout. CI status is the evidence for automated testing,
-not a claim of real-model or production acceptance.
+not a claim of real-model or production acceptance. Background connect worker
+threads can outlive a timeout or shutdown; lifecycle fencing and durable
+remote-side cancellation remain separate blockers.
