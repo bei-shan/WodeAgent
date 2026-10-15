@@ -135,8 +135,8 @@ def test_failed_startup_releases_capacity_and_never_falls_back():
     class FailOnce(FakeBox):
         attempted = False
         async def __aenter__(self):
-            if not self.attempted:
-                self.attempted = True
+            if not type(self).attempted:
+                type(self).attempted = True
                 raise OSError("guest failed")
             return await super().__aenter__()
 
