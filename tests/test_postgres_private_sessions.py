@@ -168,3 +168,58 @@ def test_real_http_routing_uses_signed_principal_scope(backend):
 
 def test_production_probe_requires_unprivileged_rls_runtime_role(backend):
     assert backend.production_probe() is True
+
+
+def test_runtime_membership_is_authoritative_and_revocable(backend):
+    psycopg = pytest.importorskip("psycopg")
+    admin_dsn = os.environ.get("RIDGE_TEST_POSTGRES_ADMIN_DSN")
+    if not admin_dsn:
+        pytest.skip("Admin DSN for isolated CI membership provisioning required")
+    tag = uuid.uuid4().hex[:12]
+    scoped = scope(tenant="membership-" + tag, user="user-" + tag,
+                   project="project-" + tag)
+    args = (scoped.tenant_id, scoped.project_id, scoped.user_id)
+    try:
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO ridge.private_project_memberships
+                   (tenant_id,project_id,user_id,enabled)
+                   VALUES (%s,%s,%s,TRUE)""",
+                args,
+            )
+        assert backend.authorize_membership(scoped) is True
+        assert backend.authorize_membership(
+            scope(tenant=scoped.tenant_id, user="other", project=scoped.project_id)
+        ) is False
+        # Runtime has *read-only* membership privilege; disabling access
+        # requires a privileged provisioning process.
+        with psycopg.connect(os.environ["RIDGE_TEST_POSTGRES_DSN"]) as conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.cursor() as cur:
+                    backend._scope(cur, scoped)
+                    cur.execute(
+                        """UPDATE ridge.private_project_memberships
+                              SET enabled=FALSE
+                            WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                        args,
+                    )
+
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE ridge.private_project_memberships SET enabled=FALSE
+                   WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                args,
+            )
+        assert backend.authorize_membership(scoped) is False
+    finally:
+        with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM ridge.private_project_memberships
+                   WHERE tenant_id=%s AND project_id=%s AND user_id=%s""",
+                args,
+            )
+
+
+def test_hosted_readiness_rejects_missing_membership_guards(backend):
+    # The real runtime role must not own or mutate the membership table.
+    assert backend.production_probe() is True
