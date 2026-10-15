@@ -10,6 +10,10 @@
 - 保持必要的旧环境变量与数据目录兼容；影响磁盘内容、会话或用户设置的命名迁移需另起 PR，附升级与回退说明。
 - 任何访问文件、执行命令或改变权限的代码，都应有覆盖路径越界、竞争条件和拒绝路径的测试。
 
+## 本地命令入口
+
+所有日常命令统一使用 `python -m ridgecode`；详见 [命令参考](docs/COMMANDS.md)。独立的 `scripts/` 程序属于 CI 和维护工具，不应新增重复的用户入口。
+
 ## 提交前检查
 
 ```bash
@@ -22,7 +26,7 @@ cd ../../tui-v2 && bun install --frozen-lockfile && bun run typecheck && bun tes
 
 ## v0.1 发布门禁
 
-运行 `python scripts/v01_preflight.py --target core` 检查本地 Python 依赖。Web/TUI 环境使用 `--target web`、`--target tui`，`--json` 可供 CI 使用。发布前需按 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md) 记录自动化和真实环境验收结果；未完成门禁时不创建正式标签。
+运行 `python -m ridgecode doctor --target core` 检查本地 Python 依赖。Web/TUI 环境使用 `--target web`、`--target tui`，`--json` 可供 CI 使用。发布前需按 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md) 记录自动化和真实环境验收结果；未完成门禁时不创建正式标签。
 
 ## PR 约定
 

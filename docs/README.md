@@ -1,12 +1,12 @@
 # 文档导航
 
-> **状态说明（2026-10-14）**：本页是 Ridge Code 文档的阅读入口。架构和操作说明优先看当前源码、测试及 CI；带日期的设计稿是当时的设计决策，不代表现行 API 或安全保证。
+> **状态说明（2026-10-15）**：本页是 Ridge Code 文档的阅读入口。架构和操作说明优先看当前源码、测试及 CI；带日期的设计稿是当时的设计决策，不代表现行 API 或安全保证。
 
 ## 现在应该读什么
 
 | 目的 | 推荐文档 |
 | --- | --- |
-| 安装、运行 Web/TUI | [根目录 README](../README.md)、[TypeScript TUI](../tui-v2/README.md) |
+| 安装、运行 Web/TUI | [命令参考](COMMANDS.md)、[根目录 README](../README.md)、[TypeScript TUI](../tui-v2/README.md) |
 | 模块边界、依赖方向、尚未完成的迁移 | [当前架构](ARCHITECTURE.md) |
 | 开发约定和测试 | [CONTRIBUTING](../CONTRIBUTING.md)、[CI](../.github/workflows/) |
 | Agent 任务评测 | [确定性离线评测基准](design/2026-10-15-agent-eval-baseline.md) |
@@ -17,7 +17,7 @@
 | 项目外文件授权作用域 | [按读取/修改分离的权限缓存](design/2026-10-14-operation-scoped-permissions.md) |
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
 | 生产化缺口与优先级 | [2026-10-14 生产审计与 Backlog](AUDIT_2026-10-14_PRODUCTION.md) |
-| 仓库历史清理 | [2026-10-13 审计记录](AUDIT_2026-10-13.md) |
+| 仓库结构与清理决策 | [2026-10-15 仓库审查](REPOSITORY_INVENTORY.md) |
 
 ## Skills 与插件
 
@@ -38,7 +38,7 @@
 - [2026-10-13 工具运行时拆分](design/2026-10-13-tool-runtime-extraction.md)
 - [2026-10-13 上下文、DeerFlow 与安全比较](design/2026-10-13-context-deerflow-sandbox-auth.md)
 
-**历史归档**：[docs/archive/README.md](archive/README.md)。早期的逐工具 MVP 设计、旧交接材料和 2026 年 6 月路线图已集中归档；不再作为实时的项目状态或实施任务源。
+**清理说明**：旧交接文档、2026 年 6 月实验路线图与逐工具 MVP 快照已从源码仓库删除；历史仍可通过 Git 提交追溯，避免把过期方案当作实现规范。
 
 ## 维护规则
 

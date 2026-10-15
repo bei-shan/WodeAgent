@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `.mycode/`、`.mycodeagent/` | 保留 | 已有插件、技能和会话数据路径 |
 | `MYCODEAGENT_DATA_DIR` | 保留 | 现有 Web 服务环境配置 |
-| `WODEAGENT_SERVER` | 作为 TUI v2 回退继续支持 | 现有脚本兼容 |
+| `WODEAGENT_SERVER`、`WODEAGENT_AUTH_TOKEN` | 已删除旧回退 | 仅接受 `RIDGECODE_SERVER`、`RIDGECODE_AUTH_TOKEN` |
 | `wodeagent-auth-expired` | 保留在前端内部事件 | 避免破坏现有组件通讯 |
 | `agents/codeAgent.py` 与 `CodeAgent` | 保留 | Python 导入和公共调用链 |
 | GitHub 仓库 `bei-shan/WodeAgent` | **尚未改名** | 仓库设置层面另行操作 |
@@ -28,3 +28,7 @@
 在仓库 Settings → General → Repository name 中，将 `WodeAgent` 改为 `ridgecode`（先确认名称可用）。这一步会改变克隆地址、徽章、Web 端源码链接和部署配置；改名后应同步更新 README 的克隆示例、`desktop/web/src/App.tsx` 的 `GITHUB_URL`，以及 CI、远程仓库、文档中使用的旧 URL。GitHub 一般会对旧仓库 URL 提供重定向，但不应仅依赖重定向完成集成迁移。
 
 本次修改仅涉及代码仓库中的文件，并不代表 GitHub 仓库本身已改名。
+
+## 新版 CLI（2026-10-15）
+
+本地命令统一从仓库根目录执行 `python -m ridgecode --help`。OpenTUI 只读取 `RIDGECODE_SERVER` 与 `RIDGECODE_AUTH_TOKEN`；旧 `WODEAGENT_*` 环境变量别名不再作为命令入口的一部分。历史仓库与磁盘路径仍需在单独的数据迁移中处理，不能通过删除已有数据目录冒充清理。详见 [命令参考](COMMANDS.md)。

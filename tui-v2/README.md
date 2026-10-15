@@ -7,7 +7,7 @@
 先在仓库根目录启动后端：
 
 ```bash
-python -m uvicorn desktop.service.app:create_app --factory --host 127.0.0.1 --port 8000
+python -m ridgecode serve
 ```
 
 然后在另一终端：
@@ -17,12 +17,13 @@ cd tui-v2
 bun install --frozen-lockfile
 bun run typecheck
 bun test
-bun run dev
+cd ..
+python -m ridgecode tui
 ```
 
-服务端地址默认 `http://127.0.0.1:8000`，可使用 `RIDGECODE_SERVER` 修改；为了兼容旧配置，仍接受 `WODEAGENT_SERVER`，新变量优先。
+服务端地址默认 `http://127.0.0.1:8000`，可使用 `RIDGECODE_SERVER` 修改；只使用正式变量 `RIDGECODE_SERVER`。
 
-**鉴权**：服务端使用 `WEB_AUTH_TOKEN` 时，TUI 端设置 `RIDGECODE_AUTH_TOKEN` 为相同值（旧变量 `WODEAGENT_AUTH_TOKEN` 仍兼容）。HTTP 和 WebSocket 都通过 `Authorization: Bearer` 请求头认证，令牌不会出现在 URL 或终端日志。仅向可信本地服务发送凭据；远程服务器须使用 HTTPS/WSS。本地鉴权是单操作员保护，尚不是多用户 RBAC。
+**鉴权**：服务端使用 `WEB_AUTH_TOKEN` 时，TUI 端设置 `RIDGECODE_AUTH_TOKEN` 为相同值。HTTP 和 WebSocket 都通过 `Authorization: Bearer` 请求头认证，令牌不会出现在 URL 或终端日志。仅向可信本地服务发送凭据；远程服务器须使用 HTTPS/WSS。本地鉴权是单操作员保护，尚不是多用户 RBAC。
 
 ## 能力与模块
 

@@ -1,18 +1,13 @@
-"""First-run interactive setup wizard for Ridge Code.
+"""Local interactive model-provider setup for the canonical Ridge Code CLI.
 
-Detects whether a first-run setup is needed (no .env or missing API key)
-and guides the user through configuring their LLM provider.
-
-Usage::
-
-    from scripts.first_run_wizard import run_wizard, should_run_wizard
-    if should_run_wizard():
-        run_wizard()
+Use `python -m ridgecode setup`; existing .env files require `--force`.
+No model or external service is contacted by this wizard.
 """
 
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -81,27 +76,6 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
-def should_run_wizard() -> bool:
-    """Check whether the first-run wizard should be triggered."""
-    env_path = Path(".env")
-    if not env_path.exists():
-        return True
-    try:
-        content = env_path.read_text(encoding="utf-8")
-    except OSError:
-        return True
-    # Check if any API key is configured.
-    has_key = any(
-        keyword in content
-        for keyword in (
-            "LLM_API_KEY=", "DEEPSEEK_API_KEY=", "OPENAI_API_KEY=",
-            "ZHIPU_API_KEY=", "GLM_API_KEY=", "KIMI_API_KEY=",
-            "MOONSHOT_API_KEY=", "DASHSCOPE_API_KEY=", "OLLAMA_API_KEY=",
-        )
-    )
-    return not has_key
-
-
 def run_wizard() -> bool:
     """Run the interactive setup wizard. Returns True if .env was created."""
     _show_welcome()
@@ -112,7 +86,7 @@ def run_wizard() -> bool:
         return False
     enable_teams = _ask_features()
     if not _confirm(provider, api_key, enable_teams):
-        console.print("[yellow]Setup cancelled. Run with --wizard to try again.[/yellow]")
+        console.print("[yellow]Setup cancelled. Run python -m ridgecode setup to try again.[/yellow]")
         return False
     _write_env(provider, api_key, enable_teams)
     _show_complete()
@@ -125,7 +99,7 @@ def _show_welcome() -> None:
         Panel(
             "[bold cyan]🏔️ Welcome to Ridge Code![/bold cyan]\n\n"
             "Let's set up your environment.\n"
-            "You can skip this with [bold]--skip-wizard[/bold].\n\n"
+            "Use Ctrl+C to cancel the setup.\n\n"
             "Press Enter to continue...",
             title="First Run Setup",
             border_style="cyan",
@@ -168,7 +142,7 @@ def _prompt_api_key(provider: dict[str, str]) -> str:
 
 def _ask_features() -> bool:
     console.print()
-    console.print("[bold]Optional features:[/bold]")
+    console.print("[bold]Optional capabilities:[/bold]")
     enable_teams = Confirm.ask(
         "Enable AgentTeams (multi-agent collaboration)?",
         default=False,
@@ -190,7 +164,6 @@ def _confirm(provider: dict[str, str], api_key: str, enable_teams: bool) -> bool
 def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> None:
     model = provider["default_model"]
     base_url = provider["base_url"]
-    prefix = provider["env_prefix"]
     prov_key = provider["key"]
 
     lines = [
@@ -219,7 +192,7 @@ def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> No
     lines.append("MODEL_POINTER_MAIN=main")
     lines.extend([
         "",
-        "# ===== Features =====",
+        "# ===== Optional capabilities =====",
         f"ENABLE_AGENT_TEAMS={'true' if enable_teams else 'false'}",
         "# MCP_CONNECT_MODE=manual",
         "# AGENT_OUTPUT_STYLE=default",
@@ -230,23 +203,43 @@ def _write_env(provider: dict[str, str], api_key: str, enable_teams: bool) -> No
         "# TRACE_ENABLED=true",
         "",
     ])
-    Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Secret-bearing config is atomically published with 0600 permissions.
+    # The public CLI refuses to overwrite an existing file without --force.
+    temp_name = None
+    try:
+        fd, temp_name = tempfile.mkstemp(prefix=".ridge-env-", dir=".")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, ".env")
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)
 
 
 def _show_complete() -> None:
     console.print()
     console.print(
         Panel(
-            "[bold green]✅ Setup complete![/bold green]\n\n"
-            "[bold]Quick start:[/bold]\n"
-            "  • Type anything to chat with the agent\n"
-            "  • [cyan]/help[/cyan] to see all commands\n"
-            "  • [cyan]/model[/cyan] to switch models\n"
-            "  • [cyan]/sessions[/cyan] to manage conversations\n"
-            "  • [cyan]init[/cyan] to generate CODE_LAW.md\n\n"
-            "Your [bold].env[/bold] has been created. Edit it\n"
-            "anytime to change settings.",
+            "[bold green]Setup complete![/bold green]\\n\\n"
+            "Start the local server:\\n"
+            "  [cyan]python -m ridgecode serve[/cyan]\\n\\n"
+            "Start the Web client in another terminal:\\n"
+            "  [cyan]python -m ridgecode web[/cyan]\\n\\n"
+            "Or launch OpenTUI after installing Bun dependencies:\\n"
+            "  [cyan]python -m ridgecode tui[/cyan]\\n\\n"
+            "Your [bold].env[/bold] was created with restricted permissions.",
             border_style="green",
         )
     )
     console.print()
+
+
+if __name__ == "__main__":
+    # Kept for internal uses; the supported user entrypoint is
+    # `python -m ridgecode setup`. A direct script run is never a no-op.
+    if Path(".env").exists():
+        raise SystemExit("An .env file exists; use python -m ridgecode setup --force")
+    raise SystemExit(0 if run_wizard() else 1)

@@ -1,56 +1,75 @@
-# Ridge Code 当前架构（2026-10-13）
+# Ridge Code 当前架构（2026-10-15）
 
-> 本页记录当前仓库的主要模块边界，不是 API 稳定性保证。此项目处于持续重构中，存在过渡层。详细变更见 `docs/design/`，实际行为以源码及回归测试为准。
+本页只描述现役模块与已经验证的入口。带日期的设计稿用于追溯，不应取代源码、测试与生产验收记录。
 
-## 组件与调用方向
+## 部署边界
 
 ```text
-React Web (desktop/web/)              OpenTUI (tui-v2/)
-                  \                       /
-                      FastAPI service (desktop/service/)
-                                   |
-                    Application Services (application/)
-                                   |
-                      SessionController + Events
-                          (core/runtime/, core/events.py)
-                                   |
-                    Agent runtime (agents/, core/runtime/)
-                                   |
-            Context | Features / Teams | Tools / Sandbox | LLM
+Trusted local mode (single operator)                  Hosted (metadata only)
+React Web / OpenTUI                                    HTTPS/OIDC bearer token
+            |                                                    |
+desktop/service/app.py                                 desktop/service/hosted_app.py
+            |                                                    |
+Application Services                                   PostgreSQL RLS membership
+            |                                                    |
+SessionController                                      Private session metadata
+            |
+CodeAgent → AgentLoop / ContextRuntime / ModelGateway
+            |
+  RuntimeServices ── MCP / Team / Session / Sandbox / Hooks / VCR
+            |
+  mandatory PolicyMiddlewarePipeline (Plan / Budget / Delegate)
+            |
+  ToolRegistry authorization → isolated provider or local trusted tools
 ```
 
-| 模块 | 当前职责 | 重构时约束 |
-| --- | --- | --- |
-| `desktop/web/` | React UI、API/WebSocket 客户端 | 避免把会话状态逻辑继续堆在巨型 `App.tsx` |
-| `tui-v2/` | Bun/Solid/OpenTUI 终端 UI | 传输、状态投影、控制器和视图分离 |
-| `desktop/service/app.py` | FastAPI 路由、认证和 WebSocket | 新业务流程放入 `application/`，路由保持薄层 |
-| `desktop/service/application/` | 会话、设置、工作区、turn 业务编排 | 不依赖 UI 的状态实现 |
-| `core/runtime/` 与 `core/events.py` | AgentLoop、session、事件与执行协调 | 不调用 React/OpenTUI 组件 |
-| `agents/codeAgent.py` 与 `core/features/` | Agent 主循环编排与可插拔能力 | 避免再向主类叠加工具/上下文细节 |
-| `core/context_engine/` | 历史树、摘要、上下文与 Trace | 明确上下文压缩及溢出行为 |
-| `tools/` 与 `core/sandbox/` | 工具注册、权限、执行与实验性隔离 | 权限拒绝、路径边界和竞态测试优先 |
-| `core/team_engine/` | 多 Agent 协作、任务板与持久化 | 避免与 session 层形成双向依赖 |
+本地 Agent 服务默认绑定 `127.0.0.1`。**切勿将本地 Web/API 直接暴露到公网或共享租户。** 托管服务当前只处理经过 OIDC 与 RLS 校验的会话元数据；尚未向多租户开放 Agent 执行。
 
-## 扩展组件
+## 现役目录
 
-- `core/skills/skill_loader.py`：内置与用户 Skills，以及启用的插件 Skills（只读、按需加载）
-- `core/plugin_loader.py`：本地项目插件 ZIP 清单、生命周期、启用和显式代码信任
-- `core/features/`：内置 AgentFeature 及经双重授权的 Python 插件扩展；插件命令 Hook 不覆盖用户 hooks.json
-- `tools/mcp/`：独立的 MCP 传输/工具协议与权限边界，不等同于插件代码
+| 路径 | 真实职责 |
+| --- | --- |
+| `ridgecode/` | 统一的本地用户命令 `python -m ridgecode` |
+| `desktop/web/` | React Web UI 与浏览器 E2E |
+| `tui-v2/` | Bun / Solid / OpenTUI 终端 UI |
+| `desktop/service/` | local trusted API 与独立 hosted metadata API |
+| `desktop/service/application/` | 路由之外的应用服务 |
+| `agents/codeAgent.py` | Agent 入口、工具编排与模型服务协调 |
+| `core/runtime/` | 显式 RuntimeServices、强制 Middleware、AgentLoop、任务租约与事件 |
+| `core/context_engine/` | 消息历史、压缩、上下文、Trace |
+| `core/team_engine/` | AgentTeam 协作、审批、任务板 |
+| `core/sandbox/` | Docker、BoxLite、E2B 工具隔离能力（分别独立验收） |
+| `tools/` | 工具目录、执行契约、MCP 适配、权限校验 |
+| `core/skills/`、`core/plugin_loader.py` | Skills 与声明式插件 / Hook，旧 Python Feature 插件入口拒绝加载 |
+| `core/persistence/`、`db/migrations/` | RLS 会话与持久任务队列 |
+| `scripts/` | 评测、预检、发布证据、迁移检查使用的底层实现 |
+| `tests/`、`.github/workflows/` | 回归与发布验收 |
 
-## 安全边界
+旧 `core/features/`、Python TUI、任意 Python Feature 插件入口已经删除；**不要在新代码里恢复这些抽象。** Runtime Services 拥有资源与生命周期；Middleware 执行不可绕过的核心策略；Plugin 只提交显式授权的能力声明。
 
-- Web 的 `WEB_AUTH_TOKEN` 是本地单用户鉴权；Web 登录与 TUI Bearer 认证机制不同，不构成多租户权限体系。
-- TypeScript TUI 设置 `RIDGECODE_AUTH_TOKEN`（兼容 `WODEAGENT_AUTH_TOKEN`）匹配服务端令牌；参见 `tui-v2/README.md`。
-- Docker / BoxLite micro-VM 均为显式启用的实验性执行后端，仅隔离 Agent 可见的 Bash 调用；默认本机执行模式不能视为强隔离。参见 [BoxLite 后端](design/2026-10-15-boxlite-vm-provider.md)。
-- 旧目录 `.mycode/`、`.mycodeagent/` 和既有 Python 导入路径暂时保留兼容。
+## 命令体系
 
-## 当前结构性债务（不等同于可以删除）
+从仓库根目录运行：
 
-- 旧 Python Rich/prompt_toolkit TUI 已退役。OpenTUI 的基础启动、会话树和可移植归档已有真实 PTY/HTTP 测试；旧 `/style`、`/budget` 等专有命令仍需可复用服务端 API 后才能迁移。
-- Web `App.tsx`、`desktop/service/app.py`、`agents/codeAgent.py`、`core/team_engine/manager.py` 仍较大，应逐步拆分职责并保留回归测试。
-- 运行时协议、持久化格式和权限模型需要独立版本化，不宜在「文档清理」时顺手破坏兼容。
+```bash
+python -m ridgecode --help
+python -m ridgecode setup
+python -m ridgecode doctor --target all
+python -m ridgecode serve
+python -m ridgecode web      # 需要先 cd desktop/web && npm ci
+python -m ridgecode tui      # 需要先 cd tui-v2 && bun install --frozen-lockfile
+python -m ridgecode eval --json
+```
 
-## 验证入口
+完整命令和先决条件见 [README](../README.md) 与 [命令参考](COMMANDS.md)。开发者测试和带凭据的发布验收脚本仍属于受控内部工具，不应等同于交互式用户命令。
 
-Python：`python -m pytest tests/ -q`；Web：`cd desktop/web && npm ci && npm run build`；TUI：`cd tui-v2 && bun install && bun run typecheck && bun test`。运行条件及最新检查结果以 [GitHub Actions](../.github/workflows/) 为准。
+## 生产验收边界
+
+CI 通过仅证明指定自动化测试通过；不能据此宣布共享租户 Agent 执行已经生产就绪。当前还需要真实托管 Runner、租户专属沙箱与凭据隔离、MCP 授权、长时间负载及故障恢复验收。任务队列的过期执行不会自动重放，避免重复调用不可逆工具。
+
+## 设计与实现约束
+
+- 安全内核、身份校验、资源归属、工具权限和租约 fencing 不可由插件替换。
+- 新服务使用显式的依赖关系；不通过整数 `order` 或在全局 Agent 对象上注册任意插件对象来管理生命周期。
+- 在安全路径中不把资源声明、权限校验或有状态管理藏在 Web 组件里。
+- `docs/design/` 保留带日期的决策记录，但现役使用说明应优先更新本页和 `README.md`。

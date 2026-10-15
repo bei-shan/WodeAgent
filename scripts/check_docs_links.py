@@ -20,8 +20,8 @@ MAINTAINED = (
     "docs/ARCHITECTURE.md",
     "docs/AUDIT_2026-10-13.md",
     "docs/REBRANDING.md",
-    "docs/archive/README.md",
-    "docs/archive/legacy/roadmap-2026-06.md",
+    "docs/COMMANDS.md",
+    "docs/REPOSITORY_INVENTORY.md",
 )
 LINK = re.compile(r"(?<!!)\]\(([^)\n]+)\)")
 

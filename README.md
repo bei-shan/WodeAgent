@@ -1,8 +1,8 @@
 # Ridge Code
 
-**Ridge** 是一个本地优先、可扩展的 AI 编程代理项目：使用 Python 实现 Agent 引擎，由同一套会话运行时同时服务 Web 和终端界面。项目目前处于持续开发阶段，适合个人开发、学习与实验，并非开箱即用的多用户 SaaS。
+**Ridge** 是一个本地优先、可扩展的 AI 编程代理项目：使用 Python 实现 Agent 引擎，由同一套会话运行时服务 Web 和终端界面。项目目前处于持续开发阶段，适合个人开发、学习与实验，并非开箱即用的多用户 SaaS。
 
-- **Agent 引擎**：Python 3.12+、ReAct、工具调用、可组合 Feature、模型路由
+- **Agent 引擎**：Python 3.12+、ReAct、工具调用、Runtime Services / Middleware、模型路由
 - **交互界面**：React/TypeScript Web 与 TypeScript/OpenTUI 终端（单一终端实现，仍在迭代）
 - **执行能力**：代码读写、命令执行、MCP、Skills、子代理与 Agent Teams
 - **工具执行安全**：核心工具在执行边界校验参数；只读工具按明确声明安全性有限并发，修改与交互型工具串行执行
@@ -20,81 +20,77 @@
 ```bash
 git clone https://github.com/bei-shan/WodeAgent.git
 cd WodeAgent
-python -m pip install -r requirements.txt
-cp .env.example .env
+python3.12 -m pip install -r requirements.txt
+python -m ridgecode setup
+python -m ridgecode doctor --target core
 ```
 
-在 `.env` 中配置模型供应商、模型和凭据。也可以运行首次配置向导：
-
-```bash
-python scripts/first_run_wizard.py
-```
-
-`.env.example` 与 `core/config.py` 是配置项的主要参考；实际的持久化目录暂时仍沿用旧名称，以保持现有数据兼容。
+配置命令会交互式写入 `.env`，已有文件默认不覆盖；确认需要替换时使用 `python -m ridgecode setup --force`。也可以将 `.env.example` 复制为 `.env` 并自行编辑。密钥不要提交到 Git。
 
 ### 2. 启动 Web
 
-在仓库根目录运行服务端：
+终端 A（项目根目录）：
 
 ```bash
-python -m uvicorn desktop.service.app:create_app --factory --host 127.0.0.1 --port 8000
+python -m ridgecode serve
 ```
 
-另开终端运行前端：
+终端 B（项目根目录）：
 
 ```bash
-cd desktop/web
-npm ci
-npm run dev
+cd desktop/web && npm ci && cd ../..
+python -m ridgecode web
 ```
 
-打开 [http://localhost:5173](http://localhost:5173)。前端通过开发代理连接本机 API，支持会话、流式消息、文件浏览、权限交互、模型配置与技能管理等界面。服务端提供 `/docs` API 文档。
+打开 [http://localhost:5173](http://localhost:5173)。本地 Agent API 只能绑定回环地址，**不是多租户公网服务**。设置私有 `.env` 的 `WEB_AUTH_TOKEN` 后重启，可启用本地单用户 Web 登录。
 
-**本地登录（可选）**：在私有 `.env` 设置 `WEB_AUTH_TOKEN` 后重启服务端，Web 会启用基于 Cookie 的本地登录流程；未设置时仍为无登录开发模式。参见 [本地 Web 认证设计](docs/design/2026-10-13-local-web-auth-phase1.md)。这不是公网部署或多用户权限控制方案。
+### 3. 启动 OpenTUI
 
-### 3. 启动 TypeScript TUI（实验性）
-
-先启动上述 Python 服务端，再运行：
+先启动 Python API，再从根目录运行：
 
 ```bash
-cd tui-v2
-bun install --frozen-lockfile
-bun run typecheck
-bun test
-bun run dev
+cd tui-v2 && bun install --frozen-lockfile && cd ..
+python -m ridgecode tui
 ```
 
-可以使用 `RIDGECODE_SERVER` 指定服务端地址；旧的 `WODEAGENT_SERVER` 继续作为兼容回退。启用服务端 `WEB_AUTH_TOKEN` 后，TUI 可使用 `RIDGECODE_AUTH_TOKEN` 设置相同令牌，通过 Bearer 请求头认证（兼容旧变量 `WODEAGENT_AUTH_TOKEN`）；具体限制见 TUI 文档。参见 [TUI v2 说明](tui-v2/README.md)。
+可用 `RIDGECODE_SERVER` 指定服务端；设置了 `WEB_AUTH_TOKEN` 时，TUI 使用相同的 `RIDGECODE_AUTH_TOKEN`。详见 [TUI 文档](tui-v2/README.md)。
 
-旧 Python Rich/prompt_toolkit TUI 已退役，OpenTUI 是唯一维护的交互式终端客户端。常用会话、模型与 Plan/Teams 命令，以及 `/tree`、`/fork` 和可移植会话 `/export`、`/import` 已迁移。可移植归档不包含工具执行环境或密钥，不能视为完整快照备份。仍未迁移的旧 CLI 命令详见 [终端迁移清单](docs/design/2026-10-13-tui-command-migration.md)。
+### 4. 日常检查与评测
 
-## 架构概览
+```bash
+python -m ridgecode --help
+python -m ridgecode doctor --target all
+python -m ridgecode eval --json
+python -m pytest tests/ -q
+```
+
+命令完整参考、受信任本地模式与生产验收边界见 [命令参考](docs/COMMANDS.md)。
+
+## 当前架构概览
 
 ```text
-Web (desktop/web)          OpenTUI (tui-v2)
-           \                   /
-            FastAPI / runtime events
-                     |
-       core/runtime + core/events
-                     |
-         agents/codeAgent.py
-                     |
-      +--------------+--------------+
-  Context Engine    Features      Tool Runtime
-  + Sessions        + Teams       + MCP / Skills
-                     |
-            Model / LLM adapters
+React Web / OpenTUI
+        |
+local FastAPI + Application Services
+        |
+SessionController / AgentLoop / ContextRuntime
+        |
+RuntimeServices: MCP, Session, Team, Sandbox, Hooks
+        |
+mandatory Middleware: Plan, Budget, Delegate
+        |
+ToolRegistry / Sandbox / ModelGateway
 ```
 
-- `agents/`：Agent 主循环及 Feature 集成点
-- `core/runtime/`、`core/events.py`：会话执行、生命周期事件与 UI 解耦
-- `core/context_engine/`：历史、摘要、上下文构建、Trace
-- `core/features/`、`core/team_engine/`：特性扩展与多代理协同
-- `tools/`、`core/sandbox/`：工具与执行边界
-- `desktop/service/application/`：Web 后端的应用服务层
-- `desktop/web/`、`tui-v2/`：独立的 React 与 OpenTUI 界面
+- `ridgecode/`：唯一的本地日常命令入口。
+- `agents/`、`core/runtime/`：Agent 编排、生命周期、策略和资源服务。
+- `core/context_engine/`、`core/team_engine/`：上下文和团队运行时。
+- `core/skills/`、`core/plugin_loader.py`：Skills、声明式插件与授权 Hook。
+- `tools/`、`core/sandbox/`：工具注册、权限与隔离执行。
+- `desktop/service/`、`desktop/web/`、`tui-v2/`：服务端和两个客户端。
+- `db/`、`core/persistence/`：多租户元数据与持久队列基础设施。
 
-设计细节参见 [架构参考方案](docs/design/2026-10-13-reference-agent-architecture.md)、[TS TUI 分层设计](docs/design/2026-10-13-tui-v2-layered-architecture.md) 和 [工作区安全说明](docs/design/2026-10-13-descriptor-anchored-workspaces.md)。`docs/` 内一些较早的设计材料为历史记录，不应视为当前功能承诺。
+已删除旧 Python AgentFeature 框架与旧 Python TUI；托管 API **仅提供元数据服务，尚不能执行生产级共享租户 Agent 回合**。准确的目录职责见 [现役架构](docs/ARCHITECTURE.md)。
 
 ## 本地运行的并发保护
 
@@ -154,12 +150,12 @@ cd tui-v2 && bun install && bun run typecheck && bun test
 
 ## v0.1 发布准备
 
-已增加不联网、不读取密钥的 [本地环境预检](scripts/v01_preflight.py)，可以分别检查 Python、Web 和 Bun/OpenTUI 环境：
+已增加不联网、不读取密钥的 [本地环境检查](docs/COMMANDS.md)，可以分别检查 Python、Web 和 Bun/OpenTUI 环境：
 
 ```bash
-python scripts/v01_preflight.py --target core
-python scripts/v01_preflight.py --target web --json
-python scripts/v01_preflight.py --target tui --json
+python -m ridgecode doctor --target core
+python -m ridgecode doctor --target web --json
+python -m ridgecode doctor --target tui --json
 ```
 
 **v0.1.0 尚未正式发布**：自动化测试通过不代表真实模型与长期运行场景已验收。发布前检查项、人工验收、已知问题与回退说明见 [v0.1 发布准备清单](docs/releases/v0.1-readiness.md)。
