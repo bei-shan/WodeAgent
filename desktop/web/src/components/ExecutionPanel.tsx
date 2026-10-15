@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { ToolEntry } from './types'
+import DockerTerminal from './DockerTerminal'
 
-type Tab = 'timeline' | 'terminal'
+type Tab = 'timeline' | 'terminal' | 'interactive'
 
 function sandboxResult(tool: ToolEntry): { stdout: string; stderr: string; exitCode: number | null; sandbox: string } | null {
   if (tool.name.toLowerCase() !== 'bash' || !tool.output) return null
@@ -19,8 +20,8 @@ function sandboxResult(tool: ToolEntry): { stdout: string; stderr: string; exitC
 }
 
 /** This panel never executes commands; it only projects already received tool events. */
-export default function ExecutionPanel({ tools, open, onClose }: {
-  tools: ToolEntry[]; open: boolean; onClose: () => void
+export default function ExecutionPanel({ tools, open, onClose, sessionId }: {
+  tools: ToolEntry[]; open: boolean; onClose: () => void; sessionId: string | null
 }) {
   const [tab, setTab] = useState<Tab>('timeline')
   if (!open) return null
@@ -41,9 +42,11 @@ export default function ExecutionPanel({ tools, open, onClose }: {
         className={tab === 'timeline' ? 'execution-tab selected' : 'execution-tab'}>执行时间线</button>
       <button type="button" onClick={() => setTab('terminal')} aria-pressed={tab === 'terminal'}
         className={tab === 'terminal' ? 'execution-tab selected' : 'execution-tab'}>Sandbox 输出</button>
+      <button type="button" onClick={() => setTab('interactive')} aria-pressed={tab === 'interactive'}
+        className={tab === 'interactive' ? 'execution-tab selected' : 'execution-tab'}>Docker TTY</button>
     </div>
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-      {tab === 'timeline' ? (
+      {tab === 'interactive' ? <DockerTerminal sessionId={sessionId} /> : tab === 'timeline' ? (
         tools.length ? tools.map((tool, index) => (
           <details key={tool.id + '-' + index} className="rounded-xl border border-gray-200 bg-white p-3 text-xs">
             <summary className="cursor-pointer font-medium text-gray-800">
