@@ -163,10 +163,11 @@ class _PendingServer:
         self.error: str | None = None
 
 
-# Module-level registry of pending servers, keyed by server name.
-# Populated in manual mode, consumed by ``retry_pending_server`` when a tool
-# from an unconnected server is invoked for the first time.
-_pending_servers: dict[str, _PendingServer] = {}
+# Pending connections are owned by their destination tool registry, not a
+# process-wide server name. Two Agent sessions may use the same MCP name with
+# different credentials/clients and must never recover each other's tools.
+# Entries retain their registry while pending; cleanup must remove them.
+_pending_servers: dict[tuple[object, str], _PendingServer] = {}
 _pending_lock = threading.Lock()
 
 
@@ -246,7 +247,7 @@ def _background_connect(
             timeout,
         )
         with _pending_lock:
-            _pending_servers[server_name] = _PendingServer(
+            _pending_servers[(tool_registry, server_name)] = _PendingServer(
                 name=server_name, client=client, namespace=server_name
             )
     except Exception as exc:
@@ -259,7 +260,7 @@ def _background_connect(
         with _pending_lock:
             ps = _PendingServer(name=server_name, client=client, namespace=server_name)
             ps.error = str(exc)
-            _pending_servers[server_name] = ps
+            _pending_servers[(tool_registry, server_name)] = ps
 
 
 def retry_pending_server(
@@ -284,8 +285,9 @@ def retry_pending_server(
     if timeout is None:
         timeout = _DEFAULT_CONNECT_TIMEOUT
 
+    key = (tool_registry, server_name)
     with _pending_lock:
-        ps = _pending_servers.get(server_name)
+        ps = _pending_servers.get(key)
 
     if ps is None:
         # Not a pending server — maybe it was already connected or doesn't exist.
@@ -303,6 +305,11 @@ def retry_pending_server(
             )
         ps.connected = True
         ps.error = None
+        # Remove only the exact object being retried; another concurrent
+        # background reconnect may already have replaced this entry.
+        with _pending_lock:
+            if _pending_servers.get(key) is ps:
+                _pending_servers.pop(key, None)
         return True
     except Exception as exc:
         logger.warning(
@@ -314,16 +321,23 @@ def retry_pending_server(
         return False
 
 
-def get_pending_server_names() -> list[str]:
-    """Return names of servers that are still pending (not yet connected)."""
+def get_pending_server_names(tool_registry=None) -> list[str]:
+    """Return pending server names for one registry (all registries if omitted)."""
     with _pending_lock:
-        return sorted(_pending_servers.keys())
+        return sorted({name for (owner, name), pending in _pending_servers.items()
+                       if (tool_registry is None or owner is tool_registry)
+                       and not pending.connected})
 
 
-def clear_pending_servers() -> None:
-    """Remove all pending server entries (for testing)."""
+def clear_pending_servers(tool_registry=None) -> None:
+    """Discard pending connections owned by one Agent, or all in test cleanup."""
     with _pending_lock:
-        _pending_servers.clear()
+        if tool_registry is None:
+            _pending_servers.clear()
+        else:
+            for key in tuple(_pending_servers):
+                if key[0] is tool_registry:
+                    _pending_servers.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
