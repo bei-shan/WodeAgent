@@ -1,6 +1,7 @@
 import json
 import time
 import uuid
+import secrets
 import os
 import logging
 import sys
@@ -238,6 +239,13 @@ class CodeAgent(Agent):
                     memory_mib=self.config.sandbox_boxlite_memory_mib,
                     cpus=self.config.sandbox_boxlite_cpus,
                 )
+                if self.config.sandbox_boxlite_warm_enabled:
+                    provider.enable_warm_pool(
+                        session_scope=secrets.token_hex(24),
+                        max_replicas=1,
+                        idle_timeout=self.config.sandbox_boxlite_warm_idle_seconds,
+                    )
+            self._sandbox_provider = provider
             self.tool_registry.register_tool(SandboxBashTool(provider))
             self.tool_registry.restrict_to_tools({"Bash"})
             self.logger.warning(
@@ -597,6 +605,17 @@ class CodeAgent(Agent):
                     "Feature %s.cleanup failed: %s",
                     getattr(feat, "name", type(feat).__name__), exc,
                 )
+
+        # Close owned VM resources even if another feature cleanup raised.
+        sandbox_provider = getattr(self, "_sandbox_provider", None)
+        if sandbox_provider is not None:
+            try:
+                close = getattr(sandbox_provider, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                self.logger.warning("Isolated sandbox cleanup failed")
+            self._sandbox_provider = None
 
         # Framework-level teardown (not associated with any feature).
         if getattr(self, "trace_logger", None):

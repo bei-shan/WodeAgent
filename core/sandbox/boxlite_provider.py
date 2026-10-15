@@ -24,6 +24,7 @@ from threading import Event
 from typing import Any, Callable
 
 from core.sandbox.contracts import CommandResult, SandboxUnavailable
+from core.sandbox.boxlite_pool import BoxliteSessionPool
 from core.sandbox.docker_lifecycle import installation_key_path
 
 _IMAGE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@+-]{0,199}\Z")
@@ -41,6 +42,8 @@ class BoxliteCommandProvider:
         cpus: int = 2,
         box_factory: Callable[..., Any] | None = None,
         network_factory: Callable[..., Any] | None = None,
+        session_pool: BoxliteSessionPool | None = None,
+        session_scope: str | None = None,
     ) -> None:
         if sys.platform not in ("linux", "darwin"):
             raise SandboxUnavailable("BoxLite micro-VM requires a supported Linux/macOS host")
@@ -79,6 +82,32 @@ class BoxliteCommandProvider:
         self.image = image
         self.memory_mib = memory_mib
         self.cpus = cpus
+        if (session_pool is None) != (session_scope is None):
+            raise ValueError("VM pool and session scope must be supplied together")
+        self._session_pool = session_pool
+        self._session_scope = session_scope
+        self._owns_pool = False
+
+    def enable_warm_pool(
+        self, *, session_scope: str, max_replicas: int = 1,
+        idle_timeout: float = 60,
+    ) -> None:
+        """Opt-in single-Agent scoped warm VM reuse; never share across agents."""
+        if self._session_pool is not None:
+            raise ValueError("VM session pool is already configured")
+        if not isinstance(session_scope, str) or not session_scope:
+            raise ValueError("A VM session identity is required")
+        self._session_pool = BoxliteSessionPool(
+            self._make_box,
+            max_replicas=max_replicas, idle_timeout=idle_timeout,
+        )
+        self._session_scope = session_scope
+        self._owns_pool = True
+
+    def close(self) -> None:
+        """Release guests and private loop during Agent shutdown."""
+        if self._owns_pool and self._session_pool is not None:
+            self._session_pool.shutdown()
 
     def _working_dir(self, directory: str) -> str:
         if not isinstance(directory, str) or "\x00" in directory:
@@ -95,12 +124,9 @@ class BoxliteCommandProvider:
             raise ValueError("Working directory is not a directory")
         return "/workspace" if relative == Path(".") else "/workspace/" + relative.as_posix()
 
-    async def _run_in_vm(
-        self, command: str, cwd: str, timeout: float, cancel_event: Event | None,
-    ) -> CommandResult:
-        # The SDK's NetworkSpec disabled mode removes guest network interface.
-        # No agent/model input can change image, volume, networking or user.
-        box = self._box_factory(
+    def _make_box(self) -> Any:
+        """Do not expose options construction to model/tool arguments."""
+        return self._box_factory(
             image=self.image,
             name=f"ridgecode-{secrets.token_hex(10)}",
             auto_remove=True,
@@ -110,37 +136,45 @@ class BoxliteCommandProvider:
             network=self._network_factory(mode="disabled"),
             working_dir="/workspace",
         )
-        async with box:
+
+    async def _execute_guest(
+        self, box: Any, command: str, cwd: str, timeout: float,
+        cancel_event: Event | None,
+    ) -> CommandResult:
+        if cancel_event is not None and cancel_event.is_set():
+            return CommandResult("", "", None, interrupted=True)
+        task = asyncio.create_task(box.exec(
+            "sh", "-lc", command, cwd=cwd,
+            user=str(os.getuid() or 65534), timeout=timeout,
+            env={"HOME": "/tmp"},
+        ))
+        deadline = asyncio.get_running_loop().time() + timeout
+        try:
+            while not task.done():
+                if cancel_event is not None and cancel_event.is_set():
+                    task.cancel()
+                    return CommandResult("", "", None, interrupted=True)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    task.cancel()
+                    return CommandResult("", "", None, timed_out=True)
+                await asyncio.wait({task}, timeout=min(0.1, remaining))
             if cancel_event is not None and cancel_event.is_set():
                 return CommandResult("", "", None, interrupted=True)
-            task = asyncio.create_task(box.exec(
-                "sh", "-lc", command, cwd=cwd,
-                user=str(os.getuid() or 65534), timeout=timeout,
-                env={"HOME": "/tmp"},
-            ))
-            deadline = asyncio.get_running_loop().time() + timeout
-            try:
-                while not task.done():
-                    if cancel_event is not None and cancel_event.is_set():
-                        task.cancel()
-                        return CommandResult("", "", None, interrupted=True)
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        task.cancel()
-                        return CommandResult("", "", None, timed_out=True)
-                    await asyncio.wait({task}, timeout=min(0.1, remaining))
-                if cancel_event is not None and cancel_event.is_set():
-                    return CommandResult("", "", None, interrupted=True)
-                result = task.result()
-                return CommandResult(
-                    str(result.stdout or ""), str(result.stderr or ""),
-                    result.exit_code,
-                )
-            finally:
-                if not task.done():
-                    task.cancel()
-                # The async box context is responsible for guest shutdown;
-                # do not allow tools to execute on the host as a fallback.
+            result = task.result()
+            return CommandResult(
+                str(result.stdout or ""), str(result.stderr or ""),
+                result.exit_code,
+            )
+        finally:
+            if not task.done():
+                task.cancel()
+
+    async def _run_in_vm(
+        self, command: str, cwd: str, timeout: float, cancel_event: Event | None,
+    ) -> CommandResult:
+        async with self._make_box() as box:
+            return await self._execute_guest(box, command, cwd, timeout, cancel_event)
 
     def execute(
         self,
@@ -161,6 +195,19 @@ class BoxliteCommandProvider:
         if cancel_event is not None and cancel_event.is_set():
             return CommandResult("", "", None, interrupted=True)
         try:
+            if self._session_pool is not None:
+                assert self._session_scope is not None
+                self._session_pool.acquire(self._session_scope)
+                try:
+                    return self._session_pool.execute(
+                        self._session_scope,
+                        lambda box: self._execute_guest(
+                            box, command, cwd, timeout_seconds, cancel_event,
+                        ),
+                        timeout_seconds=timeout_seconds,
+                    )
+                finally:
+                    self._session_pool.release(self._session_scope)
             return asyncio.run(self._run_in_vm(
                 command, cwd, timeout_seconds, cancel_event,
             ))
