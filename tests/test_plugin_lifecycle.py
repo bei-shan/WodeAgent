@@ -77,20 +77,17 @@ def test_disabled_untrusted_python_never_imported_even_after_enable(tmp_path, mo
     assert not marker.exists()
 
 
-def test_trusted_python_feature_requires_two_explicit_gates(tmp_path, monkeypatch):
-    manifest = {"name": "my-feature", "features": {"custom_features": ["feature.py"]}}
-    src = ("from core.features.base import AgentFeature\n"
-           "class ThirdParty(AgentFeature):\n"
-           "    name = 'thirdparty'\n"
-           "    order = 50\n")
+def test_project_python_is_never_imported_even_with_full_trust(tmp_path, monkeypatch):
+    marker = tmp_path / "arbitrary-import"
+    manifest = {"name": "no-python", "features": {"custom_features": ["script.py"]}}
+    script = f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n"
     catalog = PluginCatalog(tmp_path)
-    catalog.install_zip(bundle("my-feature", manifest=manifest, extras={"feature.py": src}))
-    catalog.set_enabled("my-feature", True)
-    catalog.set_trusted("my-feature", True)
-    assert PluginLoader(str(tmp_path)).discover() == []
+    catalog.install_zip(bundle("no-python", manifest=manifest, extras={"script.py": script}))
+    catalog.set_enabled("no-python", True)
+    catalog.set_trusted("no-python", True)
     monkeypatch.setenv("RIDGE_ALLOW_PLUGIN_CODE", "1")
-    features = PluginLoader(str(tmp_path)).discover()
-    assert [x.name for x in features] == ["thirdparty"]
+    assert PluginLoader(str(tmp_path)).discover() == []
+    assert not marker.exists()
 
 
 def test_trusted_plugin_hooks_register_in_memory_no_user_config_changes(tmp_path, monkeypatch):
@@ -113,7 +110,7 @@ def test_trusted_plugin_hooks_register_in_memory_no_user_config_changes(tmp_path
     manager = HookManager(str(tmp_path))
     config_path = tmp_path / ".mycode/hooks.json"
     agent = type("Host", (), {"_hook_manager": manager})()
-    features[0].init(agent)
+    features[0].apply(manager)
     assert len(manager._config.pre_tool_use) == 1
     assert not config_path.exists()
 
