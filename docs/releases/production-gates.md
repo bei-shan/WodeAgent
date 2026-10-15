@@ -23,7 +23,7 @@ production controls have been validated.
 
 | ID | Gate | Objective acceptance evidence | Status |
 |---|---|---|---|
-| AUTH-01 | Production issuer with signed membership claims + revocation protocol | Documented issuer/audience/JWKS, JWK rotation tests, tenant/project membership revocation test, role denial matrix | Missing live IdP/revocation proof |
+| AUTH-01 | Production issuer, signed identity claims + database-authoritative membership revocation | Documented issuer/audience/JWKS, JWK rotation tests, tenant/project membership revocation test, role denial matrix | Runtime DB revocation contract implemented; live IdP integration and rotated-token evidence missing |
 | AUTH-02 | Same verified principal on every HTTP/WS/SSE/agent/tool/trace/file/memory path | Automated cross-tenant IDOR suite against **deployed** service, plus denial of spoofed headers and rogue worker delegation | **Blocked** (hosted agent routes absent) |
 | DATA-01 | Postgres RLS and per-owner transactions | Dedicated CI using non-superuser without BYPASSRLS, direct SQL/no-scope tests and CAS concurrency | Component automated (not staged) |
 | DATA-02 | Transactional backups/restore and legacy session migration | Encrypted snapshots, restore drill, rollback with RPO/RTO evidence; no data loss | Missing |
@@ -87,11 +87,54 @@ a GO decision for executing Agents.**
 
 ## Immediate engineering work
 
-- Stop silent aliasing of two distinct requests that reuse an idempotency key.
-- Invalidate running workers' fencing tokens on cancellation and cap retry
-  recovery; ensure jobs are marked terminal after last lease expiry.
+- Queue replay/cancellation/lease-expiry hardening is merged; do not confuse
+  the durable ledger with a full hosted worker.
 - Build a verified hosted Agent/sandbox pipeline without reusing local
   trust-based routes, then extend this document with actual staging evidence.
 
 The production target is explicit, but **do not mark a milestone complete
 because a plan or unit tests exist**.
+
+
+## Database-authoritative membership rollout (migration 0003)
+
+A valid JWT **never authorizes a project by itself**. The hosted API now
+requires a currently enabled row in `ridge.private_project_memberships`
+matching **tenant + project + user**. Runtime role has only `SELECT`; the
+table has forced RLS and denies all access if transaction scope is absent.
+It queries membership on every authenticated request, so a revoked member
+must immediately receive HTTP 403. DB outages/missing privileges produce
+HTTP 503 rather than falling back to JWT claims.
+
+Deployment sequencing is **mandatory**: migrate with admin role; provision
+memberships from your *trusted* IdP provisioning pipeline (new rows default
+disabled); grant runtime role only schema USAGE and membership SELECT; inspect
+RLS forced mode; only then deploy the code. Missing rows will deny access
+rather than preserving the old insecure behavior. Never let public clients,
+JWT scopes, LLM text or the runtime role mutate these rows.
+
+Example administrator provisioning (substitute actual **verified** identities):
+
+```sql
+INSERT INTO ridge.private_project_memberships
+    (tenant_id, project_id, user_id, enabled)
+VALUES ('verified-tenant', 'verified-project', 'verified-subject', true)
+ON CONFLICT (tenant_id, project_id, user_id)
+DO UPDATE SET enabled=true, updated_at=now();
+-- Immediate revocation, even if an older JWT has not expired:
+UPDATE ridge.private_project_memberships
+   SET enabled=false, updated_at=now()
+ WHERE tenant_id='verified-tenant'
+   AND project_id='verified-project'
+   AND user_id='verified-subject';
+```
+
+Only run this through audited provisioning/admin credentials. Revoking
+membership blocks **new hosted metadata requests**; it cannot stop a
+remote already-running Agent, since hosted Agent execution is not enabled.
+Future workers must check revocation while heartbeating and stop unsafe
+operations immediately when the delegation expires.
+
+**Go/No-Go unchanged**: production IdP lifecycle, live staging revocation,
+backup/restore, actual Agent isolation and incident handling still need
+independent evidence.
