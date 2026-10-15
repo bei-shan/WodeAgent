@@ -59,6 +59,7 @@ class ToolRegistry:
         self._functions: dict[str, dict[str, Any]] = {}
         # Optional session-owned deferred catalog; never stores executors.
         self._discovery_state = None
+        self._discovery_guard: Callable[[str], bool] | None = None
         # When set, deny schema AND execution for all other tools, including
         # dynamically registered plugins or MCP functions.
         self._sandbox_allowed_tools: frozenset[str] | None = None
@@ -97,7 +98,9 @@ class ToolRegistry:
     def _tool_allowed(self, name: str) -> bool:
         return self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools
 
-    def enable_deferred_discovery(self, state) -> None:
+    def enable_deferred_discovery(
+        self, state, *, can_execute: Callable[[str], bool] | None = None,
+    ) -> None:
         """Install exactly one session's discovery policy at the execution boundary."""
         if self._discovery_state is not None:
             raise RuntimeError("Deferred discovery already configured for this registry")
@@ -106,6 +109,16 @@ class ToolRegistry:
         if "ToolSearch" not in self._tools:
             raise ValueError("Register ToolSearch before enabling deferred discovery")
         self._discovery_state = state
+        self._discovery_guard = can_execute
+
+    def _discovery_mode_allowed(self, name: str) -> bool:
+        if self._discovery_guard is None:
+            return True
+        try:
+            return bool(self._discovery_guard(name))
+        except Exception:
+            # Mode and capability lookup are security-sensitive.
+            return False
 
     def register_tool(self, tool: Tool):
         """
@@ -178,6 +191,8 @@ class ToolRegistry:
         for tool in tuple(self._tools.values()):
             if not self._tool_allowed(tool.name) or not self._circuit_breaker.is_available(tool.name):
                 continue
+            if not self._discovery_mode_allowed(tool.name):
+                continue
             if (not include_deferred and self._discovery_state is not None
                     and not self._discovery_state.is_visible(tool.name)):
                 continue
@@ -210,6 +225,8 @@ class ToolRegistry:
 
         for name, info in tuple(self._functions.items()):
             if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
+                continue
+            if not self._discovery_mode_allowed(name):
                 continue
             if (not include_deferred and self._discovery_state is not None
                     and not self._discovery_state.is_visible(name)):
@@ -329,6 +346,17 @@ class ToolRegistry:
                     "code": ErrorCode.ACCESS_DENIED.value,
                     "message": "Tool blocked by Docker sandbox policy.",
                 },
+                "stats": {"time_ms": 0},
+                "context": {"cwd": ".", "params_input": parameters},
+            }, ensure_ascii=False)
+
+        # The same dynamic mode policy used for catalog filtering must also
+        # guard direct registry dispatch, even without Agent pre-hooks.
+        if not self._discovery_mode_allowed(name):
+            message = f"Tool '{name}' is not permitted in the current Agent mode."
+            return json.dumps({
+                "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                "error": {"code": ErrorCode.PERMISSION_DENIED.value, "message": message},
                 "stats": {"time_ms": 0},
                 "context": {"cwd": ".", "params_input": parameters},
             }, ensure_ascii=False)
