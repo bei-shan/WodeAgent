@@ -134,7 +134,7 @@ def test_mcp_sanitized_name_collision_cannot_take_another_server_adapter():
 
 
 def test_mcp_cleanup_unregisters_only_mcp_names():
-    from core.features.mcp import MCPFeature
+    from core.runtime.service_mcp import MCPService
 
     registry = ToolRegistry()
     builtin = Probe("Read")
@@ -142,7 +142,7 @@ def test_mcp_cleanup_unregisters_only_mcp_names():
     registry.replace_owned_tools("mcp:files", [Probe("files_get")])
     registry.replace_owned_tools("mcp:search", [Probe("search_get")])
     agent = SimpleNamespace(tool_registry=registry, _mcp_clients=[])
-    MCPFeature().cleanup(agent)
+    MCPService().close(agent)
     assert registry.get_tool("Read") is builtin
     assert registry.get_tool("files_get") is None
     assert registry.get_tool("search_get") is None
