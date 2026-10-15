@@ -788,6 +788,10 @@ class TaskTool(Tool):
                     main_gate = getattr(tool, "_permission_gate", None)
                 filtered.register_tool(tool)
 
+        # Hosted capability fences must follow every derived registry, even
+        # though hosted Task is currently denied by the Bash-only allowlist.
+        filtered.inherit_hosted_authority(self._tool_registry)
+
         # Sub-agents inherit the main agent's authorization cache but
         # must not prompt the user directly.
         if main_gate is not None:
