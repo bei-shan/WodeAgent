@@ -18,7 +18,7 @@ class Probe(Tool):
         self.required = "value"
 
     def get_parameters(self):
-        return [ToolParameter(name=self.required, type="string", required=True)]
+        return [ToolParameter(name=self.required, type="string", description="Record identifier", required=True)]
 
     def run(self, parameters):
         self.calls.append(parameters)
