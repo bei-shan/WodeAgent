@@ -23,7 +23,7 @@ class Probe(Tool):
         self.calls = 0
 
     def get_parameters(self):
-        return [ToolParameter("value", "string", "Value")]
+        return [ToolParameter(name="value", type="string", description="Value")]
 
     def run(self, parameters):
         self.calls += 1
