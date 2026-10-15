@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import * as api from './api'
 import FileBrowser from './FileBrowser'
 import ChatComposer from './components/ChatComposer'
+import MessageContent from './components/MessageContent'
 import TracePanel from './components/TracePanel'
 import PluginsPanel from './components/PluginsPanel'
 import { createSessionEventHandler } from './state/sessionEvents'
@@ -493,9 +494,8 @@ function AppCore() {
               {messages.map(message => (
                 <div key={message.id} className={`chat-message ${message.role === 'user' ? 'user' : 'assistant'} animate-slide-up`}>
                   <div className={message.role === 'user' ? 'chat-message-user-body' : 'chat-message-assistant-body'}>
-                    <div className={`chat-message-text ${message.streaming ? 'cursor-blink' : ''}`}>
-                      {message.content || (message.streaming ? '' : '(空)')}
-                    </div>
+                    <MessageContent content={message.content || (message.streaming ? '' : '(空)')}
+                      streaming={message.streaming} />
                     {message.step && <div className="mt-1 text-xs text-gray-400">Step {message.step}</div>}
                     {message.role === 'assistant' && !message.streaming && message.content && (
                       <div className="message-actions">
