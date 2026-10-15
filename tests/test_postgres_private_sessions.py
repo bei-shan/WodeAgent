@@ -182,6 +182,26 @@ def test_real_http_routing_uses_signed_principal_scope(backend):
                 assert client.put(f"/api/v2/sessions/{sid}", headers=headers("bob"),
                                   json={"expected_version": 2, "snapshot": {"bad": 1}}).status_code == 409
                 assert backend.get(scope("t1", "u1", "p1"), sid).snapshot == {"phase": "tested"}
+                # Now revoke the *same* signed principal in the real DB.
+                # Every subsequent HTTP operation must fail immediately.
+                with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE ridge.private_project_memberships SET enabled=FALSE
+                           WHERE tenant_id='t1' AND project_id='p1' AND user_id='u1'"""
+                    )
+                try:
+                    assert client.get(
+                        f"/api/v2/sessions/{sid}", headers=headers("alice")
+                    ).status_code == 403
+                    assert client.post(
+                        "/api/v2/sessions", json={}, headers=headers("alice")
+                    ).status_code == 403
+                finally:
+                    with psycopg.connect(admin_dsn) as conn, conn.cursor() as cur:
+                        cur.execute(
+                            """UPDATE ridge.private_project_memberships SET enabled=TRUE
+                               WHERE tenant_id='t1' AND project_id='p1' AND user_id='u1'"""
+                        )
             finally:
                 assert client.delete(f"/api/v2/sessions/{sid}",
                                      headers=headers("alice")).status_code == 204
