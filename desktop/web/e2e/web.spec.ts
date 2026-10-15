@@ -51,6 +51,8 @@ async function mockBackend(page: Page): Promise<MockState> {
     })
 
     if (method === 'GET' && path === '/api/sessions') return ok([])
+    if (path.endsWith('/execution-history') && method === 'GET') return ok({ tools: [] })
+    if (path === '/api/sandbox/terminal-capabilities' && method === 'GET') return ok({enabled:false,backend:'docker',interactive:true})
     if (method === 'POST' && path === '/api/sessions') return ok({
       id: 'e2e-session', title: '新会话', busy: false, pinned: false,
     }, 201)
@@ -443,4 +445,45 @@ test('file snapshot Diff only compares re-read workspace content', async ({ page
   await page.getByRole('button', { name: '更新基线' }).click()
   await page.getByRole('button', { name: '对比最新' }).click()
   await expect(page.getByText('与记录的基线相同，尚无变化。')).toBeVisible()
+})
+
+
+test('GFM table and task list render with sanitizer stripping scripts and remote images', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByPlaceholder('问任何问题').fill('Markdown 表格')
+  await page.getByPlaceholder('问任何问题').press('Enter')
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'llm.delta', { kind: 'content',
+    text: '| 列 | 值 |\n| --- | --- |\n| 状态 | 完成 |\n\n- [x] 完成测试\n\n<script>alert("bad")</script>\n<img src="https://tracker.invalid/pixel" onerror="alert(1)">',
+  })
+  await expect(page.getByRole('table')).toBeVisible()
+  await expect(page.getByText('完成测试')).toBeVisible()
+  await expect(page.locator('.markdown-html script')).toHaveCount(0)
+  await expect(page.locator('.markdown-html img')).toHaveCount(0)
+})
+
+test('Web UI shows explicit Git Diff mode without confusing browser snapshots', async ({ page }) => {
+  await mockBackend(page)
+  await page.route('**/api/sessions/*/git/diff?*', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({available: true, path:'hello.py',base:'HEAD', patch:'@@ -1 +1 @@\n-before\n+after\n', reason:''}),
+  }))
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.getByRole('button', { name: '文件', exact: true }).click()
+  await page.getByRole('button', { name: /hello.py/ }).click()
+  await page.getByRole('button', { name: 'Git Diff' }).click()
+  await expect(page.getByLabel('Git Diff 内容')).toContainText('+after')
+  await expect(page.getByText('「对比最新」是本地快照比较', { exact: false })).toBeVisible()
+})
+
+test('PTY defaults to disabled without authenticated opt-in', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.getByRole('button', { name: /执行详情/ }).click()
+  await page.getByRole('button', { name: 'Docker TTY' }).click()
+  await expect(page.getByText('Docker TTY 未启用或当前服务器不支持。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '连接 Docker TTY' })).toHaveCount(0)
 })
