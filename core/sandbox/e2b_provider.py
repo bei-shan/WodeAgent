@@ -79,6 +79,8 @@ class E2BCommandProvider:
         single_gateway_ack: bool = False,
         sdk_factory: Callable[..., Any] | None = None,
         capacity: E2BCapacity | None = None,
+        redis_ledger_enabled: bool = False,
+        deployment: str = "default",
     ):
         # Hard fail-closed selection. Operators must consciously acknowledge
         # that local admission limits do not cover other gateway processes.
@@ -109,7 +111,19 @@ class E2BCommandProvider:
         self._ttl = sandbox_ttl
         self._slot = secrets.token_hex(24)
         self._owner = secrets.token_hex(24)
-        self._capacity = capacity or local_e2b_capacity("e2b", capacity_limit)
+        if type(redis_ledger_enabled) is not bool:
+            raise ValueError("E2B Redis setting must be boolean")
+        if capacity is not None:
+            self._capacity = capacity
+        elif redis_ledger_enabled:
+            from core.sandbox.e2b_redis_capacity import RedisE2BCapacity
+            self._capacity = RedisE2BCapacity(
+                deployment=deployment,
+                limit=capacity_limit,
+                redis_url=os.environ.get("E2B_REDIS_URL"),
+            )
+        else:
+            self._capacity = local_e2b_capacity("e2b", capacity_limit)
         self._lock = threading.RLock()
         self._busy = False
         self._closed = False
@@ -193,6 +207,16 @@ class E2BCommandProvider:
                 self._poisoned = True
                 raise SandboxUnavailable("E2B create returned after cancellation")
             self._client = value
+            tracker = getattr(self._capacity, "track", None)
+            if callable(tracker):
+                try:
+                    tracker(self._slot, str(getattr(value, "sandbox_id", "")))
+                except Exception:
+                    self._poisoned = True
+                    self._kill_remote()
+                    raise SandboxUnavailable(
+                        "E2B remote VM ownership could not be journaled"
+                    ) from None
             return
         if status == "error":
             # Failed create may still have remote side effects. Retain the
@@ -224,7 +248,11 @@ class E2BCommandProvider:
         # A False return means the VM was already absent in the control plane.
         self._client = None
         if self._reserved:
-            self._capacity.release(self._slot)
+            try:
+                self._capacity.release(self._slot)
+            except SandboxUnavailable:
+                self._poisoned = True
+                return False
             self._reserved = False
         return True
 
