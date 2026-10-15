@@ -188,6 +188,28 @@ def test_cancel_kills_remote_and_releases_confirmed_capacity(tmp_path):
         p.execute("no replay")
 
 
+def test_close_during_active_sdk_call_cannot_leave_remote_vm_alive(tmp_path):
+    factory = Factory()
+    cap = E2BCapacity(1)
+    p = provider(tmp_path, factory, cap)
+    p.execute("boot")
+    vm = factory.vms[0]
+    vm.running.clear()
+    vm.block = True
+    outcomes = []
+    t = threading.Thread(target=lambda: outcomes.append(
+        p.execute("long-running", timeout_seconds=30),
+    ))
+    t.start()
+    assert vm.running.wait(2)
+    p.close()
+    t.join(4)
+    assert not t.is_alive()
+    assert vm.killed >= 1
+    assert cap.used == 0
+    assert len(factory.calls) == 1
+
+
 def test_failed_kill_retains_capacity_until_operator_reconcile(tmp_path):
     factory = Factory()
     cap = E2BCapacity(1)
