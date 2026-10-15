@@ -114,57 +114,44 @@ class AgentSession:
     # ── Public API ────────────────────────────────────────────────────
 
     def send_message(self, content: str) -> bool:
-        """Kick off an agent turn in the worker thread.
+        """Start one turn without allowing unbounded parallel worker threads.
 
-        Auto-names the session from the first user message.
-        Returns ``True`` if the turn started, ``False`` if the agent is
-        already busy (the caller should wait for ``turn.completed``).
+        Returns False for an already-busy/closed session. Capacity exhaustion
+        raises TurnCapacityExceeded *before* creating or mutating a new agent.
         """
         with self._busy_lock:
             if self._busy or self._closed:
                 return False
-            # Acquire while holding the same lock used for idle/busy checks;
-            # rejection does not mutate session state or initialize the agent.
             permit = self._admission.acquire(self._admission_owner) if self._admission else None
             self._turn_permit = permit
             self._interaction_cancelled.clear()
             self._busy = True
 
-        # Auto-name session from first user message.
-        if not self.title or self.title == "新会话":
-            self.title = content.strip()[:40]
-
         try:
+            if not self.title or self.title == "新会话":
+                self.title = content.strip()[:40]
             self.ensure_agent()
-        except BaseException:
-            with self._busy_lock:
-                self._busy = False
-                permit = self._turn_permit
-                self._turn_permit = None
-            if permit is not None:
-                permit.release()
-            raise
-        # An interrupt may have arrived while the lazy Agent was initializing.
-        # Propagate it before the worker starts, rather than losing the request.
-        if self._interaction_cancelled.is_set() and hasattr(self._agent, "interrupt"):
-            self._agent.interrupt()
-        self._thread = threading.Thread(
-            target=self._run_turn,
-            args=(content,),
-            daemon=True,
-            name=f"agent-{self.session_id[:8]}",
-        )
-        try:
+            # An interrupt during slow initialization must be propagated.
+            if self._interaction_cancelled.is_set() and hasattr(self._agent, "interrupt"):
+                self._agent.interrupt()
+            self._thread = threading.Thread(
+                target=self._run_turn,
+                args=(content,),
+                daemon=True,
+                name=f"agent-{self.session_id[:8]}",
+            )
             self._thread.start()
+            return True
         except BaseException:
+            # Every cold-start failure (init, interrupt, thread start) must
+            # free capacity and return the session to the idle state.
             with self._busy_lock:
-                self._busy = False
                 permit = self._turn_permit
                 self._turn_permit = None
-            if permit is not None:
-                permit.release()
+                if permit is not None:
+                    permit.release()
+                self._busy = False
             raise
-        return True
 
     def resolve_permission(self, request_id: str, decision: str) -> bool:
         """Unblock a pending permission request.
@@ -377,11 +364,11 @@ class AgentSession:
             self.events.put(AgentEvent(SESSION_EVENT_TURN_DONE, outcome.to_dict()))
         finally:
             with self._busy_lock:
-                self._busy = False
                 permit = self._turn_permit
                 self._turn_permit = None
-            if permit is not None:
-                permit.release()
+                if permit is not None:
+                    permit.release()
+                self._busy = False
 
     def close(self) -> None:
         """Release idle resources and wake outstanding interactive waiters."""
