@@ -1,8 +1,9 @@
 """Transport-independent plugin installation and enablement use cases.
 
 The plugin archive is local and bounded; install never executes code, fetches
-packages or modifies user hook settings. Activation of executable plugin
-components requires explicit trust plus RIDGE_ALLOW_PLUGIN_CODE.
+packages or modifies user hook settings. Activation of locally trusted command Hook contributions requires
+explicit fingerprint-bound trust plus RIDGE_ALLOW_TRUSTED_HOOKS.
+Project Python Feature plugins are not supported.
 """
 from __future__ import annotations
 
