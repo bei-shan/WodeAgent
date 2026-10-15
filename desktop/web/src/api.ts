@@ -144,6 +144,7 @@ async function req<T>(method: string, path: string, body?: any): Promise<T> {
 // ── Sessions ─────────────────────────────────────────────────────────
 
 export const sessions = {
+  executionHistory: (sid: string) => req<{ tools: Array<{ id: string; step: number; name: string; status: 'running'|'success'|'error'; input: Record<string, unknown>; output?: string }> }>('GET', `/sessions/${encodeURIComponent(sid)}/execution-history`),
   list:   ()              => req<SessionInfo[]>('GET', '/sessions'),
   create: (title?: string) => req<SessionInfo>('POST', '/sessions', { title: title || '' }),
   activate: (id: string) => req<{ status: string }>('POST', `/sessions/${id}/activate`),
@@ -169,6 +170,7 @@ export const sessions = {
 // ── Files ────────────────────────────────────────────────────────────
 
 export const files = {
+  gitDiff: (sid: string, path: string) => req<{ available: boolean; reason: string; patch: string; path?: string; base?: string }>('GET', `/sessions/${encodeURIComponent(sid)}/git/diff?path=${encodeURIComponent(path)}`),
   tree:    (sid: string, path = '.', limit = 200) =>
     req<FileTree>('GET', `/sessions/${sid}/files?path=${encodeURIComponent(path)}&limit=${limit}`),
   content: (sid: string, path: string, start = 1, limit = 500) =>
