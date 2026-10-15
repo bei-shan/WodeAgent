@@ -94,6 +94,25 @@ This test creates a randomly named, isolated test ledger and deletes only
 its own keys after completion. The standard CI suite uses credential-free
 in-memory Redis script simulation instead; it is not live Redis evidence.
 
+### Command fencing after VM creation
+
+The Redis ledger now also owns a `commands` hash in the same Redis Cluster
+slot. Before calling E2B `commands.run`, the Agent must atomically claim
+`reservation_token + expected_remote_id + fresh_execution_token`. Another
+gateway or thread cannot claim that reservation while a command is active,
+even if it knows the remote VM ID. The exact current owner must atomically
+complete its execution token after a definitive SDK result. Unknown results
+make the provider unusable and trigger VM destruction; **only a confirmed
+remote kill** clears an outstanding execution claim and releases the capacity
+slot. No Redis claim has an automatic TTL.
+
+This prevents accidental concurrent execution or blind reuse of the same
+remote VM by cooperative gateway processes, but is **not** a full distributed
+lease-and-handover protocol: there is no session reconnect/adoption, no
+renewable owner token, no approved crash takeover or remote command
+preemption guarantee. Redis loss freezes execution, not switch to local mode.
+The single-Gateway acknowledgement remains mandatory.
+
 This gives a bounded *deployment-wide reservation ledger*, not the entire
 DeerFlow distributed sandbox ownership solution. Remote VM adoption,
 lease heartbeat/fencing for SDK commands, reconciling owner crashes, and

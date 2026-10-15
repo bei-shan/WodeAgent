@@ -50,7 +50,27 @@ if string.sub(entry, 1, string.len(ARGV[2]) + 1) ~= ARGV[2] .. ':' then
   return 'FENCED'
 end
 redis.call('HDEL', KEYS[1], ARGV[1])
+-- A definitive remote delete also invalidates any stale in-flight claim.
+redis.call('HDEL', KEYS[3], ARGV[1])
 return 'RELEASED'
+"""
+
+
+_COMMAND_BEGIN = """
+local entry = redis.call('HGET', KEYS[1], ARGV[1])
+if entry ~= ARGV[2] .. ':' .. ARGV[3] then return 'FENCED' end
+if redis.call('HEXISTS', KEYS[3], ARGV[1]) == 1 then return 'BUSY' end
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[2] .. ':' .. ARGV[4])
+return 'BEGUN'
+"""
+
+_COMMAND_END = """
+local entry = redis.call('HGET', KEYS[1], ARGV[1])
+if entry ~= ARGV[2] .. ':' .. ARGV[3] then return 'FENCED' end
+local running = redis.call('HGET', KEYS[3], ARGV[1])
+if running ~= ARGV[2] .. ':' .. ARGV[4] then return 'FENCED' end
+redis.call('HDEL', KEYS[3], ARGV[1])
+return 'ENDED'
 """
 
 
@@ -88,13 +108,14 @@ class RedisE2BCapacity:
         # Hash tags keep both Lua KEYS in one Redis Cluster slot.
         self._key = f"ridgecode:e2b:{{{deployment}}}:reservations"
         self._limit_key = f"ridgecode:e2b:{{{deployment}}}:limit"
+        self._command_key = f"ridgecode:e2b:{{{deployment}}}:commands"
 
     def _eval(self, script: str, token: str, *args: object) -> str:
         if not isinstance(token, str) or not _TOKEN.fullmatch(token):
             raise ValueError("Invalid E2B reservation identity")
         try:
             result = self._redis.eval(
-                script, 2, self._key, self._limit_key,
+                script, 3, self._key, self._limit_key, self._command_key,
                 token, self._owner, *args,
             )
         except Exception:
@@ -114,6 +135,29 @@ class RedisE2BCapacity:
             raise SandboxUnavailable("Invalid remote E2B sandbox identity")
         if self._eval(_TRACK, token, sandbox_id) != "TRACKED":
             raise SandboxUnavailable("E2B remote ownership claim was fenced")
+
+    def begin_command(self, token: str, sandbox_id: str) -> str:
+        """Atomically fence all concurrent commands for this remote VM.
+
+        A claim NEVER expires automatically. If the gateway dies during a
+        remote command, another process cannot start a second one until
+        an operator verifies remote destruction and reconciles ownership.
+        """
+        if not isinstance(sandbox_id, str) or not _VM_ID.fullmatch(sandbox_id):
+            raise SandboxUnavailable("Invalid remote E2B sandbox identity")
+        command_id = secrets.token_hex(24)
+        if self._eval(_COMMAND_BEGIN, token, sandbox_id, command_id) != "BEGUN":
+            raise SandboxUnavailable("E2B remote command ownership is fenced or busy")
+        return command_id
+
+    def end_command(self, token: str, sandbox_id: str, command_id: str) -> None:
+        """Clear exactly the command claim created by this owner and epoch."""
+        if not isinstance(sandbox_id, str) or not _VM_ID.fullmatch(sandbox_id):
+            raise SandboxUnavailable("Invalid remote E2B sandbox identity")
+        if not isinstance(command_id, str) or not _TOKEN.fullmatch(command_id):
+            raise SandboxUnavailable("Invalid E2B execution claim")
+        if self._eval(_COMMAND_END, token, sandbox_id, command_id) != "ENDED":
+            raise SandboxUnavailable("E2B command completion was fenced or unconfirmed")
 
     def release(self, token: str) -> None:
         # Only call after a definitive remote kill, never merely after a local
