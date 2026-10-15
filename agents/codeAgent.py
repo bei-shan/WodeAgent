@@ -38,6 +38,7 @@ from core.features import collect_all_features
 from core.features.base import AgentFeature
 from core.features.lifecycle import FeatureLifecycle
 from core.runtime.services import RuntimeServices
+from core.runtime.middleware import PolicyMiddlewarePipeline
 from core.runtime.service_mcp import MCPService
 from core.runtime.service_teams import TeamService
 from core.runtime.service_sessions import SessionService
@@ -144,6 +145,11 @@ class CodeAgent(Agent):
         self._runtime_services.register("sandbox", SandboxService)
         self._worktree_manager = None
         self._background_runner = None
+
+        # Security policies are mandatory and initialize before optional
+        # Feature/Plugin adapters; they cannot be displaced by plugin order.
+        self._policy_middleware = PolicyMiddlewarePipeline(self)
+        self._policy_middleware.initialize()
 
         # Explicit feature transaction. Partially initialized features must
         # be cleaned up if any later init/post-init or tool bootstrap fails.
