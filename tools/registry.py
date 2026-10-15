@@ -104,6 +104,9 @@ class ToolRegistry:
         """
         if self._sandbox_allowed_tools is not None and tool.name in self._sandbox_allowed_tools:
             raise PermissionError("Cannot replace an approved sandbox tool")
+        # One public name must resolve to exactly one execution adapter.
+        if tool.name in self._functions:
+            raise ValueError(f"Tool name '{tool.name}' is already registered as a function")
         if tool.name in self._tools:
             logger.warning("工具 '%s' 已存在，将被覆盖。", tool.name)
 
@@ -121,6 +124,8 @@ class ToolRegistry:
         """
         if self._sandbox_allowed_tools is not None and name in self._sandbox_allowed_tools:
             raise PermissionError("Cannot override an approved sandbox tool")
+        if name in self._tools:
+            raise ValueError(f"Tool name '{name}' is already registered as an object")
         if name in self._functions:
             logger.warning("工具 '%s' 已存在，将被覆盖。", name)
 
@@ -158,7 +163,10 @@ class ToolRegistry:
             try:
                 params = tool.get_parameters()
             except Exception:
-                params = []
+                # Missing/broken declarations must not become an empty input
+                # schema: that would mislead the model and expose the tool.
+                logger.warning("Skipping tool %s with unavailable parameters", tool.name)
+                continue
             schema_provider = getattr(tool, "get_input_schema", None)
             if callable(schema_provider):
                 try:
@@ -343,6 +351,23 @@ class ToolRegistry:
                     "context": {"cwd": ".", "params_input": parameters},
                 }, ensure_ascii=False)
 
+        # Legacy function tools publish a single string-valued 'input' field.
+        # Validate that exact contract and unwrap it before calling the
+        # registered Callable[[str], str]; never forward an arbitrary dict.
+        if name in self._functions and name not in self._tools:
+            if set(parameters) != {"input"} or not isinstance(parameters["input"], str):
+                return json.dumps({
+                    "status": ToolStatus.ERROR.value,
+                    "data": {},
+                    "text": "Function tool requires a single string 'input' parameter.",
+                    "error": {
+                        "code": ErrorCode.INVALID_PARAM.value,
+                        "message": "Function tool requires a single string 'input' parameter.",
+                    },
+                    "stats": {"time_ms": 0},
+                    "context": {"cwd": ".", "params_input": parameters},
+                }, ensure_ascii=False)
+
         # 优先查找Tool对象
         if name in self._tools:
             tool = self._tools[name]
@@ -360,7 +385,7 @@ class ToolRegistry:
         elif name in self._functions:
             func = self._functions[name]["func"]
             try:
-                result = func(input_text)
+                result = func(parameters["input"])
                 result_payload = self._normalize_result(name, result, parameters)
             except Exception as e:
                 result_payload = self._create_internal_error_payload(
