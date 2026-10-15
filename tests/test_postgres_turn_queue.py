@@ -202,3 +202,31 @@ def test_concurrent_replayed_idempotency_key_is_consistent(stores):
             queue.enqueue(owner, sid, idempotency_key="exact-same", payload={"v": 2})
     finally:
         session_store.delete(owner, sid)
+
+
+def test_fenced_failure_is_terminal_and_cannot_publish_success(stores):
+    session_store, queue = stores
+    owner = MemoryScope("fenced-fail-t", "fenced-fail-u", "fenced-fail-p")
+    outsider = MemoryScope("outside-t", "fenced-fail-u", "fenced-fail-p")
+    sid = uuid.uuid4().hex[:12]
+    session_store.create(owner, sid)
+    try:
+        turn = queue.enqueue(owner, sid, idempotency_key="failed-turn", payload={"x": 1})
+        claim = queue.claim(owner, worker_id="failure-worker")
+        assert claim is not None and claim.id == turn
+        assert not queue.fail(outsider, turn, worker_id="failure-worker",
+                              fence=claim.fence, error_kind="worker_execution_failed")
+        assert not queue.fail(owner, turn, worker_id="foreign",
+                              fence=claim.fence, error_kind="worker_execution_failed")
+        with pytest.raises(ValueError, match="failure kind"):
+            queue.fail(owner, turn, worker_id="failure-worker",
+                       fence=claim.fence, error_kind="secret:token-value")
+        assert queue.fail(owner, turn, worker_id="failure-worker",
+                          fence=claim.fence, error_kind="worker_execution_failed")
+        assert not queue.complete(owner, turn, worker_id="failure-worker",
+                                  fence=claim.fence, result={"stale": True})
+        assert not queue.renew(owner, turn, worker_id="failure-worker",
+                               fence=claim.fence)
+        assert queue.claim(owner, worker_id="future-worker") is None
+    finally:
+        session_store.delete(owner, sid)
