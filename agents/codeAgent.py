@@ -254,6 +254,8 @@ class CodeAgent(Agent):
                     sandbox_ttl=self.config.sandbox_e2b_ttl_seconds,
                     capacity_limit=self.config.sandbox_e2b_capacity,
                     single_gateway_ack=self.config.sandbox_e2b_single_gateway_ack,
+                    redis_ledger_enabled=self.config.sandbox_e2b_redis_ledger_enabled,
+                    deployment=self.config.sandbox_e2b_deployment,
                 )
             self._sandbox_provider = provider
             self.tool_registry.register_tool(SandboxBashTool(provider))
