@@ -1,7 +1,7 @@
-"""BudgetFeature.pre_tool_use enforce-mode tests.
+"""BudgetMiddleware.pre_tool_use enforce-mode tests.
 
 Run:
-    python -m pytest tests/test_budget_feature.py -v
+    python -m pytest tests/test_budget_middleware.py -v
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import pytest
 
 from core.budget_tracker import BudgetTracker
 from core.exceptions import BudgetExceeded
-from core.features.budget import BudgetFeature
+from core.runtime.policy_middleware import BudgetMiddleware
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ from core.features.budget import BudgetFeature
 
 
 def _make_agent(*, enforce: bool, budget_total: int | None, spent: int = 0) -> SimpleNamespace:
-    """Build a minimal agent shaped to satisfy BudgetFeature.pre_tool_use."""
+    """Build a minimal agent shaped to satisfy BudgetMiddleware.pre_tool_use."""
     tracker = BudgetTracker(total=budget_total)
     tracker._spent = spent  # type: ignore[attr-defined]
     return SimpleNamespace(
@@ -39,7 +39,7 @@ def test_pre_tool_use_default_does_not_block_when_disabled():
     """With budget_enforce=False (the default), pre_tool_use always
     returns None — even when the budget is exhausted."""
     agent = _make_agent(enforce=False, budget_total=1000, spent=9999)
-    feat = BudgetFeature()
+    feat = BudgetMiddleware()
 
     result = feat.pre_tool_use(agent, "Read", {"file_path": "foo.py"})
     assert result is None  # never blocks
@@ -48,7 +48,7 @@ def test_pre_tool_use_default_does_not_block_when_disabled():
 def test_pre_tool_use_does_not_block_when_under_budget():
     """Under budget → no block, regardless of enforce setting."""
     agent = _make_agent(enforce=True, budget_total=10_000, spent=500)
-    feat = BudgetFeature()
+    feat = BudgetMiddleware()
 
     result = feat.pre_tool_use(agent, "Bash", {"command": "ls"})
     assert result is None
@@ -63,7 +63,7 @@ def test_pre_tool_use_blocks_when_enforced_and_exceeded():
     """With budget_enforce=True and is_exceeded()=True, pre_tool_use
     returns the structured 'blocked' payload."""
     agent = _make_agent(enforce=True, budget_total=1000, spent=1500)
-    feat = BudgetFeature()
+    feat = BudgetMiddleware()
 
     result = feat.pre_tool_use(agent, "Edit", {"file_path": "x.py", "old_string": "a", "new_string": "b"})
     assert result is not None
@@ -76,7 +76,7 @@ def test_pre_tool_use_blocks_when_enforced_and_exceeded():
 def test_pre_tool_use_does_not_block_when_no_budget_set():
     """No budget total (unlimited) → is_exceeded() returns False, no block."""
     agent = _make_agent(enforce=True, budget_total=None, spent=999_999)
-    feat = BudgetFeature()
+    feat = BudgetMiddleware()
 
     result = feat.pre_tool_use(agent, "Read", {})
     assert result is None
@@ -108,6 +108,6 @@ def test_pre_tool_use_handles_missing_tracker():
     """If agent._budget_tracker is somehow absent, pre_tool_use must
     not raise — it just no-ops."""
     agent = SimpleNamespace(config=SimpleNamespace(budget_enforce=True))
-    feat = BudgetFeature()
+    feat = BudgetMiddleware()
     result = feat.pre_tool_use(agent, "Read", {})
     assert result is None
