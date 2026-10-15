@@ -665,8 +665,11 @@ class CodeAgent(Agent):
             for feat in reversed(getattr(self, "_features", []) or []):
                 try:
                     feat.cleanup(self)
-                except Exception:
-                    self.logger.warning("Legacy feature cleanup failed", exc_info=True)
+                except Exception as exc:
+                    self.logger.warning(
+                        "Feature %s.cleanup failed: %s",
+                        getattr(feat, "name", type(feat).__name__), exc,
+                    )
 
         # Close owned VM resources even if another feature cleanup raised.
         sandbox_provider = getattr(self, "_sandbox_provider", None)
