@@ -277,6 +277,18 @@ class E2BCommandProvider:
         try:
                 self._ensure_remote(cancel_event)
                 client = self._client
+                remote_id = str(getattr(client, "sandbox_id", ""))
+                command_id: str | None = None
+                begin = getattr(self._capacity, "begin_command", None)
+                if callable(begin):
+                    try:
+                        command_id = begin(self._slot, remote_id)
+                    except Exception:
+                        self._poisoned = True
+                        self._kill_remote()
+                        raise SandboxUnavailable(
+                            "E2B remote command fence admission failed"
+                        ) from None
                 def invoke():
                     # The command runs in a REMOTE VM. No host shell, volume,
                     # Docker daemon or implicit local file synchronization.
@@ -315,6 +327,17 @@ class E2BCommandProvider:
                     self._poisoned = True
                     self._kill_remote()
                     raise SandboxUnavailable("Invalid E2B command output")
+                if command_id is not None:
+                    try:
+                        self._capacity.end_command(self._slot, remote_id, command_id)
+                    except Exception:
+                        # Remote command completed, but we cannot confirm
+                        # ownership release. Destroy this VM and never replay.
+                        self._poisoned = True
+                        self._kill_remote()
+                        raise SandboxUnavailable(
+                            "E2B remote command fence completion failed"
+                        ) from None
                 return CommandResult(stdout[:_MAX_OUTPUT], stderr[:_MAX_OUTPUT], value.exit_code)
         finally:
             with self._lock:
