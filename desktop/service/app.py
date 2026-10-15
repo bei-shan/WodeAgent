@@ -284,14 +284,15 @@ def create_app(
     @app.get("/api/health")
     async def health():
         ctrl: SessionController = app.state.controller
+        usage = ctrl.admission.snapshot()
         return {
             "status": "ok",
             "uptime": int(time.time() - app.state._started_at),
             "sessions": len(ctrl.list_sessions()),
             "turn_admission": {
-                "active": ctrl.admission.snapshot().active,
-                "limit": ctrl.admission.snapshot().limit,
-                "rejected": ctrl.admission.snapshot().rejected,
+                "active": usage.active,
+                "limit": usage.limit,
+                "rejected": usage.rejected,
             },
         }
 
