@@ -65,6 +65,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
       return
     }
     setSelected(entry.path)
+    setGitLoading(false)
     setContent('')
     setBaseline(null)
     setComparison(null)
@@ -170,7 +171,7 @@ export default function FileBrowser({ sessionId }: { sessionId: string | null })
                     <button type="button" onClick={() => void compareLatest()} disabled={fileTruncated}
                       className="text-xs text-blue-600 disabled:opacity-40">对比最新</button>
                   )}
-                  {selected && diffMode && (
+                  {selected && (diffMode || gitMode) && (
                     <button type="button" onClick={() => { setDiffMode(false); setGitMode(false) }} className="text-xs text-gray-600">原文</button>
                   )}
                   {selected && comparison !== null && (
