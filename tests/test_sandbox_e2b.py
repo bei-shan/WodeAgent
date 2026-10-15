@@ -205,9 +205,11 @@ def test_nonzero_remote_command_error_stays_a_command_result(tmp_path):
     factory = Factory()
     p = provider(tmp_path, factory)
     p.execute("start")
-    factory.vms[0].failure = SimpleNamespace(
-        stdout="", stderr="not found", exit_code=127,
-    )
+    class CommandExit(Exception):
+        stdout = ""
+        stderr = "not found"
+        exit_code = 127
+    factory.vms[0].failure = CommandExit()
     result = p.execute("missing-command")
     assert result.exit_code == 127 and result.stderr == "not found"
     p.close()
