@@ -87,11 +87,12 @@ Those are significantly more than implementing `Sandbox.create` and
 
 ```bash
 python -m pytest tests/test_sandbox_e2b.py -q
+# BILLABLE: only on approved isolated test account with E2B_API_KEY set
+AGENT_E2B_INTEGRATION=1 AGENT_E2B_ALLOW_BILLING=1 python -m pytest tests/test_sandbox_e2b_integration.py -q
 ```
 
 CI uses fake E2B SDK objects, so it never calls the cloud or bills for VMs.
-A real SDK acceptance suite requiring E2B credentials and explicit cost
-approval remains a release gate. Verify template availability, networking,
+The opt-in live SDK acceptance suite requires E2B credentials and two separate\nenvironment acknowledgements before cloud VM creation. Actual execution\nresults must be recorded by an operator; the suite is skipped in standard CI. Verify template availability, networking,
 creation/kill failure, concurrent capacity, TTL and no host file sync before
 enabling in a real system.
 
