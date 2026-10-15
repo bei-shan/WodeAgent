@@ -50,7 +50,11 @@ circuit-available, mode-authorized entries. Matching is deterministic,
 name-first casefolded lexical matching with description fallback, not a
 semantic vector search. Promoted names live in one Agent-owned
 `ToolDiscoveryState`; they are not global or shared between sessions.
-The default promotion budget is 18 names.
+The default promotion budget is 18 names. Search matches are **pending** until
+`CodeAgent._get_openai_tools_for_current_mode()` binds the next model-step
+schema. A second guessed tool call in the same response is still denied.
+A pending promotion is rechecked against the authoritative current registry
+and mode policy before activation.
 
 The always-visible compatibility core is Read, Write, Edit, MultiEdit, LS,
 Glob, Grep, Bash, TodoWrite, AskUser, Task, TaskOutput, Skill,
@@ -95,7 +99,8 @@ CI additionally runs the full Python suite, MCP compatibility, isolated
 Docker smoke, Web and TUI checks. Explicit assertions cover:
 
 - unpromoted tool side effect count remains zero;
-- promoted schema and runtime agree;
+- promoted schema and runtime agree, and same-response guessed tool calls
+  remain denied until the next model-step schema binding;
 - role/mode change revokes execution even for a previously promoted name;
 - two registries with equal names cannot share promotions;
 - replacing/removing an executor invalidates a promotion;
