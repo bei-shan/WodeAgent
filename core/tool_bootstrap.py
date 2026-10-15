@@ -119,8 +119,11 @@ class ToolBootstrap:
 
                 try:
                     tool_instance = self._instantiate(obj)
-                    existing_owner = self._registry.owner_of(tool_instance.name)
-                    if existing_owner is not None and existing_owner != "builtin":
+                    owner_lookup = getattr(self._registry, "owner_of", None)
+                    existing_owner = (
+                        owner_lookup(tool_instance.name) if callable(owner_lookup) else None
+                    )
+                    if isinstance(existing_owner, str) and existing_owner != "builtin":
                         # Explicitly injected host tools retain their owner's
                         # adapter; a bootstrap scan must not hijack its name.
                         logger.info(
