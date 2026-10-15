@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox.docker_provider import DockerCommandProvider
+from core.sandbox.guest_files import GuestFilesystem
 from core.sandbox.docker_lifecycle import (OWNER_LABEL, EXPIRES_LABEL,
     SIGNATURE_LABEL, VERSION_LABEL, VERSION)
 
@@ -122,3 +123,45 @@ def test_real_docker_orphan_reaper_respects_signature(tmp_path):
         for name in created:
             subprocess.run([provider.docker_binary, "rm", "--force", name],
                            capture_output=True, check=False, timeout=10)
+
+
+def test_guest_file_protocol_is_binary_safe_and_symlink_resistant(tmp_path):
+    """Exercises actual Docker guest Python, never Python host file utilities."""
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "data").mkdir()
+    secret = tmp_path / "host-private.txt"
+    secret.write_text("host-private")
+    guest = GuestFilesystem(DockerCommandProvider(root))
+    data = b"\x00\xff\x01bin"
+    assert guest.write_file("data/blob.bin", data) == len(data)
+    assert guest.read_file("/workspace/data/blob.bin") == data
+    assert "blob.bin" in guest.list_dir("data")
+    assert guest.read_file("data/blob.bin") == data
+
+    (root / "data" / "alias.bin").symlink_to(root / "data" / "blob.bin")
+    with pytest.raises(PermissionError):
+        guest.read_file("data/alias.bin")
+    with pytest.raises(PermissionError):
+        guest.write_file("data/alias.bin", b"no")
+    (root / "entry").symlink_to(root / "data", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        guest.read_file("entry/blob.bin")
+    with pytest.raises(PermissionError):
+        guest.write_file("entry/extra.bin", b"no")
+    assert guest.read_file("data/blob.bin") == data
+    assert secret.read_text() == "host-private"
+
+    # Atomic replacement keeps regular-file permission bits but not setuid.
+    existing = root / "data" / "executable.sh"
+    existing.write_bytes(b"old")
+    existing.chmod(0o755)
+    assert guest.write_file("data/executable.sh", b"new") == 3
+    assert existing.read_bytes() == b"new"
+    assert existing.stat().st_mode & 0o777 == 0o755
+
+    with pytest.raises(ValueError):
+        guest.write_file("data/oversized.bin", b"x" * 65537)
+    assert not (root / "data" / "oversized.bin").exists()
+    with pytest.raises(PermissionError):
+        guest.read_file("/etc/passwd")
