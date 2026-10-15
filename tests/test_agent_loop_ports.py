@@ -136,3 +136,32 @@ def test_runtime_ports_never_import_web_tui_or_code_agent():
         for node in ast.walk(ast.parse(content)):
             if isinstance(node, ast.ImportFrom):
                 assert not (node.module or "").startswith(("agents", "desktop", "tui"))
+
+
+def test_mcp_tool_recovered_during_runtime_blocks_is_advertised_same_step():
+    """Dynamic tool registration must precede each model invocation's schema."""
+    class RecoveringHost(Host):
+        def __init__(self):
+            super().__init__([result("done")])
+            self.available = ["Read"]
+            self.received_tools = None
+
+        def _collect_runtime_blocks(self, step):
+            super()._collect_runtime_blocks(step)
+            self.available.append("mcp__recovered__lookup")
+
+        def _get_openai_tools_for_current_mode(self):
+            self.actions.append(("schema", len(self.available)))
+            return [{"function": {"name": name}} for name in self.available]
+
+        def _invoke_llm_with_retry(
+            self, messages, base_messages, tools_schema, tool_choice,
+            show_raw, trace_logger, step,
+        ):
+            self.received_tools = [item["function"]["name"] for item in tools_schema]
+            return next(self.results)
+
+    host = RecoveringHost()
+    assert AgentLoop(host).run("input", False, Trace()) == "done"
+    assert host.received_tools == ["Read", "mcp__recovered__lookup"]
+    assert host.actions.index(("runtime", 1)) < host.actions.index(("schema", 2))

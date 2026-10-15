@@ -61,8 +61,11 @@ class AgentLoop:
                 "max_steps": host.max_steps,
             }, step=step))
 
-            tools_schema = host._get_openai_tools_for_current_mode()
+            # Runtime features may register tools (e.g. recovered MCP servers)
+            # or change mode. Refresh the model-visible catalog afterwards so
+            # its declarations match the runtime context for this step.
             host._collect_runtime_blocks(step)
+            tools_schema = host._get_openai_tools_for_current_mode()
 
             if host.console_verbose:
                 host._console(f"\n--- Step {step}/{host.max_steps} ---")
