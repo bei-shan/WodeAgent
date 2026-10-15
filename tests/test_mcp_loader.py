@@ -254,16 +254,21 @@ class TestRetryPendingServer(unittest.TestCase):
         reg.get_tool.return_value = None
         reg.get_function.return_value = None
 
-        # First, simulate a pending server
-        with patch.dict(
-            "tools.mcp.loader._pending_servers",
-            {"test-srv": _PendingServer("test-srv", client, "test-srv")},
-        ):
-            result = retry_pending_server(reg, "test-srv", timeout=2.0)
+        # Register a pending client for this exact owner. The assertion is
+        # inside the owning registry's lifetime and does not depend on
+        # patch.dict restoring the module-level dictionary.
+        from tools.mcp import loader as loader_mod
+        with loader_mod._pending_lock:
+            loader_mod._pending_servers[(reg, "test-srv")] = _PendingServer(
+                "test-srv", client, "test-srv",
+            )
+        self.assertIn("test-srv", get_pending_server_names(reg))
+        result = retry_pending_server(reg, "test-srv", timeout=2.0)
 
         self.assertTrue(result)
-        # After success, server should no longer be pending
-        self.assertNotIn("test-srv", get_pending_server_names())
+        # A successful retry is consumed exactly once.
+        self.assertNotIn("test-srv", get_pending_server_names(reg))
+        self.assertFalse(retry_pending_server(reg, "test-srv", timeout=2.0))
 
     def test_retry_failure_stays_pending(self):
         """Failed retry keeps server in pending list with error set."""
@@ -278,7 +283,7 @@ class TestRetryPendingServer(unittest.TestCase):
 
         ps = _PendingServer("bad-srv", client, "bad-srv")
         with loader_mod._pending_lock:
-            loader_mod._pending_servers["bad-srv"] = ps
+            loader_mod._pending_servers[(reg, "bad-srv")] = ps
 
         try:
             result = retry_pending_server(reg, "bad-srv", timeout=1.0)
@@ -288,6 +293,71 @@ class TestRetryPendingServer(unittest.TestCase):
             self.assertIn("bad-srv", get_pending_server_names())
         finally:
             clear_pending_servers()
+
+
+
+def test_mcp_pending_connections_are_registry_scoped():
+    """Equal server names cannot transfer a client into another Agent registry."""
+    from tools.mcp import loader as loader_mod
+
+    first = _make_fake_registry()
+    second = _make_fake_registry()
+    client_one = MagicMock(spec=MCPClient)
+    client_two = MagicMock(spec=MCPClient)
+    client_one.connect_sync.return_value = None
+    client_two.connect_sync.return_value = None
+    client_one.list_tools_sync.return_value = _FakeToolsResult([
+        _FakeTool("read_first", "only first", {"type": "object", "properties": {}})
+    ])
+    client_two.list_tools_sync.return_value = _FakeToolsResult([
+        _FakeTool("read_second", "only second", {"type": "object", "properties": {}})
+    ])
+    client_one.config = MCPClientConfig(transport="stdio", command="echo")
+    client_two.config = MCPClientConfig(transport="stdio", command="echo")
+
+    clear_pending_servers()
+    try:
+        with loader_mod._pending_lock:
+            loader_mod._pending_servers[(first, "shared")] = _PendingServer(
+                "shared", client_one, "shared",
+            )
+            loader_mod._pending_servers[(second, "shared")] = _PendingServer(
+                "shared", client_two, "shared",
+            )
+
+        assert get_pending_server_names(first) == ["shared"]
+        assert get_pending_server_names(second) == ["shared"]
+        assert retry_pending_server(first, "shared", timeout=2.0) is True
+        assert client_one.connect_sync.call_count == 1
+        assert client_two.connect_sync.call_count == 0
+        assert get_pending_server_names(first) == []
+        assert get_pending_server_names(second) == ["shared"]
+
+        clear_pending_servers(first)
+        assert get_pending_server_names(second) == ["shared"]
+        assert retry_pending_server(second, "shared", timeout=2.0) is True
+        assert client_two.connect_sync.call_count == 1
+        assert get_pending_server_names(second) == []
+        assert first.register_tool.call_count == 1
+        assert second.register_tool.call_count == 1
+    finally:
+        clear_pending_servers()
+
+
+def test_mcp_cannot_retry_another_registry_pending_name():
+    first = _make_fake_registry()
+    second = _make_fake_registry()
+    client = MagicMock(spec=MCPClient)
+    client.connect_sync.side_effect = RuntimeError("offline")
+    clear_pending_servers()
+    try:
+        _background_connect(first, "same-name", client, timeout=1.0)
+        assert get_pending_server_names(second) == []
+        assert not retry_pending_server(second, "same-name", timeout=1.0)
+        assert not second.register_tool.called
+        assert get_pending_server_names(first) == ["same-name"]
+    finally:
+        clear_pending_servers()
 
 
 # ---------------------------------------------------------------------------
