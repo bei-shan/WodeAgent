@@ -21,11 +21,24 @@ class SandboxBashTool(BashTool):
     def __init__(self, provider: SandboxCommandProvider):
         super().__init__(name="Bash", project_root=provider.workspace)
         self.provider = provider
-        self.description = (
-            "Execute shell command in a network-disabled isolated "
-            f"{provider.kind} environment. The host workspace is mounted "
-            "read-write at /workspace and is the only persistent guest path."
-        )
+        if provider.kind == "e2b":
+            self.usage_notes = (
+                "Bash runs in a REMOTE E2B cloud VM, cwd /home/user. "
+                "There is NO host workspace mount, no automatic project sync, "
+                "and no host Read/Write/MCP tools. Guest networking is disabled. "
+                "Never assume host files exist in the remote VM."
+            )
+            self.description = (
+                "Run a shell command inside a remote network-disabled E2B VM. "
+                "Only remote guest filesystem changes persist; host files are "
+                "not synchronized."
+            )
+        else:
+            self.description = (
+                "Execute shell command in a network-disabled isolated "
+                f"{provider.kind} environment. The host workspace is mounted "
+                "read-write at /workspace and is the only persistent guest path."
+            )
 
     def run(self, parameters: dict[str, Any]) -> str:
         start = time.monotonic()
