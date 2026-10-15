@@ -90,6 +90,8 @@ class BoxliteCommandProvider:
             relative = target.relative_to(self.workspace)
         except ValueError as exc:
             raise PermissionError("Working directory leaves VM workspace") from exc
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Working directory is unavailable or invalid") from exc
         if not target.is_dir():
             raise ValueError("Working directory is not a directory")
         return "/workspace" if relative == Path(".") else "/workspace/" + relative.as_posix()
