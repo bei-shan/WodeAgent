@@ -56,7 +56,7 @@ class WorktreeFeature(AgentFeature):
             return
         for tool_name in self._WORKTREE_TOOLS:
             if agent.tool_registry.get_tool(tool_name) is not None:
-                agent.tool_registry.unregister(tool_name)
+                agent.tool_registry.unregister(tool_name, owner="builtin")
 
     def cleanup(self, agent: "CodeAgent") -> None:
         # Worktree cleanup is handled by ExitWorktree tool.
