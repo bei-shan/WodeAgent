@@ -32,3 +32,7 @@ class StyleService:
         """Push style prompt into context builder (needs context_builder ready)."""
         prompt = agent._output_style_manager.get_current_prompt()
         agent.context_builder.set_output_style_prompt(prompt)
+
+    def close(self, agent) -> None:
+        """Owned manager is process-local and has no external close action."""
+        pass
