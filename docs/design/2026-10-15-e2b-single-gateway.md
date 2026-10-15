@@ -120,6 +120,32 @@ verified operator-controlled recovery of stuck reservations are still
 required. Therefore `AGENT_SANDBOX_E2B_SINGLE_GATEWAY_ACK=true` remains
 mandatory even with Redis enabled. **Do not run multiple gateways yet.**
 
+## Bounded guest-only artifact inspection
+
+`core/sandbox/e2b_guest_files.py` now provides an **internal read-only**
+`E2BGuestFilesystem` interface for remote files under `/home/user`.
+`read_file` handles up to **24 KiB binary data** per call (Base64 JSON
+response); `list_dir` returns at most **64 names**. Both actions run Python
+*inside the E2B VM* using dirfd / `O_NOFOLLOW` resolution and reject
+workspace traversal, symlinks and abnormal responses. They use the same
+Redis command execution fences as remote Bash.
+
+The API returns bytes **in application memory only**. It neither writes
+host files nor automatically exports artifacts, and its `write_file` method
+explicitly fails closed. This is intentional: remote uploads, authorization
+for publication, file ownership, secret scanning, and user-approved host
+writes remain a separate pending security workflow. The user-visible
+Agent ToolRegistry continues to expose only isolated Bash.
+
+The mock and guest-script tests run without cloud billing:
+
+```bash
+python -m pytest tests/test_sandbox_e2b_guest_files.py -q
+```
+
+The optional billable live E2B suite additionally verifies the actual
+guest read/list path; it requires both approval flags below.
+
 ## Intentionally missing (required for production parity)
 
 - Redis-backed atomic capacity and token-fenced release are optional, but there is **no full distributed session ownership or gateway failover** yet.
@@ -127,8 +153,8 @@ mandatory even with Redis enabled. **Do not run multiple gateways yet.**
   initialize multiple processes and rely on this per-process limiter.
 - No remote VM discovery, cross-process adoption, or opportunistic deletion.
   Automatically killing an unowned remote ID is a security violation.
-- No local-project bootstrap, remote file upload/download, partial sync or
-  guest artifact publication. E2B has no shared host workspace.
+- No local-project bootstrap, remote file **upload** or host publication; only
+  bounded guest **read/list** into memory is available, without partial sync. E2B has no shared host workspace.
 - No credential refresh/rotation, remote file symlink-safe transfer audit, or
   retry-safe idempotency journal for side-effecting operations.
 - No measured multi-tenant workloads or verified E2B template/network
