@@ -36,6 +36,7 @@ from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
 from core.features import collect_all_features
 from core.features.base import AgentFeature
+from core.features.lifecycle import FeatureLifecycle
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
@@ -129,36 +130,35 @@ class CodeAgent(Agent):
         # ── Core initialisation ──
         self._init_core()
 
-        # ── Features init (sets agent attributes) ──
+        # Explicit feature transaction. Partially initialized features must
+        # be cleaned up if any later init/post-init or tool bootstrap fails.
         self._features: list[AgentFeature] = collect_all_features(self)
-        for feat in self._features:
-            feat.init(self)
+        self._feature_lifecycle = FeatureLifecycle(self, self._features)
+        try:
+            self._feature_lifecycle.initialize()
 
-        # ── Tool registration (needs feature deps like _background_runner) ──
-        self._init_tools()
+            # ── Tool registration (needs feature dependencies) ──
+            self._init_tools()
 
-        # ── Features post_init (needs tools + context_builder ready) ──
-        for feat in self._features:
-            feat.post_init(self)
+            # ── Features post-init (needs tools + context builder) ──
+            self._feature_lifecycle.post_initialize()
 
-        # Deferred catalog must see the fully-registered built-ins and the
-        # final post-init tool removals. Disabled by default for compatibility.
-        self._configure_tool_discovery()
-        if self._hosted_tool_authority is not None:
-            # Isolated sandbox already restricted the registry to Bash.
-            # The mandatory membership gate must bind before the first step.
-            self.tool_registry.bind_hosted_authority(self._hosted_tool_authority)
+            # Deferred catalog sees fully registered tools.
+            self._configure_tool_discovery()
+            if self._hosted_tool_authority is not None:
+                self.tool_registry.bind_hosted_authority(self._hosted_tool_authority)
 
-        # ── Session ID fallback ──
-        if not hasattr(self, "_session_id"):
-            import uuid
-            self._session_id = uuid.uuid4().hex[:12]
+            # ── Session ID fallback ──
+            if not hasattr(self, "_session_id"):
+                self._session_id = uuid.uuid4().hex[:12]
 
-        # Trace 日志（单实例贯穿 Agent 生命周期）
-        self.trace_logger = create_trace_logger()
-        self._system_messages_logged = False
-        self._run_id = 0
-        self._system_messages_override: Optional[List[dict]] = None
+            self.trace_logger = create_trace_logger()
+            self._system_messages_logged = False
+            self._run_id = 0
+            self._system_messages_override: Optional[List[dict]] = None
+        except BaseException:
+            self.close()
+            raise
 
     def _init_core(self) -> None:
         """Initialise core infrastructure that features depend on."""
@@ -656,15 +656,17 @@ class CodeAgent(Agent):
             return
         self._closed = True
 
-        # Reverse-init iteration so teardown mirrors construction (LIFO).
-        for feat in reversed(getattr(self, "_features", []) or []):
-            try:
-                feat.cleanup(self)
-            except Exception as exc:
-                self.logger.warning(
-                    "Feature %s.cleanup failed: %s",
-                    getattr(feat, "name", type(feat).__name__), exc,
-                )
+        # Only entered features are disposed, including one that failed
+        # partway through init(). An unentered feature must never run cleanup.
+        lifecycle = getattr(self, "_feature_lifecycle", None)
+        if lifecycle is not None:
+            lifecycle.close()
+        else:
+            for feat in reversed(getattr(self, "_features", []) or []):
+                try:
+                    feat.cleanup(self)
+                except Exception:
+                    self.logger.warning("Legacy feature cleanup failed", exc_info=True)
 
         # Close owned VM resources even if another feature cleanup raised.
         sandbox_provider = getattr(self, "_sandbox_provider", None)
