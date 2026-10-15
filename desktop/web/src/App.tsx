@@ -567,7 +567,7 @@ function AppCore() {
           </div>
         )}
       </main>
-      {sidebarTab === 'sessions' && <ExecutionPanel tools={tools} open={executionOpen} onClose={() => setExecutionOpen(false)} />}
+      {sidebarTab === 'sessions' && <ExecutionPanel tools={tools} sessionId={activeSid} open={executionOpen} onClose={() => setExecutionOpen(false)} />}
 
       {/* Confirm delete modal */}
       {confirmDelete && (
