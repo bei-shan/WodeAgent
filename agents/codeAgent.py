@@ -1327,6 +1327,11 @@ class CodeAgent(Agent):
         return str(tool_name or "") in self.DELEGATION_ALLOWED_TOOLS
 
     def _get_openai_tools_for_current_mode(self) -> list[dict[str, Any]]:
+        # Bind discoveries only at a new model step. ToolSearch cannot unlock
+        # another call in the same multi-tool response that requested it.
+        activate = getattr(self.tool_registry, "activate_discovered_tools", None)
+        if callable(activate):
+            activate()
         tools = self.tool_registry.get_openai_tools()
         filtered: list[dict[str, Any]] = []
         for item in tools:
