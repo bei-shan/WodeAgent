@@ -8,8 +8,8 @@ import pytest
 
 from agents.codeAgent import CodeAgent
 from core.context_engine.context_builder import ContextBuilder
-from core.features.delegate import DelegateModeFeature
-from core.features.plan_mode import PlanModeFeature
+from core.runtime.policy_middleware import DelegateModeMiddleware
+from core.runtime.policy_middleware import PlanModeMiddleware
 from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
 from tools.base import Tool, ToolParameter
 from tools.registry import ToolRegistry
@@ -163,8 +163,8 @@ def test_agent_setup_uses_same_mode_guard_for_discovery_and_direct_execution():
     agent._sandbox_mode = "local_trusted"
     agent._in_plan_mode = False
     agent.delegate_mode = False
-    agent.PLAN_MODE_TOOLS = PlanModeFeature.PLAN_MODE_TOOLS
-    agent.DELEGATION_ALLOWED_TOOLS = DelegateModeFeature.DELEGATION_ALLOWED_TOOLS
+    agent.PLAN_MODE_TOOLS = PlanModeMiddleware.PLAN_MODE_TOOLS
+    agent.DELEGATION_ALLOWED_TOOLS = DelegateModeMiddleware.DELEGATION_ALLOWED_TOOLS
     prompt = []
     agent.context_builder = SimpleNamespace(set_mcp_tools_prompt=prompt.append)
     agent._configure_tool_discovery()
