@@ -704,7 +704,7 @@ class CodeAgent(Agent):
         messages, base_messages, tools_schema, tool_choice,
         show_raw: bool, trace_logger, step: int,
     ) -> dict | None:
-        """调用 LLM，含一次空响应重试。返回 None 表示最终空响应。"""
+        """调用 LLM，含一次空响应重试；不完整输出以结构化错误结束。"""
         empty_retry_used = False
         reasoning_content = None
 
@@ -782,6 +782,20 @@ class CodeAgent(Agent):
                 step=step,
             )
 
+            # Explicit length termination invalidates both text and tool calls.
+            # Keep evidence outside final history/tool execution so a truncated
+            # but syntactically valid call cannot cause side effects.
+            if response_meta.get("finish_reason") == "length":
+                from core.llm_recovery import ModelInvocationError
+                self.history_manager.append_assistant(
+                    content=str(response_text),
+                    metadata={"step": step, "action_type": "incomplete",
+                              "error_kind": "output_truncated",
+                              "tool_calls": tool_calls},
+                    reasoning_content=reasoning_content,
+                )
+                raise ModelInvocationError("output_truncated")
+
             if self.console_verbose and reasoning_content:
                 display_reasoning = reasoning_content
                 if len(display_reasoning) > 1200:
@@ -830,7 +844,8 @@ class CodeAgent(Agent):
                 },
                 step=step,
             )
-            return None
+            from core.llm_recovery import ModelInvocationError
+            raise ModelInvocationError("empty_response")
 
     def _execute_step_tools(
         self, tool_calls, response_text, reasoning_content, trace_logger, step: int,

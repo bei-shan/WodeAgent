@@ -245,6 +245,8 @@ class SubagentRunner:
                     subagent_step=step,
                 )
             except Exception as e:
+                if getattr(e, "partial_messages", None) is not None:
+                    self.messages = e.partial_messages
                 logger.error("Subagent LLM error: %s", e)
                 if progress_callback:
                     progress_callback(step, "error", {"message": str(e)})
@@ -254,7 +256,7 @@ class SubagentRunner:
                         result_preview=f"Error: LLM call failed - {str(e)}",
                         steps=step,
                     )
-                return f"Error: LLM call failed - {str(e)}", self.tool_usage
+                raise
 
             self.messages = turn["messages"]
 
@@ -274,7 +276,8 @@ class SubagentRunner:
             if turn["done"]:
                 final_result = turn.get("final_result") or ""
                 if not str(final_result).strip():
-                    return "Error: Empty response from subagent", self.tool_usage
+                    from core.llm_recovery import ModelInvocationError
+                    raise ModelInvocationError("empty_response", partial_messages=self.messages)
                 if self.event_bridge:
                     self.event_bridge.emit_finished(
                         ok=True,
@@ -289,7 +292,8 @@ class SubagentRunner:
                 result_preview="Subagent reached maximum steps without completing.",
                 steps=self.max_steps,
             )
-        return "Subagent reached maximum steps without completing.", self.tool_usage
+        from core.llm_recovery import ModelInvocationError
+        raise ModelInvocationError("step_limit", partial_messages=self.messages)
 
 
 # =============================================================================

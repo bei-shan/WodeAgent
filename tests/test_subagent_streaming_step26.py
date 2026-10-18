@@ -186,7 +186,8 @@ def test_sync_task_error_emits_failed_finished(tmp_path):
         subagent_id="task-step26-err",
         parent_step=1,
     )
-    runner.run("Doomed task")
+    with pytest.raises(RuntimeError, match="LLM API error"):
+        runner.run("Doomed task")
 
     assert sink.events[-1].type == "subagent.finished"
     assert sink.events[-1].payload["ok"] is False

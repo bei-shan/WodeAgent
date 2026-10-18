@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.context_engine.observation_truncator import truncate_observation
+from core.llm_recovery import ModelInvocationError
 from core.response_parser import (
     extract_content,
     extract_tool_calls,
     ensure_json_input,
     extract_reasoning_content,
+    extract_response_meta,
 )
 from tools.registry import ToolRegistry
 
@@ -62,7 +64,12 @@ class TurnExecutor:
                 })
         output_messages.append(assistant_msg)
 
+        if extract_response_meta(raw_response).get("finish_reason") == "length":
+            raise ModelInvocationError("output_truncated", partial_messages=output_messages)
+
         if not tool_calls:
+            if not response_text.strip():
+                raise ModelInvocationError("empty_response", partial_messages=output_messages)
             return {
                 "done": True,
                 "final_result": self._extract_final_answer(response_text),

@@ -24,6 +24,7 @@ from tools.builtin.task import (
 )
 from tools.registry import ToolRegistry
 from tools.base import ErrorCode
+from core.llm_recovery import ModelInvocationError
 
 
 @pytest.fixture(autouse=True)
@@ -390,11 +391,11 @@ class TestSubagentRunner:
             max_steps=3,
         )
         
-        result, tool_usage = runner.run("Infinite loop task")
-        
-        assert "maximum steps" in result.lower()
+        with pytest.raises(ModelInvocationError) as caught:
+            runner.run("Infinite loop task")
+        assert caught.value.kind == "step_limit"
         # Should have called Read at most max_steps times
-        assert tool_usage.get("Read", 0) <= 3
+        assert runner.tool_usage.get("Read", 0) <= 3
 
 
 # =============================================================================

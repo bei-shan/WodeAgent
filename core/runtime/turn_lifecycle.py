@@ -108,6 +108,7 @@ class AgentTurnLifecycle:
 
         response_text = ""
         host._run_limit_hit = False
+        host.last_turn_error_kind = None
         run_failed = False
         try:
             response_text = host._react_loop(
@@ -115,8 +116,9 @@ class AgentTurnLifecycle:
                 show_raw=show_raw,
                 trace_logger=trace_logger,
             )
-        except Exception:
+        except Exception as exc:
             run_failed = True
+            host.last_turn_error_kind = getattr(exc, "kind", None)
             raise
         finally:
             stopped = host._interrupt_requested.is_set()
@@ -124,7 +126,8 @@ class AgentTurnLifecycle:
                 "cancelled" if stopped else "failed"
                 if run_failed or host._run_limit_hit else "completed"
             )
-            host.last_turn_error_kind = "step_limit" if host._run_limit_hit else None
+            if host._run_limit_hit:
+                host.last_turn_error_kind = "step_limit"
             host._interrupt_requested.clear()
             # Save the user input and any completed steps even when provider
             # calls fail or the user cancels the remaining execution.

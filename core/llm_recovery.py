@@ -28,14 +28,19 @@ _MESSAGES = {
     "unauthorized": "模型认证失败，请检查 API 配置",
     "invalid_request": "模型请求无效，请检查模型和参数设置",
     "stream_interrupted": "模型流式响应中断，已保留当前内容，未自动重试",
+    "output_truncated": "模型输出因长度限制被截断，已保留当前内容，任务未完成",
+    "empty_response": "模型未返回有效回答，任务未完成",
+    "step_limit": "无法在限定步数内完成这个任务",
     "provider_error": "模型请求失败，请检查服务状态与日志",
 }
 
 
 class ModelInvocationError(HelloAgentsException):
-    def __init__(self, kind: str, retryable: bool = False):
+    def __init__(self, kind: str, retryable: bool = False, *, partial_messages=None):
         self.kind = kind
         self.retryable = retryable
+        # Private diagnostic history for worker owners; never a final result.
+        self.partial_messages = partial_messages
         super().__init__(_MESSAGES.get(kind, _MESSAGES["provider_error"]))
 
 
