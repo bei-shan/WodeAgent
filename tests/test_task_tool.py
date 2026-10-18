@@ -63,6 +63,9 @@ def mock_tool_registry():
     for tool_name in ["LS", "Glob", "Grep", "Read", "TodoWrite"]:
         mock_tool = Mock()
         mock_tool.name = tool_name
+        mock_tool.description = "Test tool"
+        mock_tool.get_parameters.return_value = []
+        mock_tool.get_input_schema = None
         mock_tool.run = Mock(return_value='{"status": "success", "data": {}, "text": "ok"}')
         registry.register_tool(mock_tool)
     
@@ -70,6 +73,9 @@ def mock_tool_registry():
     for tool_name in ["Task", "Write", "Edit", "Bash"]:
         mock_tool = Mock()
         mock_tool.name = tool_name
+        mock_tool.description = "Test tool"
+        mock_tool.get_parameters.return_value = []
+        mock_tool.get_input_schema = None
         mock_tool.run = Mock(return_value='{"status": "success", "data": {}}')
         registry.register_tool(mock_tool)
     

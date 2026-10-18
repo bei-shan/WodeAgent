@@ -4,6 +4,7 @@
 """
 
 import json
+import copy
 import time
 import logging
 import os
@@ -36,6 +37,13 @@ def set_registry_config(config: "Config") -> None:
 
 # 设置日志
 logger = logging.getLogger(__name__)
+
+# These adapters retain callbacks into the owning Agent/session. A worker must
+# never receive an executable binding to them, even through an explicit policy.
+_PARENT_ONLY_TOOLS = frozenset({
+    "Task", "AskUser", "EnterPlanMode", "ExitPlanMode",
+    "EnterWorktree", "ExitWorktree", "ToolSearch",
+})
 
 
 class ReadMeta(TypedDict):
@@ -75,6 +83,10 @@ class ToolRegistry:
         self._sandbox_allowed_tools: frozenset[str] | None = None
         # Only bound by a trusted hosted worker after sandbox restriction.
         self._hosted_authority: HostedToolAuthority | None = None
+        self._derived_parent: ToolRegistry | None = None
+        self._derived_bindings: dict[str, Tool] = {}
+        self._derived_adapters: dict[str, Tool] = {}
+        self._derived_schema_hashes: dict[str, str] = {}
         # Read 元信息缓存（用于乐观锁自动注入）
         # key: path_resolved 或原始 path
         self._read_cache: dict[str, ReadMeta] = {}
@@ -128,14 +140,81 @@ class ToolRegistry:
             self.restrict_to_tools({"Bash"})
             self.bind_hosted_authority(authority)
 
+    def derive_worker_registry(
+        self, *, allowed_names: set[str] | None = None,
+        denied_names: set[str] | None = None, config: "Optional[Config]" = None,
+    ) -> "ToolRegistry":
+        """Bind a worker to independent adapters and the parent's live fences.
+
+        Adapter copies share external clients/services but have private binding
+        fields, notably a noninteractive permission gate. The parent identity
+        seal prevents an old worker copy surviving registration replacement.
+        """
+        child = ToolRegistry(config=config or self._config)
+        denied = set(denied_names or ()) | _PARENT_ONLY_TOOLS
+        with self._registration_lock:
+            child._derived_parent = self
+            for name, original in self._tools.items():
+                if name in denied or (allowed_names is not None and name not in allowed_names):
+                    continue
+                try:
+                    source_hash = schema_fingerprint(self._tool_schema_spec(original))
+                except Exception:
+                    logger.warning("Skipping worker tool %s with invalid schema", name)
+                    continue
+                bound = copy.copy(original)
+                if bound is original:
+                    raise TypeError(f"Cannot isolate worker adapter '{name}'")
+                gate = getattr(original, "_permission_gate", None)
+                if gate is not None:
+                    subagent_gate = getattr(gate, "subagent_gate", None)
+                    if not callable(subagent_gate):
+                        raise TypeError(f"Cannot isolate permission gate for '{name}'")
+                    bound._permission_gate = subagent_gate()
+                child.register_tool(bound, owner=self._tool_owners[name])
+                child._derived_bindings[name] = original
+                child._derived_adapters[name] = bound
+                child._derived_schema_hashes[name] = source_hash
+            if self._sandbox_allowed_tools is not None:
+                child.restrict_to_tools(set(self._sandbox_allowed_tools))
+            if self._hosted_authority is not None:
+                child.bind_hosted_authority(self._hosted_authority)
+        return child
+
+    def _source_binding_current(self, name: str) -> bool:
+        parent = self._derived_parent
+        if parent is None:
+            return True
+        with parent._registration_lock:
+            current = (
+                self._tools.get(name) is self._derived_adapters.get(name)
+                and name in self._derived_adapters
+                and parent._tools.get(name) is self._derived_bindings.get(name)
+                and name in self._derived_bindings
+                and parent._tool_allowed(name)
+                and parent._circuit_breaker.is_available(name)
+            )
+            if not current:
+                return False
+            try:
+                return (
+                    schema_fingerprint(parent._tool_schema_spec(self._derived_bindings[name]))
+                    == self._derived_schema_hashes[name]
+                )
+            except Exception:
+                return False
+
     def _hosted_tool_allowed(self, name: str) -> bool:
         policy = self._hosted_authority
-        return policy is None or policy.allows(name)
+        return (policy is None or policy.allows(name)) and (
+            self._derived_parent is None or self._derived_parent._hosted_tool_allowed(name)
+        )
 
     def _tool_allowed(self, name: str) -> bool:
         return (
             (self._sandbox_allowed_tools is None or name in self._sandbox_allowed_tools)
             and self._hosted_tool_allowed(name)
+            and self._source_binding_current(name)
         )
 
     def enable_deferred_discovery(
@@ -152,6 +231,8 @@ class ToolRegistry:
         self._discovery_guard = can_execute
 
     def _discovery_mode_allowed(self, name: str) -> bool:
+        if self._derived_parent is not None and not self._derived_parent._discovery_mode_allowed(name):
+            return False
         if self._discovery_guard is None:
             return True
         try:
@@ -159,6 +240,11 @@ class ToolRegistry:
         except Exception:
             # Mode and capability lookup are security-sensitive.
             return False
+
+    def _discovery_visible(self, name: str) -> bool:
+        if self._discovery_state is not None and not self._discovery_state.is_visible(name):
+            return False
+        return self._derived_parent is None or self._derived_parent._discovery_visible(name)
 
     def activate_discovered_tools(self) -> None:
         """Publish pending search results only when building the next model step.
@@ -392,43 +478,21 @@ class ToolRegistry:
                     continue
                 if not self._discovery_mode_allowed(tool.name):
                     continue
-                if (not include_deferred and self._discovery_state is not None
-                        and not self._discovery_state.is_visible(tool.name)):
+                if not include_deferred and not self._discovery_visible(tool.name):
                     continue
                 try:
-                    params = tool.get_parameters()
+                    tools.append(self._tool_schema_spec(tool))
                 except Exception:
-                    # Missing/broken declarations must not become an empty input
-                    # schema: that would mislead the model and expose the tool.
-                    logger.warning("Skipping tool %s with unavailable parameters", tool.name)
+                    # Broken declarations must never become empty schemas.
+                    logger.warning("Skipping tool %s with unavailable schema", tool.name)
                     continue
-                schema_provider = getattr(tool, "get_input_schema", None)
-                if callable(schema_provider):
-                    try:
-                        params_schema = schema_provider()
-                    except Exception:
-                        # Never advertise an MCP tool whose source schema cannot
-                        # be validated: a later runtime call will fail closed too.
-                        logger.warning("Skipping tool %s with invalid input schema", tool.name)
-                        continue
-                else:
-                    params_schema = self._parameters_to_schema(params)
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description or "",
-                        "parameters": params_schema,
-                    },
-                })
     
             for name, info in tuple(self._functions.items()):
                 if not self._tool_allowed(name) or not self._circuit_breaker.is_available(name):
                     continue
                 if not self._discovery_mode_allowed(name):
                     continue
-                if (not include_deferred and self._discovery_state is not None
-                        and not self._discovery_state.is_visible(name)):
+                if not include_deferred and not self._discovery_visible(name):
                     continue
                 tools.append({
                     "type": "function",
@@ -450,6 +514,23 @@ class ToolRegistry:
                 })
     
             return tools
+
+    @classmethod
+    def _tool_schema_spec(cls, tool: Tool) -> dict[str, Any]:
+        params = tool.get_parameters()
+        schema_provider = getattr(tool, "get_input_schema", None)
+        params_schema = (
+            schema_provider() if callable(schema_provider)
+            else cls._parameters_to_schema(params)
+        )
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": params_schema,
+            },
+        }
 
     @staticmethod
     def _parameters_to_schema(params: list[ToolParameter]) -> dict[str, Any]:
@@ -575,7 +656,7 @@ class ToolRegistry:
 
         # Deferred discovery is enforced independently of the LLM tool list.
         # Unadvertised tool calls from stale contexts/plugins cannot execute.
-        if self._discovery_state is not None and not self._discovery_state.is_visible(name):
+        if not self._discovery_visible(name):
             message = f"Tool '{name}' requires discovery via ToolSearch before execution."
             return json.dumps({
                 "status": ToolStatus.ERROR.value, "data": {}, "text": message,

@@ -776,31 +776,7 @@ class TaskTool(Tool):
     
     def _create_filtered_registry(self) -> ToolRegistry:
         """Create a tool registry with only allowed tools for subagents."""
-        filtered = ToolRegistry(config=self._config)
-        main_gate = None
-
-        for tool in self._tool_registry.get_all_tools():
-            tool_name = tool.name
-
-            # Skip denied tools
-            if tool_name in DENIED_TOOLS:
-                continue
-
-            # Include allowed tools
-            if tool_name in ALLOWED_TOOLS:
-                if main_gate is None:
-                    main_gate = getattr(tool, "_permission_gate", None)
-                filtered.register_tool(tool)
-
-        # Hosted capability fences must follow every derived registry, even
-        # though hosted Task is currently denied by the Bash-only allowlist.
-        filtered.inherit_hosted_authority(self._tool_registry)
-
-        # Sub-agents inherit the main agent's authorization cache but
-        # must not prompt the user directly.
-        if main_gate is not None:
-            sub_gate = main_gate.subagent_gate()
-            for tool in filtered.get_all_tools():
-                tool._permission_gate = sub_gate
-
-        return filtered
+        return self._tool_registry.derive_worker_registry(
+            allowed_names=set(ALLOWED_TOOLS), denied_names=set(DENIED_TOOLS),
+            config=self._config,
+        )
