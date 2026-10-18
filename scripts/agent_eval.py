@@ -159,7 +159,9 @@ def _run_case(case: Case) -> dict:
             destination.write_text(content, encoding="utf-8")
         # Outside-root sentinel doubles as the attempted forbidden destination.
         forbidden = root.parent / "private.txt"
-        forbidden.write_text("protected\n", encoding="utf-8")
+        # Written byte-stable: text mode would translate "\n" to os.linesep and
+        # the sentinel is compared as bytes further down.
+        forbidden.write_text("protected\n", encoding="utf-8", newline="\n")
         initial_snapshot = {
             path: (root / path).read_bytes() for path in case.preserved
         }

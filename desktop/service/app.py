@@ -123,8 +123,8 @@ def create_app(
         Zero-arg callable that returns a fresh ``CodeAgent`` instance.
         Called once per session (lazily on first ``send_message``).
     tool_registry:
-        Shared ``ToolRegistry`` for tool listing.  Typically the same
-        one used inside *agent_factory*.
+        Optional registry for tool listing. Default agents always own separate
+        registries; the listing also includes initialized sessions' metadata.
     project_root:
         Base project directory for file browsing (before worktree).
     """
@@ -138,9 +138,13 @@ def create_app(
         from tools.registry import ToolRegistry
         load_env()
         config = Config.from_env()
+
         def agent_factory() -> Any:
             return CodeAgent(
                 name="web", llm=HelloAgentsLLM(),
+                # Tools carry workspace, permission, interaction and discovery
+                # state. Sharing this registry would rebind earlier sessions
+                # to whichever session initialized last.
                 tool_registry=ToolRegistry(), project_root=project_root,
                 config=config,
             )
@@ -742,13 +746,30 @@ def create_app(
 
     @app.get("/api/tools", response_model=list[ToolInfo])
     async def list_tools():
-        """List registered tools (from shared tool registry)."""
-        registry = app.state.tool_registry
-        if registry is None:
-            return []
+        """Project live tool metadata without sharing session executors."""
+        registries = []
+        if app.state.tool_registry is not None:
+            registries.append(app.state.tool_registry)
+        ctrl: SessionController = app.state.controller
+        for sid in ctrl.list_sessions():
+            session = ctrl.get_session(sid)
+            # Reading the catalog must not initialize models or MCP clients.
+            agent = session.agent if session is not None else None
+            registry = getattr(agent, "tool_registry", None)
+            if registry is not None and not any(registry is item for item in registries):
+                registries.append(registry)
 
         result: list[ToolInfo] = []
-        for tool in registry.get_all_tools():
+        seen_names: set[str] = set()
+        tools = []
+        for registry in registries:
+            get_tools = getattr(registry, "get_all_tools", None)
+            if callable(get_tools):
+                tools.extend(get_tools())
+        for tool in tools:
+            if tool.name in seen_names:
+                continue
+            seen_names.add(tool.name)
             params = []
             try:
                 for p in tool.get_parameters():
@@ -773,8 +794,10 @@ def create_app(
         servers: list[McpServerStatus] = []
         pending: list[str] = []
 
-        # Gather from active sessions.
+        # Gather from initialized sessions. Custom factories can share an MCP
+        # transport, so report each actual client once, without sharing tools.
         ctrl: SessionController = app.state.controller
+        seen_clients: list[Any] = []
         for sid in ctrl.list_sessions():
             session = ctrl.get_session(sid)
             if session is None or session._agent is None:
@@ -782,7 +805,10 @@ def create_app(
             agent = session._agent
             registry_tools = list(agent.tool_registry.get_all_tools()) if hasattr(agent, "tool_registry") else []
             for client in getattr(agent, "_mcp_clients", []):
-                name = getattr(client.config, "name", "unknown") if hasattr(client, "config") else "unknown"
+                if any(client is prior for prior in seen_clients):
+                    continue
+                seen_clients.append(client)
+                name = (getattr(client.config, "name", "") or "unknown") if hasattr(client, "config") else "unknown"
                 connected = client.is_connected if hasattr(client, "is_connected") else False
                 # Count tools registered for THIS mcp client (MCPToolAdapter stores its client)
                 tool_count = sum(
@@ -956,27 +982,6 @@ def _sanitize_payload(payload: dict) -> dict:
 if __name__ == "__main__":
     import uvicorn
 
-    # Quick-start: build a minimal agent for demonstration.
-    from core.env import load_env
-    load_env()
-
-    from core.llm import HelloAgentsLLM
-    from core.config import Config
-    from tools.registry import ToolRegistry
-    from agents.codeAgent import CodeAgent
-
-    config = Config.from_env()
-    llm = HelloAgentsLLM()
-    tool_registry = ToolRegistry()
-
-    def _make_agent() -> CodeAgent:
-        return CodeAgent(
-            name="web",
-            llm=llm,
-            tool_registry=tool_registry,
-            project_root=os.getcwd(),
-            config=config,
-        )
-
-    app = create_app(_make_agent, tool_registry, os.getcwd())
+    # Keep module launches on the same session-owned factory as the CLI.
+    app = create_app(project_root=os.getcwd())
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

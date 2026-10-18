@@ -234,7 +234,12 @@ class ContextBuilder:
         return []
 
     def _append_plan_mode_guidance(self, prompt: str) -> str:
-        """Append plan mode usage guidance if EnterPlanMode is registered."""
+        """Append plan mode usage guidance if EnterPlanMode is registered.
+
+        The block documents an available tool, so it must never read as the
+        session's current state: a model told it is already in plan mode
+        reports itself as read-only while it can still write.
+        """
         try:
             tools = self.tool_registry.get_all_tools()
             has_enter = any(getattr(t, "name", "") == "EnterPlanMode" for t in tools)
@@ -246,9 +251,12 @@ class ContextBuilder:
 
         guidance = (
             "\n\n# Plan Mode\n"
-            "For complex or multi-file changes, use EnterPlanMode to analyse "
-            "the codebase first and produce a structured plan.  This avoids "
-            "premature edits and lets you gather all context before writing code.  "
-            "Call ExitPlanMode with your plan when ready to execute.\n"
+            "EnterPlanMode is an available tool, not a description of your "
+            "current state: plan mode is not active unless you call it, and this "
+            "session stays read/write until then.  For complex or multi-file "
+            "changes, call EnterPlanMode first — it switches the session to "
+            "read-only so you can analyse the codebase and produce a structured "
+            "plan before editing.  Call ExitPlanMode with that plan when you are "
+            "ready to execute.\n"
         )
         return prompt + guidance

@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tools.mcp.loader import (
@@ -570,6 +571,142 @@ class TestMCPCallTimeoutEnv(unittest.TestCase):
 
         importlib.reload(tools.mcp.client)
         self.assertEqual(tools.mcp.client._MCP_LIST_TOOLS_TIMEOUT, 90.0)
+
+
+def _shared_server_env(monkeypatch, client):
+    """Point the loader at one fake stdio server backed by *client*."""
+    from tools.mcp import loader as loader_mod
+
+    monkeypatch.setattr(
+        loader_mod, "load_mcp_servers",
+        lambda root: {"shared": {"command": "echo"}},
+    )
+    monkeypatch.setattr(loader_mod, "connect_mode", lambda: "startup")
+    monkeypatch.setattr(loader_mod, "MCPClient", lambda config: client)
+
+
+def test_two_agents_on_one_registry_share_a_single_mcp_connection(monkeypatch):
+    """A shared ToolRegistry serves every Agent in the process, so its MCP
+    connections must be shared too instead of respawning one per Agent."""
+    from tools.mcp import loader as loader_mod
+    from tools.registry import ToolRegistry
+
+    client = MagicMock(spec=MCPClient)
+    client.connect_sync.return_value = None
+    client.list_tools_sync.return_value = _FakeToolsResult([
+        _FakeTool("read", "Read a thing", {"type": "object", "properties": {}})
+    ])
+    _shared_server_env(monkeypatch, client)
+
+    registry = ToolRegistry()
+    first_clients, first_meta = loader_mod.register_mcp_servers(registry, "/tmp/project")
+    second_clients, second_meta = loader_mod.register_mcp_servers(registry, "/tmp/project")
+
+    assert client.list_tools_sync.call_count == 1, "server was discovered twice"
+    assert second_clients == first_clients
+    assert second_meta == first_meta
+    assert registry.get_tool("shared_read") is not None
+
+
+def test_failed_startup_registration_is_not_cached_for_later_agents(monkeypatch):
+    """A server whose tools failed to register must be retried by the next Agent
+    instead of being served from a client that never published anything."""
+    from tools.mcp import loader as loader_mod
+    from tools.registry import ToolRegistry
+
+    built = []
+
+    def make_client(config):
+        client = MagicMock(spec=MCPClient)
+        client.list_tools_sync.side_effect = RuntimeError("server is down")
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(
+        loader_mod, "load_mcp_servers",
+        lambda root: {"shared": {"command": "echo"}},
+    )
+    monkeypatch.setattr(loader_mod, "connect_mode", lambda: "startup")
+    monkeypatch.setattr(loader_mod, "MCPClient", make_client)
+
+    registry = ToolRegistry()
+    first_clients, _ = loader_mod.register_mcp_servers(registry, "/tmp/project")
+    second_clients, _ = loader_mod.register_mcp_servers(registry, "/tmp/project")
+
+    assert len(built) == 2, "the failed server was cached and never retried"
+    assert first_clients == second_clients == []
+    assert built[0] is not built[1]
+    assert all(client.close_sync.call_count == 1 for client in built)
+
+
+def test_closing_one_agent_keeps_mcp_tools_for_agents_sharing_the_registry(monkeypatch):
+    """Closing session B must not revoke the MCP tools session A is still
+    using; only the last Agent out retires the registry's servers."""
+    from core.runtime.service_mcp import MCPService
+    from tools.mcp import loader as loader_mod
+    from tools.registry import ToolRegistry
+
+    client = MagicMock(spec=MCPClient)
+    client.connect_sync.return_value = None
+    client.list_tools_sync.return_value = _FakeToolsResult([
+        _FakeTool("read", "Read a thing", {"type": "object", "properties": {}})
+    ])
+    client.close_sync = MagicMock()
+    _shared_server_env(monkeypatch, client)
+
+    registry = ToolRegistry()
+    clients_a, _ = loader_mod.register_mcp_servers(registry, "/tmp/project")
+    clients_b, _ = loader_mod.register_mcp_servers(registry, "/tmp/project")
+
+    service = MCPService()
+    service.close(SimpleNamespace(tool_registry=registry, _mcp_clients=clients_b))
+
+    assert registry.get_tool("shared_read") is not None, "B's close revoked A's MCP tool"
+    assert not client.close_sync.called, "B's close disconnected A's server"
+
+    service.close(SimpleNamespace(tool_registry=registry, _mcp_clients=clients_a))
+
+    assert registry.get_tool("shared_read") is None
+    assert client.close_sync.called
+
+
+def test_closing_an_agent_without_mcp_leaves_other_agents_tools_alone(monkeypatch):
+    """An Agent that never registered MCP must not retire the registry's."""
+    from core.runtime.service_mcp import MCPService
+    from tools.mcp import loader as loader_mod
+    from tools.registry import ToolRegistry
+
+    client = MagicMock(spec=MCPClient)
+    client.connect_sync.return_value = None
+    client.list_tools_sync.return_value = _FakeToolsResult([
+        _FakeTool("read", "Read a thing", {"type": "object", "properties": {}})
+    ])
+    client.close_sync = MagicMock()
+    _shared_server_env(monkeypatch, client)
+
+    registry = ToolRegistry()
+    loader_mod.register_mcp_servers(registry, "/tmp/project")
+
+    MCPService().close(SimpleNamespace(tool_registry=registry, _mcp_clients=[]))
+
+    assert registry.get_tool("shared_read") is not None
+
+
+def test_registered_mcp_clients_carry_their_configured_server_name(monkeypatch):
+    """``/api/mcp/status`` labels each connection with its configured server
+    name, so the loader must pass the configured name into the client config."""
+    from tools.mcp import loader
+
+    monkeypatch.setattr(
+        loader, "load_mcp_servers",
+        lambda root: {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}},
+    )
+    monkeypatch.setattr(loader, "connect_mode", lambda: "startup")
+    monkeypatch.setattr(loader, "register_mcp_tools", lambda *a, **kw: [])
+
+    clients, _ = loader.register_mcp_servers(object(), "/tmp/project")
+
+    assert [getattr(client.config, "name", "unknown") for client in clients] == ["fetch"]
 
 
 if __name__ == "__main__":

@@ -14,6 +14,36 @@ from threading import RLock
 
 from .errors import ConflictError, NotFoundError, ServiceError
 
+# Hand-edited config stays diff-reviewable: a short list such as an MCP "args"
+# array belongs on one line, and rewriting one server must not reflow the rest.
+_CONFIG_LINE_WIDTH = 88
+
+
+def _render_json(value: object, indent: int, width: int = _CONFIG_LINE_WIDTH) -> str:
+    """Render JSON like ``json.dumps(indent=2)`` but keep short lists inline."""
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        pad = " " * (indent + 2)
+        body = ",\n".join(
+            f"{pad}{json.dumps(str(key), ensure_ascii=False)}: "
+            f"{_render_json(item, indent + 2, width)}"
+            for key, item in value.items()
+        )
+        return "{\n" + body + "\n" + " " * indent + "}"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "[]"
+        compact = "[" + ", ".join(_render_json(item, indent, width) for item in value) + "]"
+        if "\n" not in compact and len(compact) + indent <= width:
+            return compact
+        pad = " " * (indent + 2)
+        body = ",\n".join(
+            f"{pad}{_render_json(item, indent + 2, width)}" for item in value
+        )
+        return "[\n" + body + "\n" + " " * indent + "]"
+    return json.dumps(value, ensure_ascii=False)
+
 
 class ConfigCatalogService:
     def __init__(self, project_root: str | Path):
@@ -43,7 +73,7 @@ class ConfigCatalogService:
                 prefix=".config-", suffix=".tmp", delete=False,
             ) as stream:
                 temp = Path(stream.name)
-                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.write(_render_json(payload, 0))
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
