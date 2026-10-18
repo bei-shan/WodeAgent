@@ -14,6 +14,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 
 class ExitWorktreeTool(Tool):
+    worker_parent_only = True
     """Exit the current worktree, restoring the original project root."""
     usage_notes = 'ExitWorktree: Exit the worktree and return to the original project root. Choose keep to preserve changes or remove to discard.'
 

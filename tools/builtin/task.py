@@ -301,6 +301,7 @@ class SubagentRunner:
 # =============================================================================
 
 class TaskTool(Tool):
+    worker_parent_only = True
     """
     Task tool - Launches a subagent to handle complex tasks.
     

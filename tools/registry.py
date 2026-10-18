@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Optional, Any, Callable, TypedDict
 
 from .base import Tool, ToolStatus, ErrorCode, ToolParameter
 from .circuit_breaker import CircuitBreaker
+from .mcp.schema_validation import compile_mcp_input_schema
 from core.env import load_env
 from core.runtime.config_scope import active_config
 from core.runtime.tool_contracts import validate_tool_input
@@ -38,11 +39,14 @@ def set_registry_config(config: "Config") -> None:
 # 设置日志
 logger = logging.getLogger(__name__)
 
-# These adapters retain callbacks into the owning Agent/session. A worker must
-# never receive an executable binding to them, even through an explicit policy.
+# Legacy public names remain denied even when a custom adapter uses one. Actual
+# built-in controls also declare worker_parent_only, so aliases cannot bypass
+# the worker boundary.
 _PARENT_ONLY_TOOLS = frozenset({
     "Task", "AskUser", "EnterPlanMode", "ExitPlanMode",
-    "EnterWorktree", "ExitWorktree", "ToolSearch",
+    "EnterWorktree", "ExitWorktree", "ToolSearch", "SendMessage",
+    "TeamApprovePlan", "TeamCreate", "TeamDelete", "TeamCleanup",
+    "TeamFanout", "TeamRetry",
 })
 
 
@@ -155,7 +159,8 @@ class ToolRegistry:
         with self._registration_lock:
             child._derived_parent = self
             for name, original in self._tools.items():
-                if name in denied or (allowed_names is not None and name not in allowed_names):
+                if (name in denied or getattr(type(original), "worker_parent_only", False)
+                        or (allowed_names is not None and name not in allowed_names)):
                     continue
                 try:
                     source_hash = schema_fingerprint(self._tool_schema_spec(original))
@@ -518,12 +523,26 @@ class ToolRegistry:
     @classmethod
     def _tool_schema_spec(cls, tool: Tool) -> dict[str, Any]:
         params = tool.get_parameters()
+        declared_schema = cls._parameters_to_schema(params)
         schema_provider = getattr(tool, "get_input_schema", None)
         params_schema = (
             schema_provider() if callable(schema_provider)
-            else cls._parameters_to_schema(params)
+            else declared_schema
         )
-        return {
+        if not isinstance(params_schema, dict) or params_schema.get("type") != "object":
+            raise ValueError("Tool input schema must be an object schema")
+        properties = params_schema.get("properties", {})
+        required = params_schema.get("required", [])
+        if (not isinstance(properties, dict)
+                or not all(isinstance(name, str) and name and isinstance(spec, (dict, bool))
+                           for name, spec in properties.items())
+                or not isinstance(required, list)
+                or not all(isinstance(name, str) and name for name in required)
+                or len(set(required)) != len(required)):
+            raise ValueError("Tool input schema has invalid properties or required fields")
+        if callable(schema_provider):
+            compile_mcp_input_schema(params_schema)
+        spec = {
             "type": "function",
             "function": {
                 "name": tool.name,
@@ -531,6 +550,8 @@ class ToolRegistry:
                 "parameters": params_schema,
             },
         }
+        encode_tool_schema(spec)
+        return spec
 
     @staticmethod
     def _parameters_to_schema(params: list[ToolParameter]) -> dict[str, Any]:
@@ -538,10 +559,12 @@ class ToolRegistry:
         将 ToolParameter 列表转换为 JSON Schema。
         """
         if not isinstance(params, (list, tuple)):
-            params = []
+            raise TypeError("Tool parameters must be a list or tuple")
         properties: dict[str, Any] = {}
         required: list[str] = []
-        for p in params or []:
+        for p in params:
+            if not isinstance(p, ToolParameter) or not p.name or p.name in properties:
+                raise ValueError("Tool parameter declaration is invalid or duplicated")
             param_type = (p.type or "string").strip().lower()
             schema: dict[str, Any] = {
                 "type": ToolRegistry._normalize_schema_type(param_type),
@@ -721,6 +744,23 @@ class ToolRegistry:
                 "context": {"cwd": ".", "params_input": parameters},
             }
             return json.dumps(payload, ensure_ascii=False, indent=2)
+
+        # A malformed legacy declaration must not execute just because the
+        # adapter did not opt in to strict argument validation.
+        if tool is not None:
+            try:
+                self._tool_schema_spec(tool)
+            except Exception:
+                message = "Tool parameter schema is unavailable."
+                error_code = getattr(type(tool), "schema_error_code", ErrorCode.INVALID_PARAM)
+                if not isinstance(error_code, ErrorCode):
+                    error_code = ErrorCode.INVALID_PARAM
+                return json.dumps({
+                    "status": ToolStatus.ERROR.value, "data": {}, "text": message,
+                    "error": {"code": error_code.value, "message": message},
+                    "stats": {"time_ms": 0},
+                    "context": {"cwd": ".", "params_input": parameters},
+                }, ensure_ascii=False)
 
         # Validate the *final* parameters immediately before dispatch.
         # Hooks have already rewritten inputs in ToolRuntime; optimistic-lock

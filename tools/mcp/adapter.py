@@ -15,6 +15,7 @@ from tools.mcp.schema_validation import MCPInputSchemaError, compile_mcp_input_s
 
 class MCPToolAdapter(Tool):
     """Wrap an MCP tool and expose it as a local Tool."""
+    schema_error_code = ErrorCode.MCP_PARAM_ERROR
 
     def __init__(
         self,

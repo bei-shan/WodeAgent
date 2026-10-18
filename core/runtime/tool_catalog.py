@@ -132,6 +132,7 @@ class ToolDiscoveryState:
 
 
 class ToolSearchTool(Tool):
+    worker_parent_only = True
     """Model-callable discovery with registry-scoped promotion and policy."""
 
     strict_input_contract = True

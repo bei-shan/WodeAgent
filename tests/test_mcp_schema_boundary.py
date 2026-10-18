@@ -55,6 +55,17 @@ def test_full_nested_schema_is_advertised_unchanged():
     assert not client.calls
 
 
+def test_valid_json_schema_boolean_property_and_unlisted_required_field_remain_available():
+    schema = {
+        "type": "object", "properties": {"blocked": False},
+        "required": ["value"], "additionalProperties": True,
+    }
+    client, _, registry = make_registry(schema)
+    assert registry.get_openai_tools()[0]["function"]["parameters"] == schema
+    assert json.loads(registry.execute_tool("remote_search", {"value": "ok"}))["status"] == "success"
+    assert client.calls == [("search", {"value": "ok"})]
+
+
 @pytest.mark.parametrize("arguments", [
     {},
     {"query": "ab", "options": {"tags": ["not-an-int"]}},

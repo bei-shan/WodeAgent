@@ -13,7 +13,22 @@ from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
 from core.team_engine.execution import ExecutionService
 from core.team_engine.turn_executor import TurnExecutor
 from tools.base import Tool, ToolParameter
+from tools.builtin.enter_plan_mode import EnterPlanModeTool
+from tools.builtin.enter_worktree import EnterWorktreeTool
+from tools.builtin.exit_plan_mode import ExitPlanModeTool
+from tools.builtin.exit_worktree import ExitWorktreeTool
+from tools.builtin.send_message import SendMessageTool
 from tools.builtin.task import TaskTool
+from tools.builtin.team_approve_plan import TeamApprovePlanTool
+from tools.builtin.team_approvals import TeamApprovalsTool
+from tools.builtin.team_cleanup import TeamCleanupTool
+from tools.builtin.team_create import TeamCreateTool
+from tools.builtin.team_delete import TeamDeleteTool
+from tools.builtin.team_fanout import TeamFanoutTool
+from tools.builtin.team_retry import TeamRetryTool
+from tools.builtin.team_status import TeamStatusTool
+from tools.builtin.team_task_create import TeamTaskCreateTool
+from tools.builtin.team_task_list import TeamTaskListTool
 from tools.mcp.adapter import MCPToolAdapter
 from tools.permission_gate import PermissionGate
 from tools.registry import ToolRegistry
@@ -101,6 +116,83 @@ def test_team_worker_omits_parent_only_controls_even_when_explicitly_allowed(tmp
         assert child.get_tool(name) is None
         assert name not in {s["function"]["name"] for s in child.get_openai_tools()}
     assert parent.get_tool("AskUser")._input_func is interaction
+
+
+@pytest.mark.parametrize("explicit_allow", [False, True])
+def test_default_team_worker_cannot_dispatch_parent_team_controls(tmp_path, explicit_allow):
+    manager = Mock()
+    manager.get_status.return_value = {"team_name": "demo", "message_counts": {}}
+    parent = ToolRegistry()
+    controls = (
+        TeamApprovePlanTool, TeamCreateTool, TeamDeleteTool,
+        TeamCleanupTool, TeamFanoutTool, TeamRetryTool, SendMessageTool,
+    )
+    for control in controls:
+        parent.register_tool(control(project_root=tmp_path, team_manager=manager))
+    parent.register_tool(TeamStatusTool(project_root=tmp_path, team_manager=manager))
+    parent.register_tool(TeamApprovalsTool(project_root=tmp_path, team_manager=manager))
+    parent.register_tool(TeamTaskListTool(project_root=tmp_path, team_manager=manager))
+    parent.register_tool(TeamTaskCreateTool(project_root=tmp_path, team_manager=manager))
+    manager.list_board_tasks.return_value = []
+    manager.create_board_task.return_value = {"id": "task1"}
+    policy = {"allowlist": list(parent._tools)} if explicit_allow else None
+    child = _team_registry(parent, tmp_path, policy)
+
+    advertised = {s["function"]["name"] for s in child.get_openai_tools()}
+    assert {"TeamStatus", "TeamApprovals", "TeamTaskList", "TeamTaskCreate"} <= advertised
+    assert json.loads(child.execute_tool("TeamStatus", {"team_name": "demo"}))["status"] == "success"
+    assert json.loads(child.execute_tool("TeamTaskList", {"team_name": "demo"}))["status"] == "success"
+    assert json.loads(child.execute_tool("TeamTaskCreate", {"team_name": "demo", "subject": "work"}))["status"] == "success"
+    manager.get_status.assert_called_once_with(team_name="demo")
+    manager.create_board_task.assert_called_once()
+    for control in controls:
+        name = control.__name__.removesuffix("Tool")
+        assert name not in advertised
+        assert child.get_tool(name) is None
+        assert json.loads(child.execute_tool(name, {}))["status"] == "error"
+        assert parent.get_tool(name) is not None
+    manager.respond_plan_approval.assert_not_called()
+    manager.delete_team.assert_not_called()
+    manager.create_team.assert_not_called()
+
+
+@pytest.mark.parametrize("control,alias,kwargs,arguments", [
+    (EnterPlanModeTool, "AliasPlan", "agent", {}),
+    (ExitPlanModeTool, "AliasExitPlan", "agent", {"plan": "safe"}),
+    (EnterWorktreeTool, "AliasWorktree", "workspace", {"path": "C:/example"}),
+    (ExitWorktreeTool, "AliasExitWorktree", "workspace", {"action": "keep"}),
+    (TeamApprovePlanTool, "AliasApproval", "team", {"team_name": "demo", "request_id": "req1", "approved": True}),
+    (TeamCreateTool, "AliasCreate", "team", {"team_name": "demo"}),
+    (TeamDeleteTool, "AliasDelete", "team", {"team_name": "demo"}),
+    (TeamCleanupTool, "AliasCleanup", "team", {"team_name": "demo"}),
+    (TeamFanoutTool, "AliasFanout", "team", {"team_name": "demo", "tasks": []}),
+    (TeamRetryTool, "AliasRetry", "team", {"team_name": "demo", "work_id": "task1"}),
+    (SendMessageTool, "AliasMessage", "team", {"team_name": "demo", "from_member": "lead", "to_member": "worker", "text": "approve", "type": "plan_approval_response", "request_id": "req1", "approved": True}),
+])
+def test_worker_rejects_aliased_parent_controls(control, alias, kwargs, arguments, tmp_path):
+    agent = Mock()
+    manager = Mock()
+    manager.get_by_path.return_value = {"name": "demo", "path": str(tmp_path)}
+    dependencies = {
+        "agent": {"code_agent": agent},
+        "workspace": {"code_agent": agent, "worktree_manager": manager},
+        "team": {"team_manager": manager},
+    }[kwargs]
+    parent = ToolRegistry()
+    parent.register_tool(control(name=alias, project_root=tmp_path, **dependencies))
+    child = _team_registry(parent, tmp_path, {"allowlist": [alias]})
+
+    assert alias not in {s["function"]["name"] for s in child.get_openai_tools()}
+    assert child.get_tool(alias) is None
+    assert json.loads(child.execute_tool(alias, arguments))["status"] == "error"
+    assert parent.get_tool(alias) is not None
+    agent.enter_plan_mode.assert_not_called()
+    agent.enter_worktree.assert_not_called()
+    assert agent.method_calls == []
+    manager.respond_plan_approval.assert_not_called()
+    manager.delete_team.assert_not_called()
+    manager.send_message.assert_not_called()
+    assert manager.method_calls == []
 
 
 def test_derived_registry_keeps_shared_service_and_parent_live_fences(tmp_path):
