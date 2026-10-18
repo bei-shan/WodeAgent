@@ -481,35 +481,55 @@ def release_mcp_registration(tool_registry) -> bool:
     ``False`` when this registry owns nothing — the caller then still owns
     whatever clients it holds itself.
     """
-    with _shared_lock:
-        users = _shared_users.get(tool_registry)
-        if users is None:
-            return False
-        users -= 1
-        if users > 0:
-            _shared_users[tool_registry] = users
-            return True
-        _shared_users.pop(tool_registry, None)
-        names = [name for (registry, name) in _shared_clients if registry is tool_registry]
-        clients = []
-        for name in names:
-            client = _shared_clients.pop((tool_registry, name))
-            lifetime = _client_lifetimes[client]
-            lifetime.registrations -= 1
-            if _claim_client_close(lifetime):
-                clients.append((client, lifetime))
-            _shared_generations.pop((tool_registry, name), None)
-            _shared_tools_meta.pop((tool_registry, name), None)
-
-        # Retire registry state before another registration can be published.
-        # Only our server owners are removed; client shutdown below does I/O.
-        clear_pending_servers(tool_registry)
-        unregister_owner = getattr(tool_registry, "unregister_owner", None)
-        if callable(unregister_owner):
+    clients = []
+    invalidation_error = None
+    try:
+        with _shared_lock:
+            users = _shared_users.get(tool_registry)
+            if users is None:
+                return False
+            users -= 1
+            if users > 0:
+                _shared_users[tool_registry] = users
+                return True
+            _shared_users.pop(tool_registry, None)
+            names = [name for (registry, name) in _shared_clients if registry is tool_registry]
             for name in names:
-                unregister_owner(f"mcp:{name}")
-    for client, lifetime in clients:
-        _close_client_lifetime(client, lifetime)
+                client = _shared_clients.pop((tool_registry, name))
+                lifetime = _client_lifetimes[client]
+                lifetime.registrations -= 1
+                if _claim_client_close(lifetime):
+                    clients.append((client, lifetime))
+                _shared_generations.pop((tool_registry, name), None)
+                _shared_tools_meta.pop((tool_registry, name), None)
+
+            # Retire registry state before another registration can publish.
+            # Manual discovery may have published nothing before a sandbox seal;
+            # do not request structural changes for nonexistent owners.
+            clear_pending_servers(tool_registry)
+            unregister_owner = getattr(tool_registry, "unregister_owner", None)
+            if callable(unregister_owner):
+                list_owners = getattr(tool_registry, "registered_owners", None)
+                owners = set(list_owners(prefix="mcp:")) if callable(list_owners) else None
+                for name in names:
+                    owner = f"mcp:{name}"
+                    if owners is not None and owner not in owners:
+                        continue
+                    try:
+                        unregister_owner(owner)
+                    except Exception as exc:
+                        # Keep the registry's structural policy intact. Attempt
+                        # our remaining owners, then report the first failure.
+                        if invalidation_error is None:
+                            invalidation_error = exc
+                        logger.warning("MCP owner invalidation failed for %s: %s", owner, exc)
+        if invalidation_error is not None:
+            raise invalidation_error
+    finally:
+        # Registry invalidation can fail (notably under a sandbox seal). Every
+        # already-claimed close must still run, outside the shared lock.
+        for client, lifetime in clients:
+            _close_client_lifetime(client, lifetime)
     return True
 
 

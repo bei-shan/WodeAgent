@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -359,3 +360,145 @@ def test_same_client_cannot_be_adopted_while_its_close_is_in_progress(monkeypatc
     finally:
         loader.release_mcp_registration(registry)
     assert client.close_sync.call_count == 2
+
+
+def offline_runtime_client(monkeypatch):
+    """Keep a real persistent loop while replacing only remote coroutines."""
+    client = MCPClient(MCPClientConfig(transport="stdio", command="unused"))
+    loop_threads = []
+    listed = fake_client().list_tools_sync.return_value
+
+    async def connect():
+        loop_threads.append(threading.current_thread())
+        return object()
+
+    async def listing():
+        loop_threads.append(threading.current_thread())
+        return listed
+
+    monkeypatch.setattr(client, "connect", connect)
+    monkeypatch.setattr(client, "list_tools_sync", lambda: client._run_sync(listing()))
+    real_close = client.close_sync
+    close = MagicMock(wraps=real_close)
+    monkeypatch.setattr(client, "close_sync", close)
+    return client, close, real_close, loop_threads
+
+
+def test_ownerless_manual_registration_closes_under_sandbox_seal(monkeypatch, tmp_path):
+    client, close, real_close, loop_threads = offline_runtime_client(monkeypatch)
+    entered, resume, finished = threading.Event(), threading.Event(), threading.Event()
+    original_listing = client.list_tools_sync
+
+    def listing():
+        entered.set()
+        assert resume.wait(5)
+        return original_listing()
+
+    original_background = loader._background_connect
+
+    def background(*args, **kwargs):
+        try:
+            return original_background(*args, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(client, "list_tools_sync", listing)
+    monkeypatch.setattr(loader, "_background_connect", background)
+    configure(monkeypatch, iter([client]), mode="manual")
+    registry = ToolRegistry()
+    registry.register_function("Bash", "Sandbox shell", lambda _: "ok", owner="builtin")
+    unregister = MagicMock(wraps=registry.unregister_owner)
+    monkeypatch.setattr(registry, "unregister_owner", unregister)
+    loader.register_mcp_servers(registry, str(tmp_path))
+    try:
+        assert entered.wait(5)
+        registry.restrict_to_tools({"Bash"})
+        resume.set()
+        assert finished.wait(5)
+        assert registry.registered_owners(prefix="mcp:") == ()
+        assert loader.get_pending_server_names(registry) == ["shared"]
+        assert client._sync_loop.is_running()
+        assert loader.release_mcp_registration(registry)
+        unregister.assert_not_called()
+        assert close.call_count == 1
+        assert client._sync_loop is None and client._sync_thread is None
+        assert loop_threads and all(not thread.is_alive() for thread in loop_threads)
+        assert client not in loader._client_lifetimes
+        assert loader.get_pending_server_names(registry) == []
+        assert registry.list_tools() == ["Bash"]
+        with pytest.raises(PermissionError, match="sandbox policy"):
+            registry.unregister_owner("mcp:shared")
+    finally:
+        resume.set()
+        assert finished.wait(5)
+        real_close()
+
+
+def test_sealed_actual_owner_failure_closes_runtime_and_keeps_sandbox_denial(monkeypatch, tmp_path):
+    client, close, real_close, loop_threads = offline_runtime_client(monkeypatch)
+    configure(monkeypatch, iter([client]))
+    registry = ToolRegistry()
+    loader.register_mcp_servers(registry, str(tmp_path))
+    snapshot = registry.capture_tool_step()
+    registry.restrict_to_tools({"Bash"})
+    try:
+        with pytest.raises(PermissionError, match="sandbox policy"):
+            loader.release_mcp_registration(registry)
+        assert close.call_count == 1
+        assert client._sync_loop is None and client._sync_thread is None
+        assert loop_threads and all(not thread.is_alive() for thread in loop_threads)
+        assert client not in loader._client_lifetimes
+        assert registry not in loader._shared_users
+        # Structural policy remains sealed; failure is propagated instead of
+        # claiming the hidden adapter was removed. Even its old snapshot denies.
+        assert registry.registered_owners(prefix="mcp:") == ("mcp:shared",)
+        assert registry.get_openai_tools() == []
+        response = json.loads(registry.execute_tool("shared_read", {}, snapshot=snapshot))
+        assert response["error"]["code"].upper() == "ACCESS_DENIED"
+        with pytest.raises(PermissionError):
+            registry.restrict_to_tools({"Bash", "shared_read"})
+    finally:
+        real_close()
+
+
+def test_owner_invalidation_failure_still_retires_other_owned_tools_and_clients(monkeypatch, tmp_path):
+    first, second = fake_client(), fake_client()
+    configure(monkeypatch, iter([first, second]))
+    monkeypatch.setattr(loader, "load_mcp_servers", lambda root: {
+        "shared": {"command": "echo"}, "second": {"command": "echo"},
+    })
+    registry = ToolRegistry()
+    registry.register_function("external", "Unrelated owner", lambda _: "ok", owner="mcp:external")
+    external = registry.get_function("external")
+    loader.register_mcp_servers(registry, str(tmp_path))
+    snapshot = registry.capture_tool_step()
+    original_unregister = registry.unregister_owner
+
+    def unregister(owner):
+        if owner == "mcp:shared":
+            raise RuntimeError("owner invalidation failed")
+        return original_unregister(owner)
+
+    monkeypatch.setattr(registry, "unregister_owner", unregister)
+    with pytest.raises(RuntimeError, match="owner invalidation failed"):
+        loader.release_mcp_registration(registry)
+    assert first.close_sync.call_count == second.close_sync.call_count == 1
+    assert first not in loader._client_lifetimes and second not in loader._client_lifetimes
+    assert registry.get_tool("second_read") is None
+    response = json.loads(registry.execute_tool("second_read", {}, snapshot=snapshot))
+    assert response["error"]["code"] == "STALE_TOOL_SCHEMA"
+    assert registry.get_function("external") is external
+    assert registry.owner_of("external") == "mcp:external"
+    assert registry.owner_of("shared_read") == "mcp:shared"
+
+
+def test_owner_enumeration_failure_still_closes_claimed_client(monkeypatch, tmp_path):
+    client = fake_client()
+    configure(monkeypatch, iter([client]))
+    registry = ToolRegistry()
+    loader.register_mcp_servers(registry, str(tmp_path))
+    monkeypatch.setattr(registry, "registered_owners", MagicMock(side_effect=RuntimeError("owner lookup failed")))
+    with pytest.raises(RuntimeError, match="owner lookup failed"):
+        loader.release_mcp_registration(registry)
+    assert client.close_sync.call_count == 1
+    assert client not in loader._client_lifetimes
