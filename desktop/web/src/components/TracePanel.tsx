@@ -34,7 +34,7 @@ function TraceLeaf({ node }: { node: TraceNode }) {
     <div className="flex min-w-0 items-center gap-2">
       <span className="text-gray-400">{node.kind === 'model' ? '◇' : '⚙'}</span>
       <span className="truncate font-medium text-gray-700">{node.name}</span>
-      <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${tone}`}>{node.status}</span>
+      <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] ${tone}`}>{node.status}</span>
     </div>
     <div className="shrink-0 text-right text-gray-500">
       {millis(node.duration_ms)}

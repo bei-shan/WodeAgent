@@ -133,7 +133,7 @@ export function SessionItem({ session, active, onSelect, onDelete, onRename, onT
             if (event.key === 'Escape') { setName(session.title); setRenaming(false) }
           }}
           onBlur={finishRename} autoFocus
-          className="mx-2 my-1 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-[13px] outline-none" />
+          className="mx-2 my-1 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-[13px] outline-hidden" />
       ) : (
         <button type="button" onClick={onSelect} aria-current={active ? 'page' : undefined}
           className="session-row-main flex items-center gap-2" title={session.title || session.id}>

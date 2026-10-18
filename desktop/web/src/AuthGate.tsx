@@ -88,7 +88,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           本地访问令牌
           <input type="password" autoComplete="current-password" aria-label="本地访问令牌"
             value={token} onChange={e => setToken(e.target.value)}
-            className="mt-2 w-full border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            className="mt-2 w-full border border-gray-200 rounded-xl px-3 py-2 focus:outline-hidden focus:ring-2 focus:ring-blue-200"
             required />
         </label>
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
@@ -103,7 +103,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   return <>
     {children}
     {required && <button type="button" onClick={() => void logout()}
-      className="fixed bottom-4 right-4 z-40 rounded-full bg-white border border-gray-200 shadow px-3 py-1.5 text-xs text-gray-600 hover:text-red-600">
+      className="fixed bottom-4 right-4 z-40 rounded-full bg-white border border-gray-200 shadow-sm px-3 py-1.5 text-xs text-gray-600 hover:text-red-600">
       退出登录
     </button>}
   </>

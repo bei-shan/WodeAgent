@@ -108,6 +108,44 @@ async function emit(page: Page, type: string, payload: Record<string, unknown>, 
   await page.evaluate(event => (window as any).__emitAgent(event), { type, payload, step })
 }
 
+test('compiler upgrade preserves control styles and hidden-sibling spacing', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await expect(page.getByText('Hi, 我是 Ridge')).toBeVisible()
+  // These expectations were measured against the generated Tailwind 3 stylesheet.
+  // Use classes already present in the UI, so this also detects missing utilities.
+  const styles = await page.evaluate(() => {
+    const fixture = document.createElement('section')
+    fixture.innerHTML = '<button id="style-control" class="border rounded-sm shadow-xs bg-gray-50 text-gray-700">control</button>' +
+      '<button id="style-disabled" disabled>disabled</button><input id="style-placeholder" placeholder="text"><div id="style-spacing" class="space-y-2"><p>A</p><p hidden>B</p><p>C</p></div>' +
+      '<span id="style-font" class="font-mono"></span>'
+    document.body.append(fixture)
+    const control = getComputedStyle(fixture.querySelector('#style-control')!)
+    const result = {
+      background: control.backgroundColor, color: control.color,
+      border: control.borderColor, borderWidth: control.borderWidth,
+      radius: control.borderRadius, shadow: control.boxShadow, cursor: control.cursor,
+      disabledCursor: getComputedStyle(fixture.querySelector('#style-disabled')!).cursor,
+      placeholder: getComputedStyle(fixture.querySelector('#style-placeholder')!, '::placeholder').color,
+      font: getComputedStyle(fixture.querySelector('#style-font')!).fontFamily,
+      spacing: [...fixture.querySelector('#style-spacing')!.children].map(child => {
+        const style = getComputedStyle(child)
+        return [style.marginTop, style.marginBottom, style.display]
+      }),
+    }
+    fixture.remove()
+    return result
+  })
+  expect(styles).toMatchObject({
+    background: 'rgb(249, 250, 251)', color: 'rgb(55, 65, 81)',
+    border: 'rgb(229, 231, 235)', borderWidth: '1px', radius: '4px', cursor: 'pointer', disabledCursor: 'default',
+    placeholder: 'rgb(156, 163, 175)',
+    font: '"JetBrains Mono", "Fira Code", Consolas, monospace',
+    spacing: [['0px', '0px', 'block'], ['0px', '0px', 'none'], ['8px', '0px', 'block']],
+  })
+  expect(styles.shadow).toContain('rgba(0, 0, 0, 0.05) 0px 1px 2px 0px')
+})
+
 test('first message, live tokens, tool log and interruption', async ({ page }) => {
   const state = await mockBackend(page)
   await page.goto('/')
@@ -255,6 +293,22 @@ test('failed turn is reported as failure, not a successful answer', async ({ pag
   await expect(page.getByText('执行失败：模型服务限流，重试次数已用尽')).toBeVisible()
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0)
 })
+
+for (const [kind, message] of [
+  ['output_truncated', '模型输出已达到长度限制，本轮任务未完成'],
+  ['empty_response', '模型连续返回空回复，本轮任务失败'],
+]) {
+  test(`incomplete model response explains ${kind}`, async ({ page }) => {
+    await mockBackend(page)
+    await page.goto('/')
+    await page.getByPlaceholder('问任何问题').fill('检查模型输出')
+    await page.getByPlaceholder('问任何问题').press('Enter')
+    await expect(page.getByText('实时连接正常')).toBeVisible()
+    await emit(page, 'turn.finished', { status: 'failed', error_kind: kind, response: '' })
+    await expect(page.getByText(`执行失败：${message}`)).toBeVisible()
+    await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0)
+  })
+}
 
 test('cancelled turn remains cancelled after legacy completion event', async ({ page }) => {
   await mockBackend(page)

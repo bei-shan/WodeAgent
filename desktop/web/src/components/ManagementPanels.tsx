@@ -65,7 +65,7 @@ export function SkillsPanel({ skills, onRefresh }: { skills: SkillInfo[]; onRefr
         </div>
 
         {showForm && (
-          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4 shadow-sm">
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4 shadow-xs">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-gray-700">新建技能</span>
               <label className="cursor-pointer text-xs text-blue-500 hover:text-blue-600 flex items-center gap-1">
@@ -191,7 +191,7 @@ export function McpPanel({ servers, onRefresh }: { servers: McpServerCfg[]; onRe
         <div className="text-xs text-gray-400 mb-3">配置文件: <code className="text-gray-500">mcp_servers.json</code>（标准 MCP JSON 格式，支持 command/args 或 url 传输）</div>
 
         {showForm && (
-          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4 shadow-sm">
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4 shadow-xs">
             <div className="flex gap-3 mb-3">
               <button onClick={() => { setInputMode('form'); setValidateMsg('') }}
                 className={`text-xs pb-1 border-b-2 transition-colors ${inputMode === 'form' ? 'border-blue-500 text-blue-600 font-medium' : 'border-transparent text-gray-400'}`}>表单填写</button>

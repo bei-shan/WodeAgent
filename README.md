@@ -144,6 +144,8 @@ cd desktop/web && npm ci && npm run build
 cd tui-v2 && bun install && bun run typecheck && bun test
 ```
 
+Web 样式构建使用 Tailwind CSS 4；支持的浏览器最低版本为 Safari 16.4、Chrome 111、Firefox 128。
+
 更完整的测试范围在 `.github/workflows/` 中定义；具体结果以 CI 为准。本地需要按所测试功能配置相应依赖，Docker 集成测试还需要 Docker。
 
 阅读 [文档导航](docs/README.md) 查看最新架构与历史设计的区别；[CONTRIBUTING.md](CONTRIBUTING.md) 介绍开发约定；[品牌与旧命名兼容说明](docs/REBRANDING.md) 记录改名边界和后续迁移工作。

@@ -1,6 +1,31 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@config "../tailwind.config.js";
+@source "./";
+@source "../index.html";
+
+/* Tailwind 3 placed vertical spacing above visible siblings. Tailwind 4
+   places it below preceding children, including hidden children. */
+@layer utilities {
+  .space-y-1 { --ridge-space-y: 0.25rem; }
+  .space-y-2 { --ridge-space-y: 0.5rem; }
+  .space-y-3 { --ridge-space-y: 0.75rem; }
+  .space-y-4 { --ridge-space-y: 1rem; }
+  .space-y-5 { --ridge-space-y: 1.25rem; }
+  :is(.space-y-1, .space-y-2, .space-y-3, .space-y-4, .space-y-5) > * {
+    margin-block-end: 0;
+  }
+  :is(.space-y-1, .space-y-2, .space-y-3, .space-y-4, .space-y-5) > :not([hidden]) ~ :not([hidden]) {
+    margin-block-start: var(--ridge-space-y);
+  }
+}
+
+/* Preserve the v3 control defaults and spacing during the compiler upgrade. */
+@layer base {
+  *, ::before, ::after, ::backdrop, ::file-selector-button { border-color: #e5e7eb; }
+  input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+  button, [role="button"] { cursor: pointer; }
+  button:disabled { cursor: default; }
+}
 
 /* ── Global ───────────────────────────────────────────────────────── */
 :root { color-scheme: light; }
