@@ -84,6 +84,39 @@ def test_concurrent_feature_state_toggles_do_not_lose_updates(tmp_path):
     assert not list(tmp_path.glob(".config-*.tmp"))
 
 
+def test_editing_one_mcp_server_does_not_reformat_the_others(tmp_path):
+    """mcp_servers.json is hand-edited and diff-reviewed, so a short args list
+    must stay on its own line instead of being expanded by a rewrite."""
+    config = tmp_path / "mcp_servers.json"
+    config.write_text(
+        '{\n  "mcpServers": {\n    "fetch": {\n      "command": "uvx",\n'
+        '      "args": ["mcp-server-fetch"]\n    }\n  }\n}\n',
+        encoding="utf-8",
+    )
+    service = ConfigCatalogService(tmp_path)
+
+    service.create_mcp("extra", "npx", ["-y", "some-mcp-package"])
+
+    text = config.read_text(encoding="utf-8")
+    assert '"args": ["mcp-server-fetch"]' in text, text
+    payload = json.loads(text)
+    assert payload["mcpServers"]["extra"]["args"] == ["-y", "some-mcp-package"]
+    assert payload["mcpServers"]["fetch"]["args"] == ["mcp-server-fetch"]
+
+
+def test_long_lists_still_wrap_and_round_trip(tmp_path):
+    """A list that cannot fit the line budget still renders as valid JSON."""
+    config = tmp_path / "mcp_servers.json"
+    service = ConfigCatalogService(tmp_path)
+    long_args = [f"--option-number-{index:03d}" for index in range(12)]
+
+    service.create_mcp("wide", "npx", long_args)
+
+    text = config.read_text(encoding="utf-8")
+    assert json.loads(text)["mcpServers"]["wide"]["args"] == long_args
+    assert "\n" in text  # still a multi-line document
+
+
 def test_application_service_has_no_transport_dependencies():
     root = Path(__file__).resolve().parents[1]
     module = root / "desktop/service/application/config_catalog.py"

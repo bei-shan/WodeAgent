@@ -12,10 +12,13 @@ def test_legacy_terminal_removed_and_no_live_imports():
         "tests/test_ui_components.py",
     ):
         assert not (root / relative).exists(), "Retired UI code remains: " + relative
-    excluded = {".git", ".venv", "venv", "node_modules", "dist", ".pytest_cache"}
+    excluded = {"venv", "node_modules", "dist"}
     forbidden = ("tui", "scripts.chat_test_agent", "scripts.slash_commands", "utils.ui_components")
     for path in root.rglob("*.py"):
-        if excluded.intersection(path.relative_to(root).parts):
+        parts = path.relative_to(root).parts
+        # Any dot-directory (.git, .venv, .uv_cache, .pytest_cache, …) holds
+        # tooling or cached third-party files, not this project's own code.
+        if excluded.intersection(parts) or any(part.startswith(".") for part in parts):
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
             if isinstance(node, ast.Import):

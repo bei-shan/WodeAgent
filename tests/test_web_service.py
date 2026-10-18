@@ -144,3 +144,62 @@ def test_documented_factory_entrypoint_and_missing_session_are_safe(tmp_path, mo
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/sessions/not-a-session/files").status_code == 404
         assert client.get("/api/sessions/not-a-session/files/content", params={"path": "README.md"}).status_code == 404
+
+
+def test_mcp_status_lists_a_shared_server_once(tmp_path, monkeypatch):
+    """Custom sessions that share one MCP connection must not be
+    reported as several independent servers."""
+    from core.session_manager import SessionManager
+    from tools.mcp.client import MCPClientConfig
+
+    monkeypatch.chdir(tmp_path)
+    app = create_app(agent_factory=FakeAgent, project_root=str(tmp_path))
+    controller = app.state.controller
+
+    client = SimpleNamespace(
+        config=MCPClientConfig(transport="stdio", name="fetch", command="uvx"),
+        is_connected=True,
+    )
+
+    def factory():
+        agent = FakeAgent()
+        agent._mcp_clients = [client]
+        agent.tool_registry = SimpleNamespace(get_all_tools=lambda: [])
+        return agent
+
+    for _ in range(2):
+        session = controller.attach_session(SessionManager().create_session(), factory)
+        session.ensure_agent()
+
+    with TestClient(app) as http:
+        payload = http.get("/api/mcp/status").json()
+
+    assert [server["name"] for server in payload["servers"]] == ["fetch"]
+
+
+def test_default_factory_keeps_listing_registry_out_of_session_execution(tmp_path, monkeypatch):
+    """An injected catalog cannot become the mutable registry of every Agent."""
+    import agents.codeAgent as code_agent_module
+    import core.llm as llm_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(llm_module, "HelloAgentsLLM", lambda *a, **kw: object())
+
+    from tools.registry import ToolRegistry
+
+    captured = []
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.append(kwargs.get("tool_registry"))
+            self.tool_registry = kwargs.get("tool_registry")
+
+    monkeypatch.setattr(code_agent_module, "CodeAgent", FakeAgent)
+
+    catalog = ToolRegistry()
+    app = create_app(tool_registry=catalog)
+    app.state.agent_factory()
+    app.state.agent_factory()
+    assert app.state.tool_registry is catalog
+    assert captured[0] is not captured[1]
+    assert all(registry is not catalog for registry in captured)

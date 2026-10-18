@@ -51,6 +51,7 @@ _MCP_CONNECT_TIMEOUT = float(os.environ.get("MCP_CONNECT_TIMEOUT", "30"))
 @dataclass
 class MCPClientConfig:
     transport: str
+    name: str = ""
     command: Optional[str] = None
     args: Optional[list[str]] = None
     url: Optional[str] = None

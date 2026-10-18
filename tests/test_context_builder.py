@@ -2,6 +2,7 @@
 
 import time
 import unittest
+from types import SimpleNamespace
 
 from core.context_engine.context_builder import ContextBuilder
 from tests.utils.test_helpers import create_temp_project
@@ -15,6 +16,25 @@ class DummyToolRegistry:
 class TestContextBuilder(unittest.TestCase):
     def _make_project(self, structure):
         return create_temp_project(structure)
+
+    def test_plan_mode_guidance_marks_the_tool_as_inactive(self):
+        """Plan mode is entered by calling EnterPlanMode, so a session that has
+        not called it must not be told it is already read-only."""
+        structure = {
+            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+        }
+        with self._make_project(structure) as project:
+            registry = DummyToolRegistry()
+            registry.get_all_tools = lambda: [
+                SimpleNamespace(name="EnterPlanMode", usage_notes="")
+            ]
+            builder = ContextBuilder(
+                tool_registry=registry, project_root=str(project.root)
+            )
+            text = builder._build_l1()
+            self.assertIn("# Plan Mode", text)
+            block = text[text.index("# Plan Mode"):]
+            self.assertIn("not active", block.lower())
 
     def test_build_messages_with_history(self):
         structure = {

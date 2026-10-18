@@ -43,11 +43,14 @@ def _local_server(args: argparse.Namespace) -> int:
 
 
 def _ui(binary: str, directory: str, arguments: list[str]) -> int:
-    if shutil.which(binary) is None:
+    # Launch the path ``which`` validated: Windows resolves npm to npm.CMD,
+    # which CreateProcess cannot find from the bare name.
+    resolved = shutil.which(binary)
+    if resolved is None:
         print(f"Missing {binary}. Install dependencies before starting this UI.", file=sys.stderr)
         return 2
     try:
-        return subprocess.run([binary, *arguments], cwd=ROOT / directory, check=False).returncode
+        return subprocess.run([resolved, *arguments], cwd=ROOT / directory, check=False).returncode
     except OSError:
         print(f"Could not launch {binary}.", file=sys.stderr)
         return 2
