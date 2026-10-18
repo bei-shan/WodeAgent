@@ -117,15 +117,17 @@ class BackgroundTaskRunner:
 
         def _run() -> None:
             try:
-                # Try with progress callback first, fall back to no args.
+                # Choose the call shape before execution. A runner may itself
+                # raise TypeError or ValueError after producing side effects.
                 import inspect
                 try:
                     sig = inspect.signature(runner_callable)
-                    if len(sig.parameters) > 0:
-                        result, tool_usage = runner_callable(_progress_callback)
-                    else:
-                        result, tool_usage = runner_callable()
+                    accepts_progress = len(sig.parameters) > 0
                 except (ValueError, TypeError):
+                    accepts_progress = False
+                if accepts_progress:
+                    result, tool_usage = runner_callable(_progress_callback)
+                else:
                     result, tool_usage = runner_callable()
                 self._save_result(task_id, "completed", result, tool_usage)
             except Exception as exc:

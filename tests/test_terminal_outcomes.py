@@ -173,13 +173,13 @@ def test_turn_executor_empty_is_failure(tmp_path):
     assert caught.value.kind == "empty_response"
 
 
-@pytest.mark.parametrize("responses,max_steps,expected", [
-    ([raw(calls=[call()])], 1, "failed"),
-    ([raw(calls=[call()]), raw()], 5, "failed"),
-    ([raw("partial", "length")], 5, "failed"),
-    ([raw(calls=[call()]), raw("recovered and completed")], 5, "succeeded"),
+@pytest.mark.parametrize("responses,max_steps,expected,expected_kind", [
+    ([raw(calls=[call()])], 1, "failed", "step_limit"),
+    ([raw(calls=[call()]), raw()], 5, "failed", "empty_response"),
+    ([raw("partial", "length")], 5, "failed", "output_truncated"),
+    ([raw(calls=[call()]), raw("recovered and completed")], 5, "succeeded", None),
 ])
-def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch, responses, max_steps, expected):
+def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch, responses, max_steps, expected, expected_kind):
     monkeypatch.setenv("TEAM_WORKER_MAX_STEPS", str(max_steps))
     manager = TeamManager(str(tmp_path), llm=ScriptedProvider(responses), tool_registry=ToolRegistry())
     try:
@@ -197,6 +197,10 @@ def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch
             "completed" if expected == "succeeded" else "canceled")
         if expected == "failed":
             assert persisted.get("error")
+            assert persisted["error"]["kind"] == expected_kind
+            assert persisted["error"]["retryable"] is False
+            # Partial model/tool observations remain private diagnostic evidence.
+            assert "partial_messages" not in persisted["error"]
             assert not persisted.get("result")
     finally:
         manager.shutdown()
