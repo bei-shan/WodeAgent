@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
 from tools.base import Tool, ToolParameter
 from tools.mcp.adapter import register_mcp_tools
+from tools.mcp.client import MCPClient
 from tools.registry import ToolRegistry
 
 
@@ -133,16 +135,42 @@ def test_mcp_sanitized_name_collision_cannot_take_another_server_adapter():
     assert registry.owner_of("one_two_get_2") == "mcp:one two"
 
 
-def test_mcp_cleanup_unregisters_only_mcp_names():
+def test_closing_an_agent_that_registered_no_mcp_leaves_the_registry_alone(
+    monkeypatch,
+):
+    """One registry backs several Agents at once, so an Agent that never
+    registered MCP must not sweep the servers its neighbours are using."""
     from core.runtime.service_mcp import MCPService
+    from tools.mcp import loader as loader_mod
 
     registry = ToolRegistry()
     builtin = Probe("Read")
     registry.register_tool(builtin, owner="builtin")
-    registry.replace_owned_tools("mcp:files", [Probe("files_get")])
-    registry.replace_owned_tools("mcp:search", [Probe("search_get")])
-    agent = SimpleNamespace(tool_registry=registry, _mcp_clients=[])
-    MCPService().close(agent)
+    client = MagicMock(spec=MCPClient)
+    client.list_tools_sync.return_value = SimpleNamespace(tools=[
+        SimpleNamespace(name="get", description="Get", inputSchema={
+            "type": "object", "properties": {}, "additionalProperties": False,
+        }),
+    ])
+    client.close_sync = MagicMock()
+    monkeypatch.setattr(
+        loader_mod, "load_mcp_servers",
+        lambda root: {"files": {"command": "echo"}},
+    )
+    monkeypatch.setattr(loader_mod, "connect_mode", lambda: "startup")
+    monkeypatch.setattr(loader_mod, "MCPClient", lambda config: client)
+
+    clients, _ = loader_mod.register_mcp_servers(registry, "/tmp/project")
+    assert registry.get_tool("files_get") is not None
+
+    MCPService().close(SimpleNamespace(tool_registry=registry, _mcp_clients=[]))
+
+    assert registry.get_tool("Read") is builtin
+    assert registry.get_tool("files_get") is not None
+    assert not client.close_sync.called
+
+    # The Agent that did register them still retires them on its way out.
+    MCPService().close(SimpleNamespace(tool_registry=registry, _mcp_clients=clients))
     assert registry.get_tool("Read") is builtin
     assert registry.get_tool("files_get") is None
-    assert registry.get_tool("search_get") is None
+    assert client.close_sync.called

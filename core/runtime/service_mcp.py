@@ -47,11 +47,15 @@ class MCPService:
                     if ok:
                         agent.logger.info("MCP server '%s' recovered", name)
                         # Rebuild prompt so LLM sees new tools
+                        # MCP adapters are published as "<server>_<tool>"; their
+                        # provenance, not a name prefix, identifies them.
+                        owner_of = getattr(agent.tool_registry, "owner_of", None)
                         all_tools = agent.tool_registry.get_all_tools()
                         mcp_meta = [
                             {"name": t.name, "description": getattr(t, "description", "")}
                             for t in all_tools
-                            if getattr(t, "name", "").startswith("mcp__")
+                            if callable(owner_of)
+                            and str(owner_of(t.name) or "").startswith("mcp:")
                         ]
                         agent._mcp_tools_prompt = format_mcp_tools_prompt(mcp_meta)
         except Exception:
@@ -85,21 +89,22 @@ class MCPService:
         return blocks
 
     def close(self, agent: "CodeAgent") -> None:
-        """Close every MCP client that was registered at init."""
-        # Pending retries belong to this Agent; never dispose another Agent's
-        # equally named MCP server.
-        from tools.mcp.loader import clear_pending_servers
+        """Release this Agent's share of its registry's MCP servers.
+
+        Several Agents can share one ToolRegistry, so a closing Agent only drops
+        its own reference: the last one out unregisters the servers' adapters and
+        disconnects them.  Never sweeps another Agent's servers.
+
+        A host with no shared registration still owns its clients outright, and
+        those are closed here.
+        """
+        from tools.mcp.loader import release_mcp_registration
         registry = getattr(agent, "tool_registry", None)
-        if registry is not None:
-            clear_pending_servers(registry)
-            list_owners = getattr(registry, "registered_owners", None)
-            unregister_owner = getattr(registry, "unregister_owner", None)
-            if callable(list_owners) and callable(unregister_owner):
-                # A server teardown must invalidate only its own adapters.
-                # Old model snapshots will reject the now-removed handles.
-                for owner in list_owners(prefix="mcp:"):
-                    unregister_owner(owner)
-        for client in getattr(agent, "_mcp_clients", []) or []:
+        clients = list(getattr(agent, "_mcp_clients", []) or [])
+        released = bool(registry is not None and clients) and release_mcp_registration(registry)
+        if released:
+            return
+        for client in clients:
             try:
                 client.close_sync()
             except Exception as exc:

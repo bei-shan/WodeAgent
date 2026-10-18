@@ -99,8 +99,8 @@ def test_ui_uses_fixed_project_paths_and_no_shell(monkeypatch):
     assert cli.main(["web"]) == 0
     assert cli.main(["tui"]) == 0
     assert calls == [
-        (["npm", "run", "dev"], {"cwd": cli.ROOT / "desktop/web", "check": False}),
-        (["bun", "run", "dev"], {"cwd": cli.ROOT / "tui-v2", "check": False}),
+        (["/usr/bin/npm", "run", "dev"], {"cwd": cli.ROOT / "desktop/web", "check": False}),
+        (["/usr/bin/bun", "run", "dev"], {"cwd": cli.ROOT / "tui-v2", "check": False}),
     ]
 
 
@@ -108,6 +108,23 @@ def test_missing_ui_binary_refuses_launch(monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     assert cli.main(["web"]) == 2
     assert cli.main(["tui"]) == 2
+
+
+def test_ui_launches_the_executable_path_that_was_resolved(monkeypatch):
+    """Windows resolves ``npm`` to ``npm.CMD``, which CreateProcess cannot find
+    from the bare name, so the launcher must run the path ``which`` validated."""
+    resolved = {"npm": "C:/node/npm.CMD", "bun": "C:/bun/bun.exe"}
+    monkeypatch.setattr(cli.shutil, "which", lambda name: resolved[name])
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda argv, **kw: calls.append(argv) or
+                        SimpleNamespace(returncode=0))
+    assert cli.main(["web"]) == 0
+    assert cli.main(["tui"]) == 0
+    assert calls == [
+        ["C:/node/npm.CMD", "run", "dev"],
+        ["C:/bun/bun.exe", "run", "dev"],
+    ]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows file ACLs differ from POSIX modes")

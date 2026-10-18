@@ -134,9 +134,12 @@ class TeamsService:
         return result
 
     def create(self, sid: str, team_name: str) -> dict:
-        agent = self._live_agent(sid)
-        if agent is None:
+        session = self.controller.get_session(sid)
+        if session is None:
             raise NotFoundError("Session not found")
+        # The Agent is built lazily on first use, and creating a team is a use;
+        # only a genuinely unknown session is a 404.
+        agent = session.ensure_agent()
         manager = getattr(agent, "team_manager", None)
         if not getattr(agent, "enable_agent_teams", False) or manager is None:
             raise InvalidInputError("Agent teams not enabled. Toggle enable_agent_teams in session config first.")

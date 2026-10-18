@@ -4,12 +4,29 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from core.runtime.session_controller import SessionController
 from core.session_manager import SessionManager
 from desktop.service.app import create_app
+from desktop.service.application.errors import InvalidInputError, NotFoundError
+from desktop.service.application.settings import TeamsService
 from tests.test_web_service import FakeAgent
+
+
+def test_team_creation_names_the_missing_config_not_a_missing_session(tmp_path):
+    """A real session whose Agent is not built yet is not a missing session."""
+    ctrl = SessionController(workspace_base=str(tmp_path / "workspaces"))
+    sid = SessionManager().create_session()
+    ctrl.attach_session(sid, FakeAgent)
+    service = TeamsService(ctrl)
+
+    with pytest.raises(InvalidInputError, match="not enabled"):
+        service.create(sid, "probe-team")
+
+    with pytest.raises(NotFoundError):
+        service.create("0123456789ab", "probe-team")
 
 
 def test_ensure_agent_is_initialized_exactly_once_across_parallel_requests(tmp_path, monkeypatch):
