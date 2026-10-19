@@ -288,3 +288,38 @@ def test_computer_capabilities_do_not_invoke_pyautogui(tmp_path, monkeypatch):
     assert response["data"]["platform"] == sys.platform
     blocked.size.assert_not_called()
     tool.close()
+
+
+
+def test_macos_screen_capture_permission_fail_closed(monkeypatch, tmp_path):
+    from core.computer.platforms.macos import MacOSDesktopDriver
+
+    class FakeFn:
+        def __call__(self):
+            return False
+
+    lib = SimpleNamespace(CGPreflightScreenCaptureAccess=FakeFn())
+    monkeypatch.setattr("ctypes.cdll.LoadLibrary", lambda _: lib)
+    driver = MacOSDesktopDriver(environ={})
+    with pytest.raises(RuntimeError, match="Screen Recording permission"):
+        driver.screenshot(tmp_path / "screen.jpg")
+    assert not (tmp_path / "screen.jpg").exists()
+
+
+def test_windows_noninteractive_station_is_denied(monkeypatch):
+    import ctypes
+    from core.computer.platforms.windows import WindowsDesktopDriver
+
+    def query(station, info_class, ptr, size, needed):
+        # UOI_FLAGS read returns flags with WSF_VISIBLE == 0.
+        ctypes.cast(ptr, ctypes.POINTER(ctypes.c_int))[2] = 0
+        return 1
+
+    user32 = SimpleNamespace(
+        GetProcessWindowStation=lambda: 123,
+        GetUserObjectInformationW=query,
+    )
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    driver = WindowsDesktopDriver(environ={})
+    with pytest.raises(RuntimeError, match="non-interactive"):
+        driver.size()
