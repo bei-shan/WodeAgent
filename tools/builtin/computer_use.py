@@ -118,7 +118,7 @@ class ComputerUseTool(Tool):
                 time_ms=int((time.monotonic() - started) * 1000))
         except ValueError as exc:
             return self.create_error_response(
-                ErrorCode.INVALID_PARAM, str(exc), parameters,
+                ErrorCode.INVALID_PARAM, str(exc), safe_input,
                 time_ms=int((time.monotonic() - started) * 1000))
         except Exception as exc:
             return self.create_error_response(
