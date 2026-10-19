@@ -45,6 +45,7 @@ from core.runtime.service_background import BackgroundService
 from core.runtime.service_style import StyleService
 from core.runtime.service_hooks import HookService
 from core.runtime.service_vcr import VCRService
+from core.runtime.service_interactive_use import InteractiveUseService
 from tools.permission_gate import create_permission_gate
 from utils import setup_logger
 from core.skills.skill_loader import SkillLoader
@@ -149,6 +150,7 @@ class CodeAgent(Agent):
         self._runtime_services.register("vcr", VCRService)
         self._runtime_services.register("session", SessionService)
         self._runtime_services.register("sandbox", SandboxService)
+        self._runtime_services.register("interactive_use", InteractiveUseService)
         self._worktree_manager = None
         self._background_runner = None
         self._hook_system_messages = []
@@ -260,6 +262,8 @@ class CodeAgent(Agent):
         if self._hosted_tool_authority is None:
             registered = bootstrap.discover_and_register()
             self.logger.debug("Auto-registered %d built-in tools: %s", len(registered), registered)
+            if "BrowserUse" in registered or "ComputerUse" in registered:
+                self._runtime_services.ensure("interactive_use")
 
         # Team tools (only when AgentTeams is enabled)
         if self.enable_agent_teams and self.team_manager:
