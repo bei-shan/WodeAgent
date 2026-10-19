@@ -268,7 +268,10 @@ def test_macos_accessibility_permission_fail_closed(monkeypatch):
 def test_windows_interactive_desktop_preflight(monkeypatch):
     import ctypes
     from core.computer.platforms.windows import WindowsDesktopDriver
-    fake = SimpleNamespace(user32=SimpleNamespace(GetProcessWindowStation=lambda: 0))
+    fake = SimpleNamespace(user32=SimpleNamespace(
+        GetProcessWindowStation=lambda: 0,
+        GetUserObjectInformationW=lambda *args: 0,
+    ))
     monkeypatch.setattr(ctypes, "windll", fake, raising=False)
     driver = WindowsDesktopDriver(environ={})
     with pytest.raises(RuntimeError, match="window station"):
