@@ -82,6 +82,42 @@ systems `pyautogui` will fail closed with a tool error. Move the mouse to the
 screen corner to trigger PyAutoGUI's fail-safe. It cannot handle cross-platform
 IME reliably for all scripts; test non-ASCII input separately.
 
+## Existing logged-in Chrome: external Browser Control over MCP
+
+The built-in `BrowserUse` intentionally does **not** attach to a user's
+authenticated Chrome profile. For a single trusted developer who explicitly
+wants to operate their real logged-in tabs, use
+[anomalyco/browser-control](https://github.com/anomalyco/browser-control)
+as an **independent external MCP server** instead. Install and authorize its
+Chrome extension using the upstream instructions; then add only this local
+server to a *private* `mcp_servers.json`:
+
+```json
+{
+  "mcpServers": {
+    "browser-control": {
+      "command": "browser-control-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+This integration uses Ridge's already-existing stdio MCP support and does not
+require `RIDGE_BROWSER_USE_ENABLED`. It exposes an attached real profile and
+its cookies to trusted local tool invocations: do not turn it on for public
+services, unattended multi-tenant agents, or unknown scripts. Browser Control
+needs explicit extension installation, connected tab approval, and its
+supported Node.js runtime. Do **not** ship it enabled in the default
+`mcp_servers.json`; startup would otherwise fail on machines without the
+external package or extension.
+
+For CCB's `@ant/computer-use-mcp` or `@ant/claude-for-chrome-mcp`, use the
+same principle (external stdio MCP installed and configured by the operator).
+This PR does not vendor those packages or guess platform-specific command
+paths. The native `ComputerUse` driver above remains a separate,
+high-risk local option.
+
 ## Security and production gaps
 
 **Do not enable this release for untrusted prompts, shared workers or
@@ -134,5 +170,6 @@ python -m pytest tests/test_interactive_use.py -q
 # Real desktop E2E: only on a dedicated disposable GUI VM
 ```
 
-This change does not claim these real-browser or real-desktop integrations
-have run in CI; unit tests use an isolated stub for host input.
+The `interactive-browser-smoke` CI job installs Chromium and exercises actual
+navigation, ref-based interaction, back navigation and screenshot capture.
+Real desktop GUI input remains a manual acceptance gate in a disposable VM.
