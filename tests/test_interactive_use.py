@@ -239,13 +239,17 @@ def test_computer_wayland_and_headless_linux_fail_closed(monkeypatch, tmp_path):
     tool.close()
 
 
-def test_platform_capabilities_explicitly_mark_missing_native_ax_uia_atspi():
+def test_platform_capabilities_truthfully_reflect_optional_accessibility():
     from core.computer.platforms import create_native_desktop_driver
     for platform in ("linux", "win32", "darwin"):
         driver = create_native_desktop_driver(
             platform=platform, environ={"DISPLAY": ":99", "XDG_SESSION_TYPE": "x11"})
         caps = driver.capabilities()
-        assert caps["accessibility_tree"] is False
+        assert isinstance(caps["accessibility_tree"], bool)
+        if caps["accessibility_tree"]:
+            assert "inspect_elements" in caps["supports"]
+        else:
+            assert "inspect_elements" not in caps["supports"]
         assert caps["background_input"] is False
         assert caps["platform"] == platform
         assert caps["host_desktop"] is True
