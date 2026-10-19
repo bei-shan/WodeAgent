@@ -10,6 +10,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 
 class ExitPlanModeTool(Tool):
+    worker_parent_only = True
     """Exit plan-only mode and restore full tool access."""
     usage_notes = 'ExitPlanMode: Exit plan mode and restore full tools. Provide your plan as the plan parameter. Plan is injected into context for execution.'
 

@@ -275,11 +275,20 @@ class CodeAgent(Agent):
         )
 
     def _configure_tool_discovery(self) -> None:
-        """Enable one bounded tool-search catalog for this local Agent session.
+        """Bind mandatory modes, then optionally enable a bounded tool catalog.
 
         This is a context/UX optimization, never hosted authorization: the
         existing plan/delegate feature hooks and sandbox gate remain mandatory.
         """
+        def shared_mode_allows(name: str) -> bool:
+            return not self._in_plan_mode or name in self.PLAN_MODE_TOOLS
+
+        def leader_mode_allows(name: str) -> bool:
+            return not self.delegate_mode or self._is_tool_allowed_in_delegate_mode(name)
+
+        self.tool_registry.configure_mode_guards(
+            shared=shared_mode_allows, local=leader_mode_allows,
+        )
         self._tool_discovery_state = None
         if not getattr(self.config, "tool_deferred_discovery_enabled", False):
             return
@@ -289,11 +298,7 @@ class CodeAgent(Agent):
         from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
 
         def mode_allows(name: str) -> bool:
-            if self._in_plan_mode and name not in self.PLAN_MODE_TOOLS:
-                return False
-            if self.delegate_mode and not self._is_tool_allowed_in_delegate_mode(name):
-                return False
-            return True
+            return shared_mode_allows(name) and leader_mode_allows(name)
 
         state = ToolDiscoveryState(
             max_promoted=getattr(self.config, "tool_discovery_max_promoted", 18),
@@ -301,7 +306,7 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(
             ToolSearchTool(self.tool_registry, state, can_promote=mode_allows),
         )
-        self.tool_registry.enable_deferred_discovery(state, can_execute=mode_allows)
+        self.tool_registry.enable_deferred_discovery(state)
         self._tool_discovery_state = state
         self.context_builder.set_mcp_tools_prompt(
             "Additional MCP, team and plugin tools are deferred. "
@@ -704,7 +709,7 @@ class CodeAgent(Agent):
         messages, base_messages, tools_schema, tool_choice,
         show_raw: bool, trace_logger, step: int,
     ) -> dict | None:
-        """调用 LLM，含一次空响应重试。返回 None 表示最终空响应。"""
+        """调用 LLM，含一次空响应重试；不完整输出以结构化错误结束。"""
         empty_retry_used = False
         reasoning_content = None
 
@@ -782,6 +787,21 @@ class CodeAgent(Agent):
                 step=step,
             )
 
+            # Incomplete provider stops invalidate both text and tool calls.
+            # Keep evidence outside final history/tool execution so incomplete
+            # but syntactically valid calls cannot cause side effects.
+            from core.llm_recovery import ModelInvocationError, incomplete_response_kind
+            incomplete_kind = incomplete_response_kind(response_meta.get("finish_reason"))
+            if incomplete_kind:
+                self.history_manager.append_assistant(
+                    content=str(response_text),
+                    metadata={"step": step, "action_type": "incomplete",
+                              "error_kind": incomplete_kind,
+                              "tool_calls": tool_calls},
+                    reasoning_content=reasoning_content,
+                )
+                raise ModelInvocationError(incomplete_kind)
+
             if self.console_verbose and reasoning_content:
                 display_reasoning = reasoning_content
                 if len(display_reasoning) > 1200:
@@ -830,7 +850,8 @@ class CodeAgent(Agent):
                 },
                 step=step,
             )
-            return None
+            from core.llm_recovery import ModelInvocationError
+            raise ModelInvocationError("empty_response")
 
     def _execute_step_tools(
         self, tool_calls, response_text, reasoning_content, trace_logger, step: int,

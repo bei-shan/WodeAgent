@@ -52,6 +52,7 @@ from .supervisor import WorkerSupervisor
 from .execution import ExecutionService
 from .worker_dispatcher import WorkerDispatchService
 from .errors import TeamEngineError
+from core.llm_recovery import ModelInvocationError
 
 
 class TeamManagerError(Exception):
@@ -706,11 +707,16 @@ class TeamManager:
             if worker is not None:
                 worker.work_items_executed += 1
         except Exception as exc:
+            error = {"message": str(exc)}
+            if isinstance(exc, ModelInvocationError):
+                # Persist the safe failure classification, not private model
+                # messages or tool observations carried by the exception.
+                error.update(kind=exc.kind, retryable=exc.retryable)
             self.store.update_work_item_status(
                 team_name,
                 work_id=work_id,
                 status=WORK_ITEM_STATUS_FAILED,
-                error={"message": str(exc)},
+                error=error,
             )
             payload = running_item.get("payload") if isinstance(running_item.get("payload"), dict) else {}
             board_task_id = str(payload.get("board_task_id") or "").strip()

@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from .turn_executor import TurnExecutor
 from tools.registry import ToolRegistry
 from core.runtime.config_scope import scoped_config
+from core.llm_recovery import ModelInvocationError, classify_model_error
 
 _ROLE_SYSTEM_PROMPTS: Dict[str, str] = {
     "developer": (
@@ -89,10 +90,14 @@ class ExecutionService:
                 if sleep_s:
                     sleep_s += random.uniform(0, sleep_s * 0.1)
                     time.sleep(sleep_s)
+        if isinstance(last_error, ModelInvocationError):
+            raise last_error
         raise RuntimeError(str(last_error) if last_error else "work item execution failed")
 
     @staticmethod
     def _is_retryable_llm_error(exc: Exception) -> bool:
+        if isinstance(exc, ModelInvocationError):
+            return exc.retryable
         class_names = {cls.__name__.lower() for cls in type(exc).mro()}
         if any(
             marker in name
@@ -122,22 +127,25 @@ class ExecutionService:
             {"role": "user", "content": instruction},
         ]
         tool_usage: Dict[str, int] = {}
-        last_tool_msg = ""
         max_steps = self._config.team_worker_max_steps if self._config is not None else int(os.getenv("TEAM_WORKER_MAX_STEPS", "8"))
         for _ in range(max(1, max_steps)):
-            turn = executor.execute_turn(messages, tool_usage=tool_usage)
+            try:
+                turn = executor.execute_turn(messages, tool_usage=tool_usage)
+            except Exception as exc:
+                # Retrying this entire work item after a tool turn could repeat
+                # writes. Preserve its observation trail and fail this attempt.
+                if any(m.get("role") == "tool" for m in messages):
+                    policy = classify_model_error(exc)
+                    partial = getattr(exc, "partial_messages", None) or messages
+                    raise ModelInvocationError(policy.kind, partial_messages=partial) from exc
+                raise
             messages = turn["messages"]
-            tool_messages = [m for m in messages if m.get("role") == "tool"]
-            if tool_messages:
-                last_tool_msg = str(tool_messages[-1].get("content", ""))
             if turn["done"]:
                 final_result = str(turn.get("final_result") or "").strip()
                 if final_result:
                     return {"result": final_result, "tool_usage": tool_usage}
-                break
-        if last_tool_msg:
-            return {"result": last_tool_msg, "tool_usage": tool_usage}
-        raise RuntimeError("worker produced empty response")
+                raise ModelInvocationError("empty_response", partial_messages=messages)
+        raise ModelInvocationError("step_limit", partial_messages=messages)
 
     def _get_teammate_role(self, team_name: str, teammate_name: str) -> str:
         """Return the teammate's role from team config, defaulting to 'developer'."""
@@ -166,24 +174,8 @@ class ExecutionService:
         denyset = {str(x) for x in denylist} if isinstance(denylist, list) else set()
         denyset.add("Task")
 
-        filtered = ToolRegistry(config=self._config)
-        main_gate = None
-        for tool in self._tool_registry.get_all_tools():
-            name = tool.name
-            if name in denyset:
-                continue
-            if allowset and name not in allowset:
-                continue
-            if main_gate is None:
-                main_gate = getattr(tool, "_permission_gate", None)
-            filtered.register_tool(tool)
-
-        # Team workers inherit the main agent's authorization cache but
-        # must not prompt the user directly.
-        if main_gate is not None:
-            sub_gate = main_gate.subagent_gate()
-            for tool in filtered.get_all_tools():
-                tool._permission_gate = sub_gate
-
+        filtered = self._tool_registry.derive_worker_registry(
+            allowed_names=allowset or None, denied_names=denyset, config=self._config,
+        )
         return filtered, denyset
 

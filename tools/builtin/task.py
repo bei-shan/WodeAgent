@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.llm import HelloAgentsLLM
+from core.llm_recovery import ModelInvocationError
 from core.message import Message
 from core.runtime.subagent_bridge import SubagentEventBridge
 from core.runtime.config_scope import active_config
@@ -245,6 +246,8 @@ class SubagentRunner:
                     subagent_step=step,
                 )
             except Exception as e:
+                if getattr(e, "partial_messages", None) is not None:
+                    self.messages = e.partial_messages
                 logger.error("Subagent LLM error: %s", e)
                 if progress_callback:
                     progress_callback(step, "error", {"message": str(e)})
@@ -254,7 +257,7 @@ class SubagentRunner:
                         result_preview=f"Error: LLM call failed - {str(e)}",
                         steps=step,
                     )
-                return f"Error: LLM call failed - {str(e)}", self.tool_usage
+                raise
 
             self.messages = turn["messages"]
 
@@ -274,7 +277,7 @@ class SubagentRunner:
             if turn["done"]:
                 final_result = turn.get("final_result") or ""
                 if not str(final_result).strip():
-                    return "Error: Empty response from subagent", self.tool_usage
+                    raise ModelInvocationError("empty_response", partial_messages=self.messages)
                 if self.event_bridge:
                     self.event_bridge.emit_finished(
                         ok=True,
@@ -289,7 +292,7 @@ class SubagentRunner:
                 result_preview="Subagent reached maximum steps without completing.",
                 steps=self.max_steps,
             )
-        return "Subagent reached maximum steps without completing.", self.tool_usage
+        raise ModelInvocationError("step_limit", partial_messages=self.messages)
 
 
 # =============================================================================
@@ -297,6 +300,7 @@ class SubagentRunner:
 # =============================================================================
 
 class TaskTool(Tool):
+    worker_parent_only = True
     """
     Task tool - Launches a subagent to handle complex tasks.
     
@@ -546,9 +550,14 @@ class TaskTool(Tool):
             
         except Exception as e:
             logger.exception("Subagent execution error")
+            error_data = (
+                {"error": {"kind": e.kind, "retryable": e.retryable}}
+                if isinstance(e, ModelInvocationError) else None
+            )
             return self.create_error_response(
                 error_code=ErrorCode.INTERNAL_ERROR,
                 message=f"Subagent execution failed: {str(e)}",
+                data=error_data,
                 params_input=params_input,
                 time_ms=int((time.monotonic() - start_time) * 1000),
             )
@@ -772,31 +781,7 @@ class TaskTool(Tool):
     
     def _create_filtered_registry(self) -> ToolRegistry:
         """Create a tool registry with only allowed tools for subagents."""
-        filtered = ToolRegistry(config=self._config)
-        main_gate = None
-
-        for tool in self._tool_registry.get_all_tools():
-            tool_name = tool.name
-
-            # Skip denied tools
-            if tool_name in DENIED_TOOLS:
-                continue
-
-            # Include allowed tools
-            if tool_name in ALLOWED_TOOLS:
-                if main_gate is None:
-                    main_gate = getattr(tool, "_permission_gate", None)
-                filtered.register_tool(tool)
-
-        # Hosted capability fences must follow every derived registry, even
-        # though hosted Task is currently denied by the Bash-only allowlist.
-        filtered.inherit_hosted_authority(self._tool_registry)
-
-        # Sub-agents inherit the main agent's authorization cache but
-        # must not prompt the user directly.
-        if main_gate is not None:
-            sub_gate = main_gate.subagent_gate()
-            for tool in filtered.get_all_tools():
-                tool._permission_gate = sub_gate
-
-        return filtered
+        return self._tool_registry.derive_worker_registry(
+            allowed_names=set(ALLOWED_TOOLS), denied_names=set(DENIED_TOOLS),
+            config=self._config,
+        )

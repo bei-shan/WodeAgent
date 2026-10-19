@@ -11,6 +11,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamCreateTool(Tool):
+    worker_parent_only = True
     usage_notes = 'TeamCreate: Create a new team with specified members and roles.'
     def __init__(
         self,

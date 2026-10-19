@@ -10,6 +10,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 
 class EnterPlanModeTool(Tool):
+    worker_parent_only = True
     """Switch the agent into plan-only mode (read-only tools only)."""
     usage_notes = 'EnterPlanMode: Enter read-only analysis mode. Only Read/Grep/Glob/LS/TodoWrite available. Analyse the codebase and produce a plan, then call ExitPlanMode with your plan.'
 

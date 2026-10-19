@@ -24,6 +24,7 @@ from tools.builtin.task import (
 )
 from tools.registry import ToolRegistry
 from tools.base import ErrorCode
+from core.llm_recovery import ModelInvocationError
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +63,9 @@ def mock_tool_registry():
     for tool_name in ["LS", "Glob", "Grep", "Read", "TodoWrite"]:
         mock_tool = Mock()
         mock_tool.name = tool_name
+        mock_tool.description = "Test tool"
+        mock_tool.get_parameters.return_value = []
+        mock_tool.get_input_schema = None
         mock_tool.run = Mock(return_value='{"status": "success", "data": {}, "text": "ok"}')
         registry.register_tool(mock_tool)
     
@@ -69,6 +73,9 @@ def mock_tool_registry():
     for tool_name in ["Task", "Write", "Edit", "Bash"]:
         mock_tool = Mock()
         mock_tool.name = tool_name
+        mock_tool.description = "Test tool"
+        mock_tool.get_parameters.return_value = []
+        mock_tool.get_input_schema = None
         mock_tool.run = Mock(return_value='{"status": "success", "data": {}}')
         registry.register_tool(mock_tool)
     
@@ -390,11 +397,11 @@ class TestSubagentRunner:
             max_steps=3,
         )
         
-        result, tool_usage = runner.run("Infinite loop task")
-        
-        assert "maximum steps" in result.lower()
+        with pytest.raises(ModelInvocationError) as caught:
+            runner.run("Infinite loop task")
+        assert caught.value.kind == "step_limit"
         # Should have called Read at most max_steps times
-        assert tool_usage.get("Read", 0) <= 3
+        assert runner.tool_usage.get("Read", 0) <= 3
 
 
 # =============================================================================

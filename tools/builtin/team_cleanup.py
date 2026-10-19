@@ -11,6 +11,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamCleanupTool(Tool):
+    worker_parent_only = True
     usage_notes = 'TeamCleanup: Clean up team data (inbox, work items) after team work is done.'
     def __init__(
         self,

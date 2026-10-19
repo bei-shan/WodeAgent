@@ -109,14 +109,19 @@ class TaskOutputTool(Tool):
         tool_usage = result.get("tool_usage", {})
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
+        data = {
+            "task_id": task_id,
+            "status": result.get("status"),
+            "result": task_result,
+            "tool_usage": tool_usage,
+            "finished_at": result.get("finished_at"),
+        }
+        error = result.get("error")
+        if isinstance(error, dict):
+            data["error"] = {"kind": error.get("kind"), "retryable": error.get("retryable", False)}
+
         return self.create_success_response(
-            data={
-                "task_id": task_id,
-                "status": result.get("status"),
-                "result": task_result,
-                "tool_usage": tool_usage,
-                "finished_at": result.get("finished_at"),
-            },
+            data=data,
             text=f"Task '{task_id}' {result.get('status')}.\n\n{task_result}",
             params_input=params_input,
             time_ms=elapsed_ms,

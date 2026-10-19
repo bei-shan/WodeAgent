@@ -11,6 +11,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamDeleteTool(Tool):
+    worker_parent_only = True
     usage_notes = 'TeamDelete: Delete a team and all its data.'
     def __init__(
         self,

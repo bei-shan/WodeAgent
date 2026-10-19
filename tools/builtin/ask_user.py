@@ -9,6 +9,7 @@ from tools.base import Tool, ToolParameter, ErrorCode
 
 
 class AskUserTool(Tool):
+    worker_parent_only = True
     """向用户提问并等待回答（仅主 Agent 允许交互）。"""
     usage_notes = 'AskUser: Ask the user questions when blocked on a decision. Use multiSelect for non-exclusive choices. Prefer asking 1-4 questions at once. Only available in main agent (not subagents).'
 

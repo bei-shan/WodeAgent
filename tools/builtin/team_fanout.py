@@ -11,6 +11,7 @@ from ..base import ErrorCode, Tool, ToolParameter, map_team_error_code
 
 
 class TeamFanoutTool(Tool):
+    worker_parent_only = True
     usage_notes = 'TeamFanout: Dispatch tasks to multiple teammates in parallel.'
     def __init__(
         self,

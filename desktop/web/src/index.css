@@ -1,6 +1,56 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@config "../tailwind.config.js";
+@source "./";
+@source "../index.html";
+@source not inline("space-y-1 space-y-2 space-y-3 space-y-4 space-y-5");
+
+/* Tailwind 3 placed vertical spacing above visible siblings. Tailwind 4
+   places it below preceding children, including hidden children. Exclude
+   its built-ins above so first-child margins need no blanket reset.
+   Resolve each amount from the parent selector, never a child's variable. */
+@layer utilities {
+  /* Keep v3's transparent outline in normal and forced-color modes. */
+  .outline-hidden {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+  .space-y-1 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.25rem;
+    margin-bottom: 0;
+  }
+  .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.5rem;
+    margin-bottom: 0;
+  }
+  .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.75rem;
+    margin-bottom: 0;
+  }
+  .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 1rem;
+    margin-bottom: 0;
+  }
+  .space-y-5 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 1.25rem;
+    margin-bottom: 0;
+  }
+}
+
+/* Match v3 specificity: focused utilities override global focus defaults,
+   while the bare utility still yields to input:focus-visible. Keep this
+   before component rules so their existing focus overrides retain priority. */
+.focus\:outline-hidden:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+/* Preserve the v3 control defaults and spacing during the compiler upgrade. */
+@layer base {
+  *, ::before, ::after, ::backdrop, ::file-selector-button { border-color: #e5e7eb; }
+  input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+  button, [role="button"] { cursor: pointer; }
+  button:disabled { cursor: default; }
+}
 
 /* ── Global ───────────────────────────────────────────────────────── */
 :root { color-scheme: light; }
@@ -27,8 +77,10 @@ body { overflow: hidden; }
 .cursor-blink.done::after { content: ''; animation: none; }
 
 /* ── Markdown / code ──────────────────────────────────────────────── */
-pre { background: #f6f8fa; border: 1px solid #e8ecf1; border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 13px; }
-code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; background: #f6f8fa; padding: 1px 5px; border-radius: 4px; }
+@layer base {
+  pre { background: #f6f8fa; border: 1px solid #e8ecf1; border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 13px; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; background: #f6f8fa; padding: 1px 5px; border-radius: 4px; }
+}
 
 /* ── Toggle switch ────────────────────────────────────────────────── */
 .toggle { position: relative; width: 40px; height: 22px; display: inline-block; }

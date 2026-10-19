@@ -11,6 +11,7 @@ from ..base import ErrorCode, Tool, ToolParameter
 
 
 class EnterWorktreeTool(Tool):
+    worker_parent_only = True
     """Create or enter a git worktree, switching the session's project root."""
     usage_notes = 'EnterWorktree: Switch to an isolated git worktree directory. All subsequent file operations target the worktree. Use for experimental changes without affecting the main branch.'
 

@@ -10,6 +10,7 @@ import logging
 from typing import Any, Protocol
 
 from core.events import AgentEvent, EventType
+from core.llm_recovery import ModelInvocationError
 
 
 class AgentLoopPort(Protocol):
@@ -85,14 +86,14 @@ class AgentLoop:
             if host._interrupt_requested.is_set():
                 return "已停止生成（用户中断）"
             if result is None:
-                break
+                raise ModelInvocationError("empty_response")
 
             tool_calls = result["tool_calls"]
             response_text = result["response_text"]
             reasoning_content = result["reasoning_content"]
 
             if not tool_calls and (not response_text or not str(response_text).strip()):
-                break
+                raise ModelInvocationError("empty_response")
 
             if tool_calls:
                 host._execute_step_tools(tool_calls, response_text, reasoning_content, trace_logger, step)
