@@ -1,0 +1,5 @@
+# Optional local interactive-use dependencies (not installed in core).
+# Chromium is installed separately: python -m playwright install chromium
+playwright>=1.55,<2
+# Desktop input is intentionally optional and requires an attended GUI session.
+pyautogui>=0.9.54,<1
