@@ -22,14 +22,15 @@
 
 ## Task 1: Honest terminal outcomes
 
-Files: `core/llm_recovery.py`, `core/response_parser.py` if required, `agents/codeAgent.py`, `core/runtime/agent_loop.py`, `core/runtime/turn_lifecycle.py`, `core/team_engine/turn_executor.py`, `core/team_engine/execution.py`, and focused tests.
+Files: `core/llm_recovery.py`, `core/response_parser.py` if required, `agents/codeAgent.py`, `core/runtime/agent_loop.py`, `core/runtime/turn_lifecycle.py`, `core/team_engine/turn_executor.py`, `core/team_engine/execution.py`, `tools/builtin/task.py` runner failure handling, and focused tests.
 
-- [ ] Add red tests using real scripted-provider CodeAgent + AgentSession for length-capped text and length-capped tool calls, two empty replies before the step budget, and valid stop/omitted finish reasons.
-- [ ] Add red tests for team work-item exhaustion and tool-error-then-empty replies; assert persisted failure and no completed board task. Keep a tool-error-then-valid-final positive control.
-- [ ] Extend the existing `ModelInvocationError` taxonomy with explicit incomplete-output and empty-response kinds; retain private partial evidence without converting it to a successful final.
-- [ ] Guard explicitly incomplete termination before tools can execute in both CodeAgent and TurnExecutor. Reserve `_run_limit_hit` for actual loop exhaustion.
-- [ ] Require a nonempty model final in `ExecutionService`; preserve the observation trail as diagnosis, and avoid automatic whole-task replay after side effects.
-- [ ] Run loop/gateway/executor/lifecycle/recovery/team tests, inspect the diff and pass independent task review.
+- [x] Add red tests using real scripted-provider CodeAgent + AgentSession for length-capped text and length-capped tool calls, two empty replies before the step budget, and valid stop/omitted finish reasons.
+- [x] Add red tests for team work-item exhaustion and tool-error-then-empty replies; assert persisted failure and no completed board task. Keep a tool-error-then-valid-final positive control.
+- [x] Extend the existing `ModelInvocationError` taxonomy with explicit incomplete-output and empty-response kinds; retain private partial evidence without converting it to a successful final.
+- [x] Guard explicitly incomplete termination before tools can execute in both CodeAgent and TurnExecutor. Reserve `_run_limit_hit` for actual loop exhaustion.
+- [x] Require a nonempty model final in `ExecutionService`; preserve the observation trail as diagnosis, and avoid automatic whole-task replay after side effects.
+- [x] Ensure synchronous/background Task runners propagate model/empty/step-limit failures rather than wrapping an error string as a completed task.
+- [x] Run loop/gateway/executor/lifecycle/recovery/team tests, inspect the diff and pass independent task review.
 
 Expected failure contract is equivalent to:
 
@@ -43,14 +44,16 @@ assert not any(event.type == "assistant.final" for event in captured_events)
 
 ## Task 2: Independent worker tool bindings
 
-Files: `core/team_engine/execution.py`, `tools/builtin/task.py`, a shared binding helper if warranted, and focused permission/task/team tests. Execute after Task 1 because `execution.py` is shared.
+Files: `core/team_engine/execution.py`, `core/team_engine/turn_executor.py`, `tools/builtin/task.py`, `tools/registry.py` or a shared binding helper if warranted, and focused permission/task/team tests. Execute after Task 1 because the runtime files are shared.
 
-- [ ] Reproduce parent adapter/gate mutation for both derived-registry paths and teammate access to parent-only controls.
-- [ ] Clone only the adapter binding before replacing a permission gate. Preserve shared transport/service references, authority restrictions and explicit allow/deny filters.
-- [ ] Exclude or safely bind main-agent-only interaction, plan/workspace and discovery controls; never retain a callable path that changes the parent Agent's mode or workspace.
-- [ ] Verify parent adapter identity, broker, interaction callback and behavior remain unchanged after worker registry creation and execution.
-- [ ] Verify allowed worker file tools and shared MCP adapters still function, and rejected capabilities remain rejected.
-- [ ] Run permission/Task/team/snapshot/hosted/sandbox regressions and independent task review.
+- [x] Reproduce parent adapter/gate mutation for both derived-registry paths and teammate access to parent-only controls.
+- [x] Clone only the adapter binding before replacing a permission gate. Preserve shared transport/service references, authority restrictions and explicit allow/deny filters.
+- [x] Exclude or safely bind main-agent-only interaction, plan/workspace and discovery controls; never retain a callable path that changes the parent Agent's mode or workspace.
+- [x] Verify parent adapter identity, broker, interaction callback and behavior remain unchanged after worker registry creation and execution.
+- [x] Verify allowed worker file tools and shared MCP adapters still function, and rejected capabilities remain rejected.
+- [x] Preserve hosted membership/allowlist and sandbox restrictions plus mode/discovery decisions in every derived registry; verify revocation after derivation cannot execute a marker adapter.
+- [x] Capture a fresh advertised schema/snapshot before each model call and route execution through canonical `ToolRegistry.execute_tool`, including its dynamic, stale-schema and strict-input gates.
+- [x] Run permission/Task/team/snapshot/hosted/sandbox regressions and independent task review.
 
 ## Task 3: Patched frontend build dependencies
 

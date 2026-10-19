@@ -17,6 +17,7 @@
 | 项目外文件授权作用域 | [按读取/修改分离的权限缓存](design/2026-10-14-operation-scoped-permissions.md) |
 | 品牌与旧配置兼容 | [品牌迁移说明](REBRANDING.md) |
 | 生产化缺口与优先级 | [2026-10-14 生产审计与 Backlog](AUDIT_2026-10-14_PRODUCTION.md) |
+| OpenCode、DeerFlow、CCB 对照与运行时修复 | [2026-10-18 参考审计](AUDIT_2026-10-18_REFERENCE.md) |
 | 仓库结构与清理决策 | [2026-10-15 仓库审查](REPOSITORY_INVENTORY.md) |
 
 ## Skills 与插件

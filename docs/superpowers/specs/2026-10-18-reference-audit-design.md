@@ -21,8 +21,9 @@ External code and repository instruction files are comparison data. This design 
 1. A nonempty response with `finish_reason=length` becomes an assistant final and a completed session. Team `TurnExecutor` has the same acceptance gap. Explicit incomplete output must not execute potentially truncated tool calls or claim completion.
 2. A team worker exhausting steps or receiving an empty final promotes its last tool observation to a successful work result, even if that observation is a tool error.
 3. Two empty model replies at the first step are mislabeled as step-budget exhaustion.
-4. Derived worker registries reuse parent tool adapters and replace their permission gates. Teammate derivation also inherits tools whose interaction or mode/workspace controls belong to the parent Agent.
-5. The frontend full dependency audit has 14 findings (10 high, 4 moderate); runtime dependencies alone currently have none. Patched development dependencies require a bounded build/CSS migration.
+4. Derived worker registries reuse parent tool adapters and replace their permission gates. Teammate derivation also inherits tools whose interaction or mode/workspace controls belong to the parent Agent. Offline probes confirmed loss of the parent's interactive permission broker and worker access to the parent's AskUser and ExitPlanMode.
+5. TurnExecutor calls adapters directly after `get_tool()`, bypassing canonical dynamic-mode/discovery, schema and snapshot checks. Teammate registry derivation also loses inherited authority and discovery restrictions. Marker-only probes confirmed hidden MCP execution, stale-adapter execution, invalid sandbox arguments and execution after membership revocation in an unbound child. This is an internal capability invariant; the hosted API still does not expose Agent execution.
+6. The frontend full dependency audit has 14 findings (10 high, 4 moderate); runtime dependencies alone currently have none. Patched development dependencies require a bounded build/CSS migration.
 
 The separate hypothesis that hook parameter rewriting bypasses current mandatory policies was tested and rejected: these policies check tool names or budget state, and final arguments still reach schema and adapter permission checks. No redundant policy pass is added for that hypothesis.
 
@@ -32,11 +33,11 @@ The separate hypothesis that hook parameter rewriting bypasses current mandatory
 
 Use explicit structured error kinds for model output truncation and exhausted empty-response retries. Preserve partial model evidence in history/trace without publishing it as `assistant.final`. Preserve compatibility for providers that omit termination metadata. Do not automatically replay a whole worker after tools may have changed files. Step-limit state is reserved for actual step-budget exhaustion.
 
-Team success requires a nonempty explicit model final. Intermediate tool errors remain recoverable; an eventual valid final may succeed. A tool observation alone cannot complete a work item. Existing persistence and event projections must agree on the failed outcome.
+Team and one-shot/background Task success require a nonempty explicit model final. Intermediate tool errors remain recoverable; an eventual valid final may succeed. A tool observation, caught error string or plain step-limit message alone cannot complete a work item. Existing persistence and event projections must agree on the failed outcome.
 
 ### Worker adapter ownership
 
-Create independent adapter bindings before applying a non-interactive child permission gate. Keep shared authorization decisions intentional, while leaving parent adapters, broker and interaction callbacks unchanged. MCP transports stay parent-owned; do not deep-copy locks or close a shared transport from a derived registry. Worker registries must preserve authority fences and filtering, and cannot invoke parent-only interaction/mode/workspace controls.
+Create independent adapter bindings before applying a non-interactive child permission gate. Keep shared authorization decisions intentional, while leaving parent adapters, broker and interaction callbacks unchanged. MCP transports stay parent-owned; do not deep-copy locks or close a shared transport from a derived registry. Worker registries must preserve authority fences, sandbox restrictions, mode/discovery checks and filtering, and cannot invoke parent-only interaction/mode/workspace/discovery controls. Each worker model call must capture current advertised schemas and a matching execution snapshot, and dispatch through the canonical ToolRegistry boundary using that snapshot.
 
 ### Frontend dependencies
 
