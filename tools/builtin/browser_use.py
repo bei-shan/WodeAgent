@@ -203,6 +203,8 @@ class BrowserUseTool(Tool):
                 text = params.get("text")
                 if not isinstance(text, str) or len(text) > 4000:
                     raise ValueError("fill requires text at most 4000 characters")
+                if (element.get_attribute("type") or "").lower() in {"password", "file"}:
+                    raise ValueError("Credential and file inputs require human-only handling")
                 element.fill(text, timeout=10000)
         elif action == "press":
             key = params.get("text")
@@ -219,6 +221,8 @@ class BrowserUseTool(Tool):
             self._refs.clear()
         elif action == "screenshot":
             page = self._ensure_page()
+            if len(list(Path(self._artifacts.name).glob("*.jpg"))) >= 20:
+                raise ValueError("Screenshot limit reached; close the Agent session")
             path = Path(self._artifacts.name) / (uuid.uuid4().hex + ".jpg")
             page.screenshot(path=str(path), type="jpeg", quality=65,
                             animations="disabled", full_page=False)
