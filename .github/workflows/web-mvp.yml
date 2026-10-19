@@ -251,7 +251,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt 'playwright>=1.55,<2'
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest tests/test_interactive_use.py tests/test_interactive_browser_integration.py -q
+      - run: python -m pytest tests/test_interactive_use.py tests/test_computer_native_elements.py tests/test_interactive_browser_integration.py -q
 
   interactive-computer-smoke:
     runs-on: ubuntu-latest
