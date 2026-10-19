@@ -166,10 +166,13 @@ not a complete browser security boundary.
 
 ```bash
 python -m pytest tests/test_interactive_use.py -q
+python -m pytest tests/test_interactive_browser_integration.py -q
+# Computer integration only in disposable GUI environment, never real user host.
+RIDGE_COMPUTER_GUI_SMOKE=1 xvfb-run -a python -m pytest tests/test_interactive_computer_integration.py -q
 # Real Chromium integration: only on a machine with playwright/chromium
 # Real desktop E2E: only on a dedicated disposable GUI VM
 ```
 
 The `interactive-browser-smoke` CI job installs Chromium and exercises actual
 navigation, ref-based interaction, back navigation and screenshot capture.
-Real desktop GUI input remains a manual acceptance gate in a disposable VM.
+A dedicated `interactive-computer-smoke` CI job exercises PyAutoGUI against a disposable Xvfb virtual display. Physical desktop, macOS, Windows and VM guest desktop acceptance remain separate manual production gates.
