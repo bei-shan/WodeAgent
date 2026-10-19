@@ -238,10 +238,13 @@ class BrowserUseTool(Tool):
     def run(self, parameters: dict[str, Any]) -> str:
         started = time.monotonic()
         action = parameters.get("action")
+        safe_input = dict(parameters)
+        if action == "fill" and "text" in safe_input:
+            safe_input["text"] = "[REDACTED]"
         if action not in {"open", "snapshot", "click", "fill", "press",
                           "scroll", "screenshot", "close"}:
             return self.create_error_response(
-                ErrorCode.INVALID_PARAM, "Unsupported browser action", parameters)
+                ErrorCode.INVALID_PARAM, "Unsupported browser action", safe_input)
         try:
             with self._lock:
                 if self._closed:
@@ -263,7 +266,7 @@ class BrowserUseTool(Tool):
             if result.get("screenshot_path"):
                 summary += "\nScreenshot: " + result["screenshot_path"]
             return self.create_success_response(
-                data=result, text=summary[:9000], params_input=parameters,
+                data=result, text=summary[:9000], params_input=safe_input,
                 time_ms=int((time.monotonic() - started) * 1000))
         except (ValueError, FutureTimeout) as exc:
             return self.create_error_response(
