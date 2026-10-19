@@ -219,6 +219,22 @@ test('compiler upgrade preserves AuthGate focus outline and ring', async ({ page
   await expect(login).toHaveCSS('outline-style', 'solid')
 })
 
+test('compiler upgrade preserves the session rename input focus indicator', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.getByRole('button', { name: '管理会话 新会话', exact: true }).click()
+  await page.getByRole('button', { name: '重命名', exact: true }).click()
+  const input = page.getByRole('textbox', { name: '重命名会话' })
+  await expect(input).toBeFocused()
+  expect(await input.evaluate(element => element.matches(':focus-visible'))).toBe(true)
+  await expect(input).toHaveCSS('outline-color', 'rgb(70, 114, 186)', { timeout: 500 })
+  await expect(input).toHaveCSS('outline-style', 'solid')
+  await expect(input).toHaveCSS('outline-width', '2px')
+  await expect(input).toHaveCSS('outline-offset', '2px')
+  await expect(input).toHaveCSS('box-shadow', 'none')
+})
+
 test('compiler upgrade preserves each Plugins panel spacing level', async ({ page }) => {
   await mockBackend(page)
   await page.route('**/api/plugins', route => route.fulfill({

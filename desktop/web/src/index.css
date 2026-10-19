@@ -10,7 +10,7 @@
    Resolve each amount from the parent selector, never a child's variable. */
 @layer utilities {
   /* Keep v3's transparent outline in normal and forced-color modes. */
-  .outline-hidden, .focus\:outline-hidden:focus {
+  .outline-hidden {
     outline: 2px solid transparent;
     outline-offset: 2px;
   }
@@ -34,6 +34,14 @@
     margin-top: 1.25rem;
     margin-bottom: 0;
   }
+}
+
+/* Match v3 specificity: focused utilities override global focus defaults,
+   while the bare utility still yields to input:focus-visible. Keep this
+   before component rules so their existing focus overrides retain priority. */
+.focus\:outline-hidden:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
 
 /* Preserve the v3 control defaults and spacing during the compiler upgrade. */
@@ -88,11 +96,9 @@ body { overflow: hidden; }
 
 /* ── Ridge conversation shell (ChatGPT-inspired, not a branded clone) ── */
 :root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-@layer base {
-  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
-    outline: 2px solid #4672ba;
-    outline-offset: 2px;
-  }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid #4672ba;
+  outline-offset: 2px;
 }
 .app-shell { position: fixed; inset: 0; display: flex; overflow: hidden; color: #202123; background: #fff; }
 .app-sidebar {
