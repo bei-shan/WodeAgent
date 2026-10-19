@@ -71,7 +71,7 @@ class BrowserUseTool(Tool):
             raise ValueError("BrowserUse is unavailable in isolated Bash-only mode")
         super().__init__(
             name="BrowserUse",
-            description="Operate an isolated browser tab: open, snapshot, click, fill, press, scroll, screenshot or close.",
+            description="Operate an isolated browser tab: open, snapshot, back, click, fill, press, scroll, screenshot or close.",
             project_root=project_root,
         )
         self._allow_private = bool(getattr(config, "browser_use_allow_private_addresses", False))
@@ -88,7 +88,7 @@ class BrowserUseTool(Tool):
 
     def get_parameters(self) -> list[ToolParameter]:
         return [
-            ToolParameter(name="action", type="string", description="open | snapshot | click | fill | press | scroll | screenshot | close"),
+            ToolParameter(name="action", type="string", description="open | snapshot | back | click | fill | press | scroll | screenshot | close"),
             ToolParameter(name="url", type="string", required=False, description="Absolute HTTP(S) URL for open"),
             ToolParameter(name="ref", type="integer", required=False, description="Current element ref for click or fill"),
             ToolParameter(name="text", type="string", required=False, description="Text for fill, or key for press (e.g. Enter)"),
@@ -166,9 +166,14 @@ class BrowserUseTool(Tool):
                 items.append({"ref": ref, "tag": tag, "type": kind[:32], "label": label})
             except Exception:
                 continue  # dynamic DOM; the next snapshot will refresh
+        try:
+            page_text = page.evaluate("() => (document.body?.innerText || '').slice(0, 4000)")
+        except Exception:
+            page_text = ""
         return {
             "url": page.url, "title": page.title()[:200],
-            "elements": items, "truncated": locator.count() > 100,
+            "page_text": page_text, "elements": items,
+            "truncated": locator.count() > 100,
         }
 
     def _act(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +186,10 @@ class BrowserUseTool(Tool):
             page = self._ensure_page()
             self._refs.clear()
             page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        elif action == "back":
+            page = self._ensure_page()
+            self._refs.clear()
+            page.go_back(wait_until="domcontentloaded", timeout=25000)
         elif action in {"click", "fill"}:
             ref = params.get("ref")
             if type(ref) is not int or ref not in self._refs:
@@ -241,7 +250,7 @@ class BrowserUseTool(Tool):
         safe_input = dict(parameters)
         if action == "fill" and "text" in safe_input:
             safe_input["text"] = "[REDACTED]"
-        if action not in {"open", "snapshot", "click", "fill", "press",
+        if action not in {"open", "snapshot", "back", "click", "fill", "press",
                           "scroll", "screenshot", "close"}:
             return self.create_error_response(
                 ErrorCode.INVALID_PARAM, "Unsupported browser action", safe_input)
@@ -260,7 +269,8 @@ class BrowserUseTool(Tool):
                 for item in snapshot
             )
             summary = (
-                f"Page: {result.get('title', '')} {result.get('url', '')}\n{labels}"
+                f"Page: {result.get('title', '')} {result.get('url', '')}\n"
+                f"Text: {result.get('page_text', '')[:4000]}\n{labels}"
                 if "elements" in result else "Browser closed"
             )
             if result.get("screenshot_path"):
@@ -271,7 +281,7 @@ class BrowserUseTool(Tool):
         except (ValueError, FutureTimeout) as exc:
             return self.create_error_response(
                 ErrorCode.INVALID_PARAM if isinstance(exc, ValueError) else ErrorCode.TIMEOUT,
-                str(exc) or "Browser call timed out", parameters,
+                str(exc) or "Browser call timed out", safe_input,
                 time_ms=int((time.monotonic() - started) * 1000))
         except Exception as exc:
             return self.create_error_response(
