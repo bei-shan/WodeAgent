@@ -27,6 +27,13 @@ class WindowsDesktopDriver(LocalDesktopBase):
                 ]
 
             user32 = ctypes.windll.user32
+            user32.GetProcessWindowStation.argtypes = []
+            user32.GetProcessWindowStation.restype = wintypes.HANDLE
+            user32.GetUserObjectInformationW.argtypes = [
+                wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+            ]
+            user32.GetUserObjectInformationW.restype = wintypes.BOOL
             station = user32.GetProcessWindowStation()
             if not station:
                 raise RuntimeError("Windows process has no interactive window station")
