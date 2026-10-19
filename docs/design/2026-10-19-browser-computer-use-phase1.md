@@ -20,8 +20,12 @@ local Agent -> policy middleware -> ToolRegistry
     + BrowserUse (opt-in) -> Agent-owned Playwright worker thread
                                  -> fresh Chromium browser context
                                  -> action -> fresh DOM snapshot, refs
-    + ComputerUse (two opt-ins) -> pyautogui
-                                   -> trusted operator HOST display
+    + ComputerUse (two opt-ins) -> ComputerDesktopDriver (OS factory)
+                                    -> darwin: MacOSDesktopDriver (TCC/AX preflight)
+                                    -> win32: WindowsDesktopDriver (USER32 preflight)
+                                    -> linux: LinuxX11DesktopDriver (X11 only)
+                                    -> PyAutoGUI input + MSS screenshots
+                                    -> trusted operator HOST display
 Agent.close -> InteractiveUseService.close -> close browser and delete temporary screenshots
 ```
 
@@ -81,6 +85,54 @@ RIDGE_COMPUTER_USE_HOST_ACKNOWLEDGE_RISK=true
 systems `pyautogui` will fail closed with a tool error. Move the mouse to the
 screen corner to trigger PyAutoGUI's fail-safe. It cannot handle cross-platform
 IME reliably for all scripts; test non-ASCII input separately.
+
+## Platform-specific Computer Use backend boundary
+
+The first draft incorrectly used one cross-platform PyAutoGUI adapter without
+OS-specific lifecycle/permission checks. It now dispatches by **trusted
+`sys.platform`**, never by model input:
+
+| Backend | Supported phase-1 local transport | Prerequisite | Important limits |
+| --- | --- | --- | --- |
+| `darwin` → `MacOSDesktopDriver` | PyAutoGUI input / MSS capture | macOS Accessibility approval (TCC preflight); Screen Recording approval for capture | No AXUIElement tree or background window actions yet; requires real macOS acceptance |
+| `win32` → `WindowsDesktopDriver` | PyAutoGUI input / MSS capture | Interactive USER32 window station | No native UI Automation tree yet; no service desktop, UAC bypass, or guarantee on high-DPI/multi-monitor |
+| `linux` → `LinuxX11DesktopDriver` | PyAutoGUI X11 input / MSS X11 capture | Attended X11 or **disposable Xvfb** display | Explicitly **rejects Wayland** instead of silently sending XWayland/global input; AT-SPI/portals require a separate backend |
+
+`ComputerUse({"action":"capabilities"})` returns the selected platform,
+driver name, display protocol, supported actions and the explicit flags
+`accessibility_tree=false`, `background_input=false`. It does not move the
+pointer or read sensitive screen pixels. All input actions check the driver's
+OS-specific permission/display preflight before dispatch.
+
+### Comparison with CCB and accessibility-first Computer Use
+
+- [CCB's input module](https://github.com/claude-code-best/claude-code/tree/main/packages/@ant/computer-use-input/src/backends)
+  routes `darwin.ts`, `win32.ts` and `linux.ts` explicitly. The macOS
+  implementation uses CoreGraphics/JXA; Windows uses USER32/PowerShell; Linux
+  uses xdotool. Ridge now matches the **OS dispatch boundary**, not CCB's
+  native input implementations.
+- [AnomalyCo open-computer-use](https://github.com/anomalyco/computer-use),
+  [Munim Computer Use](https://github.com/munimtechnologies/munim-computer-use)
+  and [Qwen open-computer-use](https://github.com/QwenLM/open-computer-use)
+  go further: accessibility tree, element actions, app/window targeting and
+  background input where available. In Ridge these are **next-stage** native
+  interfaces, not features falsely advertised by this PR.
+
+A future native backend should introduce
+`observe_accessibility_tree(window)`, `click_element(ref)` and
+`activate_window(id)` with snapshot-generation validation, stale reference
+rejection, per-application permissions, and user-approved global-pointer
+fallback. Native integrations may also be added as explicitly trusted local
+MCP servers, using the existing MCP registry. **Do not silently fall back**
+from native element actions to whole-desktop coordinates.
+
+### Validation
+
+Linux X11 is exercised in CI under isolated Xvfb with **real** mouse,
+keyboard and screenshot interactions. Pure unit tests cover Linux Wayland
+refusal, platform routing, Windows interactive-desktop denial and macOS TCC
+denial. Actual Windows/macOS GUI + permission-dialog tests are **not run**
+on the Linux runner and remain staging acceptance gates.
 
 ## Existing logged-in Chrome: external Browser Control over MCP
 
