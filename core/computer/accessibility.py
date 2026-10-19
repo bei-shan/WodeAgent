@@ -16,8 +16,8 @@ MAX_DEPTH = 5
 # Press is deliberately limited to actionable semantic roles. A press may
 # nevertheless submit/delete/purchase, so the host's user approval still matters.
 PRESS_ROLES = frozenset({
-    "button", "check box", "checkbox", "radio button", "radiobutton",
-    "link", "menu item", "menuitem", "tab item", "tab", "toggle button",
+    "button", "push button", "check box", "checkbox", "radio button", "radiobutton",
+    "link", "menu item", "menuitem", "tab item", "page tab", "tab", "toggle button",
 })
 EDIT_ROLES = frozenset({
     "text", "text field", "textfield", "text area", "textarea", "edit",
@@ -34,7 +34,12 @@ def safe_label(value: Any) -> str:
 def canonical_role(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    return value.lower().replace("ax", "", 1).replace("control", "").replace("_", " ").strip()
+    lowered = value.lower().replace("_", " ").strip()
+    if lowered.startswith("ax"):
+        lowered = lowered[2:]
+    if lowered.endswith("control"):
+        lowered = lowered[:-7]
+    return lowered.strip()
 
 
 @dataclass(frozen=True)
