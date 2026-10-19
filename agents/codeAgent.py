@@ -782,19 +782,20 @@ class CodeAgent(Agent):
                 step=step,
             )
 
-            # Explicit length termination invalidates both text and tool calls.
-            # Keep evidence outside final history/tool execution so a truncated
-            # but syntactically valid call cannot cause side effects.
-            if response_meta.get("finish_reason") == "length":
-                from core.llm_recovery import ModelInvocationError
+            # Incomplete provider stops invalidate both text and tool calls.
+            # Keep evidence outside final history/tool execution so incomplete
+            # but syntactically valid calls cannot cause side effects.
+            from core.llm_recovery import ModelInvocationError, incomplete_response_kind
+            incomplete_kind = incomplete_response_kind(response_meta.get("finish_reason"))
+            if incomplete_kind:
                 self.history_manager.append_assistant(
                     content=str(response_text),
                     metadata={"step": step, "action_type": "incomplete",
-                              "error_kind": "output_truncated",
+                              "error_kind": incomplete_kind,
                               "tool_calls": tool_calls},
                     reasoning_content=reasoning_content,
                 )
-                raise ModelInvocationError("output_truncated")
+                raise ModelInvocationError(incomplete_kind)
 
             if self.console_verbose and reasoning_content:
                 display_reasoning = reasoning_content

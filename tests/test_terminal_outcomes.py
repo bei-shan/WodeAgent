@@ -75,19 +75,22 @@ def agent_factory(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("tool_calls", [[], [call("Write", {"path": "must-not-exist.txt", "content": "partial"})]])
-def test_truncated_agent_turn_fails_without_final_or_tool_side_effects(agent_factory, tmp_path, tool_calls):
-    agent, events = agent_factory([raw("partial evidence", "length", tool_calls), raw("done")])
+@pytest.mark.parametrize("reason,kind", [("length", "output_truncated"), ("content_filter", "output_filtered")])
+def test_incomplete_agent_turn_fails_without_final_or_tool_side_effects(agent_factory, tmp_path, tool_calls, reason, kind):
+    agent, events = agent_factory([raw("partial evidence", reason, tool_calls), raw("done")])
     with pytest.raises(ModelInvocationError) as caught:
         agent.run("finish the whole task")
-    assert caught.value.kind == "output_truncated"
+    assert caught.value.kind == kind
+    assert not caught.value.retryable
+    assert agent.llm.calls == 1
     assert agent.last_turn_status == "failed"
-    assert agent.last_turn_error_kind == "output_truncated"
+    assert agent.last_turn_error_kind == kind
     assert not agent._run_limit_hit
     assert not any(e.type in {EventType.ASSISTANT_FINAL, EventType.TOOL_STARTED} for e in events)
     assert events[-1].payload["status"] == "failed"
     history = agent.history_manager.get_messages()
     assert not any(m.metadata.get("action_type") == "final" for m in history)
-    partial = [m for m in history if m.metadata.get("error_kind") == "output_truncated"]
+    partial = [m for m in history if m.metadata.get("error_kind") == kind]
     assert partial and partial[-1].content == "partial evidence"
     saved_calls = partial[-1].metadata.get("tool_calls")
     assert len(saved_calls) == len(tool_calls)
@@ -98,6 +101,9 @@ def test_truncated_agent_turn_fails_without_final_or_tool_side_effects(agent_fac
 
 @pytest.mark.parametrize("responses,kind", [
     ([raw("partial evidence", "length")], "output_truncated"),
+    ([raw("partial evidence", "content_filter")], "output_filtered"),
+    ([raw("partial evidence", "content_filter", [call("Write")])], "output_filtered"),
+    ([raw("", "content_filter")], "output_filtered"),
     ([raw(), raw()], "empty_response"),
 ])
 def test_session_persists_honest_failure(agent_factory, tmp_path, responses, kind):
@@ -123,8 +129,9 @@ def test_agent_valid_final_preserves_provider_compatibility(agent_factory, reaso
     assert [e.payload["content"] for e in events if e.type == EventType.ASSISTANT_FINAL] == ["done"]
 
 
-def test_agent_can_finish_new_turn_after_truncation_without_replaying_calls(agent_factory):
-    agent, events = agent_factory([raw("partial", "length", [call("Write")]), raw("done")])
+@pytest.mark.parametrize("reason", ["length", "content_filter"])
+def test_agent_can_finish_new_turn_after_incomplete_response_without_replaying_calls(agent_factory, reason):
+    agent, events = agent_factory([raw("partial", reason, [call("Write")]), raw("done")])
     with pytest.raises(ModelInvocationError):
         agent.run("finish")
     assert agent.run("continue") == "done"
@@ -149,21 +156,34 @@ def test_agent_tool_error_can_recover_to_valid_final(agent_factory):
 
 @pytest.mark.parametrize("tool_calls", [[], [call("side_effect")]])
 @pytest.mark.parametrize("object_response", [False, True])
-def test_turn_executor_rejects_truncation_before_tool_execution(tmp_path, tool_calls, object_response):
-    response = raw("partial", "length", tool_calls)
+@pytest.mark.parametrize("reason,kind", [("length", "output_truncated"), ("content_filter", "output_filtered")])
+def test_turn_executor_rejects_incomplete_response_before_tool_execution(tmp_path, tool_calls, object_response, reason, kind):
+    response = raw("partial", reason, tool_calls)
     if object_response:
         response = SimpleNamespace(choices=[SimpleNamespace(
-            finish_reason="length", message=SimpleNamespace(content="partial", tool_calls=tool_calls))])
+            finish_reason=reason, message=SimpleNamespace(content="partial", tool_calls=tool_calls))])
     registry = ToolRegistry()
     invoked = []
     registry.register_tool(SimpleNamespace(name="side_effect", description="effect",
         get_parameters=lambda: [], run=lambda args: invoked.append(args)))
-    executor = TurnExecutor(ScriptedProvider([response]), registry, tmp_path)
+    provider = ScriptedProvider([response, raw("done")])
+    executor = TurnExecutor(provider, registry, tmp_path)
     with pytest.raises(ModelInvocationError) as caught:
         executor.execute_turn([], {})
-    assert caught.value.kind == "output_truncated"
+    assert caught.value.kind == kind
+    assert not caught.value.retryable
+    assert provider.calls == 1
     assert caught.value.partial_messages[-1]["content"] == "partial"
+    assert len(caught.value.partial_messages[-1].get("tool_calls", [])) == len(tool_calls)
     assert not invoked
+
+
+@pytest.mark.parametrize("reason", ["stop", None])
+def test_turn_executor_valid_final_preserves_provider_compatibility(tmp_path, reason):
+    executor = TurnExecutor(ScriptedProvider([raw("done", reason)]), ToolRegistry(), tmp_path)
+    result = executor.execute_turn([], {})
+    assert result["done"] is True
+    assert result["final_result"] == "done"
 
 
 def test_turn_executor_empty_is_failure(tmp_path):
@@ -173,15 +193,32 @@ def test_turn_executor_empty_is_failure(tmp_path):
     assert caught.value.kind == "empty_response"
 
 
+def test_filtered_error_message_explains_provider_blocking():
+    error = ModelInvocationError("output_filtered")
+    assert "模型服务" in str(error)
+    assert "拦截" in str(error)
+    assert "任务未完成" in str(error)
+    assert not error.retryable
+
+
 @pytest.mark.parametrize("responses,max_steps,expected,expected_kind", [
     ([raw(calls=[call()])], 1, "failed", "step_limit"),
     ([raw(calls=[call()]), raw()], 5, "failed", "empty_response"),
     ([raw("partial", "length")], 5, "failed", "output_truncated"),
+    ([raw("partial", "content_filter")], 5, "failed", "output_filtered"),
+    ([raw("partial", "content_filter", [call("effect")])], 5, "failed", "output_filtered"),
+    ([raw("done", "stop")], 5, "succeeded", None),
+    ([raw("done", None)], 5, "succeeded", None),
     ([raw(calls=[call()]), raw("recovered and completed")], 5, "succeeded", None),
 ])
 def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch, responses, max_steps, expected, expected_kind):
     monkeypatch.setenv("TEAM_WORKER_MAX_STEPS", str(max_steps))
-    manager = TeamManager(str(tmp_path), llm=ScriptedProvider(responses), tool_registry=ToolRegistry())
+    provider = ScriptedProvider(responses)
+    effects = []
+    registry = ToolRegistry()
+    registry.register_tool(SimpleNamespace(name="effect", description="effect", get_parameters=lambda: [],
+                                         run=lambda args: effects.append(args) or "changed"))
+    manager = TeamManager(str(tmp_path), llm=provider, tool_registry=registry)
     try:
         manager.create_team("audit", members=[{"name": "lead"}, {"name": "dev"}])
         task = manager.create_board_task("audit", subject="finish work", description="finish")
@@ -191,6 +228,8 @@ def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch
         persisted = manager.store.list_work_items("audit")[0]
         assert persisted["work_id"] == item["work_id"]
         assert persisted["status"] == expected
+        assert provider.calls == len(responses)
+        assert not effects
         snapshot = manager.collect_work("audit")
         assert snapshot["counts"][expected] == 1
         assert manager.get_board_task("audit", task["id"])["status"] == (
@@ -201,6 +240,7 @@ def test_real_team_manager_persists_work_and_board_outcome(tmp_path, monkeypatch
             assert persisted["error"]["retryable"] is False
             # Partial model/tool observations remain private diagnostic evidence.
             assert "partial_messages" not in persisted["error"]
+            assert "partial" not in json.dumps(persisted["error"])
             assert not persisted.get("result")
     finally:
         manager.shutdown()
@@ -229,9 +269,16 @@ def test_worker_never_replays_task_after_tool_side_effects(tmp_path, monkeypatch
 @pytest.mark.parametrize("background", [False, True])
 @pytest.mark.parametrize("response,max_steps", [
     (raw("partial", "length"), 5), (raw(), 5), (raw(calls=[call()]), 1),
+    (raw("partial", "content_filter"), 5),
+    (raw("partial", "content_filter", [call("effect")]), 5),
 ])
 def test_task_tool_reports_incomplete_execution_as_failure(tmp_path, response, max_steps, background):
-    tool = TaskTool(project_root=tmp_path, main_llm=ScriptedProvider([response]), tool_registry=ToolRegistry())
+    provider = ScriptedProvider([response])
+    effects = []
+    registry = ToolRegistry()
+    registry.register_tool(SimpleNamespace(name="effect", description="effect", get_parameters=lambda: [],
+                                         run=lambda args: effects.append(args) or "changed"))
+    tool = TaskTool(project_root=tmp_path, main_llm=provider, tool_registry=registry)
     tool._subagent_max_steps = max_steps
     runner = BackgroundTaskRunner(tmp_path)
     tool._background_runner = runner
@@ -245,3 +292,27 @@ def test_task_tool_reports_incomplete_execution_as_failure(tmp_path, response, m
         while runner.get_result(task_id) is None and time.monotonic() < deadline:
             time.sleep(0.01)
         assert runner.get_result(task_id)["status"] == "failed"
+    assert provider.calls == 1
+    assert not effects
+
+
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("reason", ["stop", None])
+def test_task_tool_valid_final_preserves_provider_compatibility(tmp_path, background, reason):
+    provider = ScriptedProvider([raw("done", reason)])
+    tool = TaskTool(project_root=tmp_path, main_llm=provider, tool_registry=ToolRegistry())
+    runner = BackgroundTaskRunner(tmp_path)
+    tool._background_runner = runner
+    result = json.loads(tool.run({"description": "finish", "prompt": "finish", "model": "main",
+                                 "run_in_background": background}))
+    if not background:
+        assert result["status"] == "success"
+        assert result["data"]["result"] == "done"
+    else:
+        task_id = result["data"]["task_id"]
+        deadline = time.monotonic() + 3
+        while runner.get_result(task_id) is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert runner.get_result(task_id)["status"] == "completed"
+        assert runner.get_result(task_id)["result"] == "done"
+    assert provider.calls == 1

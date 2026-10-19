@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.context_engine.observation_truncator import truncate_observation
-from core.llm_recovery import ModelInvocationError
+from core.llm_recovery import ModelInvocationError, incomplete_response_kind
 from core.response_parser import (
     extract_content,
     extract_tool_calls,
@@ -69,8 +69,9 @@ class TurnExecutor:
                 })
         output_messages.append(assistant_msg)
 
-        if extract_response_meta(raw_response).get("finish_reason") == "length":
-            raise ModelInvocationError("output_truncated", partial_messages=output_messages)
+        incomplete_kind = incomplete_response_kind(extract_response_meta(raw_response).get("finish_reason"))
+        if incomplete_kind:
+            raise ModelInvocationError(incomplete_kind, partial_messages=output_messages)
 
         if not tool_calls:
             if not response_text.strip():

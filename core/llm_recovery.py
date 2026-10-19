@@ -29,6 +29,7 @@ _MESSAGES = {
     "invalid_request": "模型请求无效，请检查模型和参数设置",
     "stream_interrupted": "模型流式响应中断，已保留当前内容，未自动重试",
     "output_truncated": "模型输出因长度限制被截断，已保留当前内容，任务未完成",
+    "output_filtered": "模型服务因内容过滤拦截了输出，任务未完成，未自动重试",
     "empty_response": "模型未返回有效回答，任务未完成",
     "step_limit": "无法在限定步数内完成这个任务",
     "provider_error": "模型请求失败，请检查服务状态与日志",
@@ -42,6 +43,11 @@ class ModelInvocationError(HelloAgentsException):
         # Private diagnostic history for worker owners; never a final result.
         self.partial_messages = partial_messages
         super().__init__(_MESSAGES.get(kind, _MESSAGES["provider_error"]))
+
+
+def incomplete_response_kind(finish_reason: str | None) -> str | None:
+    """Map supported provider stops that invalidate both text and tool calls."""
+    return {"length": "output_truncated", "content_filter": "output_filtered"}.get(finish_reason)
 
 
 def classify_model_error(exc: BaseException) -> ErrorPolicy:

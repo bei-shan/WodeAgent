@@ -91,6 +91,7 @@ export function createSessionEventHandler(bindings: SessionEventBindings): (even
           stream_interrupted: '模型流式输出已中断；未自动重复请求',
           step_limit: '已达到 Agent 最大执行步数，请缩小任务范围或调整设置',
           output_truncated: '模型输出已达到长度限制，本轮任务未完成',
+          output_filtered: '模型服务因内容过滤拦截了输出，本轮任务未完成；未自动重试',
           empty_response: '模型连续返回空回复，本轮任务失败',
           agent_error: 'Agent 执行失败，请查看服务端日志',
         }

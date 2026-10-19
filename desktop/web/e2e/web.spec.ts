@@ -173,7 +173,9 @@ test('compiler upgrade preserves ToolCard and modal code utility styles', async 
       context.fillRect(0, 0, 1, 1)
       return [...context.getImageData(0, 0, 1, 1).data]
     })
-    expect.soft(background).toEqual([255, 255, 255, 179])
+    expect.soft(background.slice(0, 3)).toEqual([255, 255, 255])
+    // 70% alpha is 178.5 in an 8-bit channel; renderers round it either way.
+    expect.soft(Math.abs(background[3] - 0.7 * 255)).toBeLessThanOrEqual(0.5)
   }
   await emit(page, 'ask_user.requested', { request_id: 'style-ask', prompt: 'style-ask-prompt' })
   const prompt = page.locator('pre').filter({ hasText: 'style-ask-prompt' })
@@ -424,6 +426,7 @@ test('failed turn is reported as failure, not a successful answer', async ({ pag
 
 for (const [kind, message] of [
   ['output_truncated', '模型输出已达到长度限制，本轮任务未完成'],
+  ['output_filtered', '模型服务因内容过滤拦截了输出，本轮任务未完成；未自动重试'],
   ['empty_response', '模型连续返回空回复，本轮任务失败'],
 ]) {
   test(`incomplete model response explains ${kind}`, async ({ page }) => {
