@@ -116,7 +116,12 @@ class MacOSDesktopDriver(LocalDesktopBase):
                 or ""
             )
             label = safe_label(label)
-            secure = "secure" in role or "password" in label.lower()
+            subrole = str(self._ax_read(ax, node, "AXSubrole") or "").lower()
+            secure = (
+                "secure" in role or "secure" in subrole
+                or "password" in role or "password" in subrole
+                or "password" in label.lower()
+            )
             if self._ax_read(ax, node, ax.kAXEnabledAttribute) is False:
                 enabled = False
             else:
@@ -163,6 +168,9 @@ class MacOSDesktopDriver(LocalDesktopBase):
         )
         if current_label != element.label:
             raise ValueError("AX element label changed; inspect again")
+        subrole = str(self._ax_read(ax, element.handle, "AXSubrole") or "").lower()
+        if "secure" in subrole or "password" in subrole:
+            raise ValueError("AX secure element cannot be controlled")
         if self._ax_read(ax, element.handle, ax.kAXEnabledAttribute) is False:
             raise ValueError("AX element is disabled")
         return ax
