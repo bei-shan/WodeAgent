@@ -127,7 +127,7 @@ class ComputerUseTool(Tool):
             return self.create_error_response(
                 ErrorCode.EXECUTION_ERROR,
                 f"Desktop unavailable or action failed ({type(exc).__name__})",
-                parameters, time_ms=int((time.monotonic() - started) * 1000))
+                safe_input, time_ms=int((time.monotonic() - started) * 1000))
 
     def close(self) -> None:
         with self._lock:
