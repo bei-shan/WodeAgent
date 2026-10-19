@@ -281,4 +281,4 @@ jobs:
         env:
           NO_AT_BRIDGE: '0'
         run: |
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' /usr/bin/python3 tests/native/atspi_live_smoke.py
+          PYTHONPATH="$PWD" dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' /usr/bin/python3 tests/native/atspi_live_smoke.py
