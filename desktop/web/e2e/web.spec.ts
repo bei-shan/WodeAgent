@@ -146,6 +146,118 @@ test('compiler upgrade preserves control styles and hidden-sibling spacing', asy
   expect(styles.shadow).toContain('rgba(0, 0, 0, 0.05) 0px 1px 2px 0px')
 })
 
+test('compiler upgrade preserves ToolCard and modal code utility styles', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await page.getByPlaceholder('问任何问题').fill('检查工具样式')
+  await page.getByPlaceholder('问任何问题').press('Enter')
+  await expect(page.getByText('实时连接正常')).toBeVisible()
+  await emit(page, 'tool.started', { tool_call_id: 'style-tool', tool: 'Read', input: { path: 'hello.py' } })
+  await emit(page, 'tool.completed', {
+    tool_call_id: 'style-tool', tool: 'Read', status: 'success', output: 'style-tool-output',
+  })
+  await page.getByRole('button', { name: 'Read 工具详情' }).click()
+  const toolBlocks = page.locator('pre').filter({ hasText: /hello.py|style-tool-output/ })
+  await expect(toolBlocks).toHaveCount(2)
+  // Frozen v3 measurements for the actual ConversationWidgets class combinations.
+  for (const block of await toolBlocks.all()) {
+    await expect.soft(block).toHaveCSS('font-size', '11px', { timeout: 500 })
+    await expect.soft(block).toHaveCSS('padding', '8px', { timeout: 500 })
+    await expect.soft(block).toHaveCSS('border-radius', '8px', { timeout: 500 })
+    // v4 serializes this color as oklab; compare rendered sRGB against v3.
+    const background = await block.evaluate(element => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 1
+      const context = canvas.getContext('2d')!
+      context.fillStyle = getComputedStyle(element).backgroundColor
+      context.fillRect(0, 0, 1, 1)
+      return [...context.getImageData(0, 0, 1, 1).data]
+    })
+    expect.soft(background).toEqual([255, 255, 255, 179])
+  }
+  await emit(page, 'ask_user.requested', { request_id: 'style-ask', prompt: 'style-ask-prompt' })
+  const prompt = page.locator('pre').filter({ hasText: 'style-ask-prompt' })
+  await expect.soft(prompt).toHaveCSS('font-size', '14px', { timeout: 500 })
+  await expect.soft(prompt).toHaveCSS('padding', '12px', { timeout: 500 })
+  await expect.soft(prompt).toHaveCSS('border-radius', '12px', { timeout: 500 })
+  await expect.soft(prompt).toHaveCSS('background-color', 'rgb(249, 250, 251)', { timeout: 500 })
+  await page.getByPlaceholder('输入你的回答...').fill('answer')
+  await page.getByRole('button', { name: '回答', exact: true }).click()
+  await emit(page, 'permission.requested', {
+    request_id: 'style-permission', tool: 'Read', path: 'style-path.py', action: 'read',
+  })
+  await expect.soft(page.locator('code').filter({ hasText: 'style-path.py' })).toHaveCSS('font-size', '12px', { timeout: 500 })
+  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await emit(page, 'llm.delta', { kind: 'content', text: '```python\nprint("component styles")\n```' })
+  // Deliberate Markdown component rules must still override the element defaults.
+  const markdown = page.locator('.answer-code-block pre')
+  await expect(markdown).toHaveCSS('padding', '13px 16px')
+  await expect(markdown).toHaveCSS('border-radius', '0px')
+  await expect(markdown).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(markdown.locator('code')).toHaveCSS('font-size', '12px')
+})
+
+test('compiler upgrade preserves AuthGate focus outline and ring', async ({ page }) => {
+  await mockBackend(page)
+  await page.route('**/api/auth/status', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ required: true, authenticated: false }),
+  }))
+  await page.goto('/')
+  const input = page.getByRole('textbox', { name: '本地访问令牌' })
+  await input.focus()
+  expect(await input.evaluate(element => element.matches(':focus-visible'))).toBe(true)
+  await expect(input).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)', { timeout: 500 })
+  await expect(input).toHaveCSS('outline-style', 'solid', { timeout: 500 })
+  await expect(input).toHaveCSS('outline-width', '2px', { timeout: 500 })
+  await expect(input).toHaveCSS('outline-offset', '2px', { timeout: 500 })
+  expect(await input.evaluate(element => getComputedStyle(element).boxShadow))
+    .toContain('rgb(191, 219, 254) 0px 0px 0px 2px')
+  await input.fill('focus-test')
+  const login = page.getByRole('button', { name: '登录', exact: true })
+  await login.focus()
+  await expect(login).toHaveCSS('outline-color', 'rgb(70, 114, 186)')
+  await expect(login).toHaveCSS('outline-style', 'solid')
+})
+
+test('compiler upgrade preserves each Plugins panel spacing level', async ({ page }) => {
+  await mockBackend(page)
+  await page.route('**/api/plugins', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify([{
+      name: 'spacing-plugin', version: '1', description: 'Spacing fixture',
+      enabled: false, trusted: false, skills: 1, has_code: false,
+    }]),
+  }))
+  await page.goto('/')
+  await page.getByRole('button', { name: '插件', exact: true }).click()
+  const install = page.locator('div.space-y-3').filter({ has: page.locator('#plugin-upload') })
+  const article = page.locator('article').filter({ hasText: 'spacing-plugin' })
+  await expect(article).toBeVisible()
+  await expect.soft(install).toHaveCSS('margin-top', '20px', { timeout: 500 })
+  await expect.soft(article).toHaveCSS('margin-top', '20px', { timeout: 500 })
+  await expect.soft(page.locator('#plugin-upload')).toHaveCSS('margin-top', '12px', { timeout: 500 })
+  await expect.soft(install.locator('p')).toHaveCSS('margin-top', '12px', { timeout: 500 })
+  await expect.soft(article.locator(':scope > div').last()).toHaveCSS('margin-top', '12px', { timeout: 500 })
+})
+
+test('compiler upgrade preserves explicit first-child margin in spacing containers', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto('/')
+  await expect(page.getByText('Hi, 我是 Ridge')).toBeVisible()
+  const margins = await page.evaluate(() => {
+    const fixture = document.createElement('div')
+    fixture.className = 'space-y-2'
+    fixture.innerHTML = '<p class="mb-4">First</p><p hidden>Hidden</p><p>Last</p>'
+    document.body.append(fixture)
+    const result = [...fixture.children].map(child => {
+      const style = getComputedStyle(child)
+      return [style.marginTop, style.marginBottom]
+    })
+    fixture.remove()
+    return result
+  })
+  expect(margins).toEqual([['0px', '16px'], ['0px', '0px'], ['8px', '0px']])
+})
+
 test('first message, live tokens, tool log and interruption', async ({ page }) => {
   const state = await mockBackend(page)
   await page.goto('/')
