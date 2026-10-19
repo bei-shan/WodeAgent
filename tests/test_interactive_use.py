@@ -165,3 +165,30 @@ def test_interactive_service_closes_only_owned_tools():
     service.close(agent)
     browser.close.assert_called_once()
     computer.close.assert_called_once()
+
+
+def test_text_is_redacted_even_if_browser_driver_crashes(tmp_path):
+    tool = BrowserUseTool(tmp_path, Config(browser_use_enabled=True))
+
+    def fail(_):
+        raise RuntimeError("simulated browser failure")
+
+    tool._act = fail
+    result = tool.run({"action": "fill", "ref": 1, "text": "private-token"})
+    assert json.loads(result)["status"] == "error"
+    assert "private-token" not in result
+    tool.close()
+
+
+def test_text_is_redacted_even_if_native_typing_crashes(tmp_path, monkeypatch):
+    fake = SimpleNamespace(
+        FAILSAFE=False, PAUSE=0, size=lambda: (100, 80),
+        write=Mock(side_effect=RuntimeError("simulated keyboard failure")),
+    )
+    monkeypatch.setitem(sys.modules, "pyautogui", fake)
+    tool = ComputerUseTool(tmp_path, Config(
+        computer_use_enabled=True, computer_use_host_acknowledge_risk=True))
+    result = tool.run({"action": "type", "text": "private-token"})
+    assert json.loads(result)["status"] == "error"
+    assert "private-token" not in result
+    tool.close()
