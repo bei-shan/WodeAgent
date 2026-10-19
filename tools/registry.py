@@ -82,6 +82,10 @@ class ToolRegistry:
         # Optional session-owned deferred catalog; never stores executors.
         self._discovery_state = None
         self._discovery_guard: Callable[[str], bool] | None = None
+        # Shared restrictions (e.g. planning) follow workers; role-specific
+        # restrictions (e.g. the leader's delegate mode) apply only locally.
+        self._shared_mode_guard: Callable[[str], bool] | None = None
+        self._local_mode_guard: Callable[[str], bool] | None = None
         # When set, deny schema AND execution for all other tools, including
         # dynamically registered plugins or MCP functions.
         self._sandbox_allowed_tools: frozenset[str] | None = None
@@ -235,13 +239,23 @@ class ToolRegistry:
         self._discovery_state = state
         self._discovery_guard = can_execute
 
-    def _discovery_mode_allowed(self, name: str) -> bool:
-        if self._derived_parent is not None and not self._derived_parent._discovery_mode_allowed(name):
+    def configure_mode_guards(
+        self, *, shared: Callable[[str], bool], local: Callable[[str], bool],
+    ) -> None:
+        """Bind live Agent mode policy independently of deferred discovery."""
+        self._shared_mode_guard = shared
+        self._local_mode_guard = local
+
+    def _discovery_mode_allowed(self, name: str, *, for_worker: bool = False) -> bool:
+        if self._derived_parent is not None and not self._derived_parent._discovery_mode_allowed(
+            name, for_worker=True,
+        ):
             return False
-        if self._discovery_guard is None:
-            return True
+        guards = (self._shared_mode_guard, self._discovery_guard)
+        if not for_worker:
+            guards += (self._local_mode_guard,)
         try:
-            return bool(self._discovery_guard(name))
+            return all(guard is None or bool(guard(name)) for guard in guards)
         except Exception:
             # Mode and capability lookup are security-sensitive.
             return False
@@ -522,26 +536,25 @@ class ToolRegistry:
 
     @classmethod
     def _tool_schema_spec(cls, tool: Tool) -> dict[str, Any]:
-        params = tool.get_parameters()
-        declared_schema = cls._parameters_to_schema(params)
         schema_provider = getattr(tool, "get_input_schema", None)
-        params_schema = (
-            schema_provider() if callable(schema_provider)
-            else declared_schema
-        )
+        if callable(schema_provider):
+            # Full JSON Schema is authoritative and may not be representable
+            # by legacy ToolParameter (nullable types, empty property names).
+            params_schema = schema_provider()
+            compile_mcp_input_schema(params_schema)
+        else:
+            params_schema = cls._parameters_to_schema(tool.get_parameters())
         if not isinstance(params_schema, dict) or params_schema.get("type") != "object":
             raise ValueError("Tool input schema must be an object schema")
         properties = params_schema.get("properties", {})
         required = params_schema.get("required", [])
         if (not isinstance(properties, dict)
-                or not all(isinstance(name, str) and name and isinstance(spec, (dict, bool))
+                or not all(isinstance(name, str) and isinstance(spec, (dict, bool))
                            for name, spec in properties.items())
                 or not isinstance(required, list)
-                or not all(isinstance(name, str) and name for name in required)
+                or not all(isinstance(name, str) for name in required)
                 or len(set(required)) != len(required)):
             raise ValueError("Tool input schema has invalid properties or required fields")
-        if callable(schema_provider):
-            compile_mcp_input_schema(params_schema)
         spec = {
             "type": "function",
             "function": {

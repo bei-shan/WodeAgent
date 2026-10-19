@@ -143,3 +143,53 @@ def test_schema_size_and_complexity_are_bounded():
         compile_mcp_input_schema({"type": "object", "properties": {
             "many": {"$ref": "file:///etc/passwd"}
         }})
+
+
+@pytest.mark.parametrize("schema,valid_inputs,invalid_input", [
+    pytest.param({
+        "type": "object", "properties": {"value": {"type": ["string", "null"]}},
+        "required": ["value"], "additionalProperties": False,
+    }, [{"value": "string"}, {"value": None}], {"value": 7}, id="nullable-type-array"),
+    pytest.param({
+        "type": "object", "properties": {"": {"type": "string"}},
+        "required": [""], "additionalProperties": False,
+    }, [{"": "empty-name"}], {"": 7}, id="empty-property-name"),
+    pytest.param({
+        "type": "object", "properties": {"value": {"type": "string"}},
+        "required": ["value"], "additionalProperties": False,
+    }, [{"value": "ordinary"}], {"value": 7}, id="ordinary-string"),
+    pytest.param({
+        "type": "object", "properties": {"blocked": False, "anything": True},
+        "required": ["value"], "additionalProperties": True,
+    }, [{"value": 7, "anything": None}], {"value": 7, "blocked": None}, id="boolean-and-unlisted-required"),
+    pytest.param({
+        "type": "object", "$defs": {"item": {"type": "integer"}},
+        "properties": {"values": {"type": "array", "items": {"$ref": "#/$defs/item"}}},
+        "required": ["values"], "additionalProperties": False,
+    }, [{"values": [7]}], {"values": ["7"]}, id="nested-local-ref"),
+    pytest.param({
+        "type": "object", "properties": {}, "additionalProperties": False,
+    }, [{}], {"extra": True}, id="zero-arguments"),
+])
+def test_parent_and_worker_preserve_authoritative_schema_and_dispatch_snapshots(schema, valid_inputs, invalid_input):
+    client, adapter, parent = make_registry(schema)
+    child = parent.derive_worker_registry()
+    for registry in (parent, child):
+        snapshot = registry.capture_tool_step()
+        advertised = registry.get_openai_tools()
+        assert len(advertised) == 1, "Legal authoritative schema must remain available"
+        assert advertised[0]["function"]["parameters"] == schema
+        assert snapshot.model_schemas()[0]["function"]["parameters"] == schema
+        assert snapshot.model_schemas()[0]["function"]["parameters"] is not adapter._schema
+        for arguments in valid_inputs:
+            previous_calls = len(client.calls)
+            result = json.loads(registry.execute_tool("remote_search", arguments, snapshot=snapshot))
+            assert result["status"] == "success"
+            assert len(client.calls) == previous_calls + 1
+            assert client.calls[-1] == ("search", arguments)
+        before_invalid = list(client.calls)
+        result = json.loads(registry.execute_tool("remote_search", invalid_input, snapshot=snapshot))
+        assert result["error"]["code"] == "MCP_PARAM_ERROR"
+        assert client.calls == before_invalid
+    assert child.get_tool("remote_search")._mcp_client is adapter._mcp_client is client
+    assert client.calls == [("search", arguments) for _ in range(2) for arguments in valid_inputs]

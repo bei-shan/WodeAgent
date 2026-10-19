@@ -275,11 +275,20 @@ class CodeAgent(Agent):
         )
 
     def _configure_tool_discovery(self) -> None:
-        """Enable one bounded tool-search catalog for this local Agent session.
+        """Bind mandatory modes, then optionally enable a bounded tool catalog.
 
         This is a context/UX optimization, never hosted authorization: the
         existing plan/delegate feature hooks and sandbox gate remain mandatory.
         """
+        def shared_mode_allows(name: str) -> bool:
+            return not self._in_plan_mode or name in self.PLAN_MODE_TOOLS
+
+        def leader_mode_allows(name: str) -> bool:
+            return not self.delegate_mode or self._is_tool_allowed_in_delegate_mode(name)
+
+        self.tool_registry.configure_mode_guards(
+            shared=shared_mode_allows, local=leader_mode_allows,
+        )
         self._tool_discovery_state = None
         if not getattr(self.config, "tool_deferred_discovery_enabled", False):
             return
@@ -289,11 +298,7 @@ class CodeAgent(Agent):
         from core.runtime.tool_catalog import ToolDiscoveryState, ToolSearchTool
 
         def mode_allows(name: str) -> bool:
-            if self._in_plan_mode and name not in self.PLAN_MODE_TOOLS:
-                return False
-            if self.delegate_mode and not self._is_tool_allowed_in_delegate_mode(name):
-                return False
-            return True
+            return shared_mode_allows(name) and leader_mode_allows(name)
 
         state = ToolDiscoveryState(
             max_promoted=getattr(self.config, "tool_discovery_max_promoted", 18),
@@ -301,7 +306,7 @@ class CodeAgent(Agent):
         self.tool_registry.register_tool(
             ToolSearchTool(self.tool_registry, state, can_promote=mode_allows),
         )
-        self.tool_registry.enable_deferred_discovery(state, can_execute=mode_allows)
+        self.tool_registry.enable_deferred_discovery(state)
         self._tool_discovery_state = state
         self.context_builder.set_mcp_tools_prompt(
             "Additional MCP, team and plugin tools are deferred. "
