@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.computer.accessibility import AccessibilityInspection, AccessibleElement
+
 
 class DesktopDriver(Protocol):
     platform: str
@@ -24,6 +26,9 @@ class DesktopDriver(Protocol):
     def type_text(self, text: str) -> None: ...
     def press_key(self, key: str) -> None: ...
     def screenshot(self, path: Path) -> None: ...
+    def inspect_elements(self) -> AccessibilityInspection: ...
+    def click_element(self, inspection: AccessibilityInspection, element: AccessibleElement) -> None: ...
+    def set_element_text(self, inspection: AccessibilityInspection, element: AccessibleElement, text: str) -> None: ...
     def close(self) -> None: ...
 
 
@@ -100,6 +105,19 @@ class LocalDesktopBase:
             image = Image.frombytes("RGB", raw.size, raw.rgb)
         image.thumbnail((1600, 1000))
         image.save(path, format="JPEG", quality=70)
+
+    def inspect_elements(self) -> AccessibilityInspection:
+        raise RuntimeError("Native accessibility backend is not installed")
+
+    def click_element(
+        self, inspection: AccessibilityInspection, element: AccessibleElement,
+    ) -> None:
+        raise RuntimeError("Native accessibility backend is not installed")
+
+    def set_element_text(
+        self, inspection: AccessibilityInspection, element: AccessibleElement, text: str,
+    ) -> None:
+        raise RuntimeError("Native accessibility backend is not installed")
 
     def close(self) -> None:
         """No shared OS input resource to close in the local adapter."""
