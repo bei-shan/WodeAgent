@@ -17,10 +17,29 @@ class WindowsDesktopDriver(LocalDesktopBase):
 
     def _check_available(self) -> None:
         try:
+            from ctypes import wintypes
+
+            class UserObjectFlags(ctypes.Structure):
+                _fields_ = [
+                    ("fInherit", wintypes.BOOL),
+                    ("fReserved", wintypes.BOOL),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
             user32 = ctypes.windll.user32
-            # Services and headless workers with no desktop cannot send global input.
-            if not user32.GetProcessWindowStation():
+            station = user32.GetProcessWindowStation()
+            if not station:
                 raise RuntimeError("Windows process has no interactive window station")
+            flags = UserObjectFlags()
+            needed = wintypes.DWORD()
+            # UOI_FLAGS=1; WSF_VISIBLE=1 means an interactive station.
+            if not user32.GetUserObjectInformationW(
+                station, 1, ctypes.byref(flags),
+                ctypes.sizeof(flags), ctypes.byref(needed)
+            ):
+                raise RuntimeError("Unable to verify interactive window station")
+            if not flags.dwFlags & 1:
+                raise RuntimeError("Windows session has a non-interactive window station")
         except AttributeError as exc:
             raise RuntimeError("Windows USER32 desktop APIs unavailable") from exc
 
