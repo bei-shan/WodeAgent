@@ -13,6 +13,7 @@ from threading import RLock
 from typing import Any
 
 from core.computer.platforms import create_native_desktop_driver
+from core.computer.accessibility import AccessibilityInspection, AccessibleElement
 from tools.base import ErrorCode, Tool, ToolParameter
 
 
@@ -20,9 +21,11 @@ class ComputerUseTool(Tool):
     strict_input_contract = True
     usage_notes = (
         "ComputerUse acts on the operator's actual desktop. First call "
-        "capabilities then screenshot to observe; act once and take a fresh "
-        "screenshot to verify. Native Accessibility/UIA/AT-SPI element "
-        "inspection is not provided in this phase. Only operate an attended "
+        "capabilities then screenshot or inspect_elements to observe. "
+        "Use returned element_ref only once with click_element or "
+        "set_element_text; refs expire after every mutation or new inspection. "
+        "AX/UIA/AT-SPI elements belong only to the foreground app. "
+        "Only operate an attended "
         "trusted local host; high-impact actions need human authorization. "
         "Do not enter passwords, OTPs or CAPTCHA solutions."
     )
@@ -39,7 +42,8 @@ class ComputerUseTool(Tool):
             name="ComputerUse",
             description=(
                 "Inspect computer capabilities, capture the trusted local "
-                "desktop, click, move, scroll, type or press a key. "
+                "desktop, inspect accessibility elements, interact by element_ref, "
+                "click, move, scroll, type or press a key. "
                 "OS-specific drivers (macOS/Windows/Linux X11), never remote."
             ),
             project_root=project_root,
@@ -47,13 +51,19 @@ class ComputerUseTool(Tool):
         self._lock = RLock()
         self._closed = False
         self._driver = create_native_desktop_driver()
+        self._inspection: AccessibilityInspection | None = None
+        self._element_refs: dict[str, AccessibleElement] = {}
         self._artifacts = tempfile.TemporaryDirectory(prefix="ridge-computer-use-")
 
     def get_parameters(self) -> list[ToolParameter]:
         return [
             ToolParameter(
                 name="action", type="string",
-                description="capabilities | screenshot | click | move | scroll | type | key"
+                description="capabilities | screenshot | inspect_elements | click_element | set_element_text | click | move | scroll | type | key"
+            ),
+            ToolParameter(
+                name="element_ref", type="string", required=False,
+                description="Opaque ref returned by a fresh inspect_elements; consumed once"
             ),
             ToolParameter(
                 name="x", type="integer", required=False,
@@ -81,10 +91,11 @@ class ComputerUseTool(Tool):
         started = time.monotonic()
         action = parameters.get("action")
         safe_input = dict(parameters)
-        if action == "type" and "text" in safe_input:
+        if action in {"type", "set_element_text"} and "text" in safe_input:
             safe_input["text"] = "[REDACTED]"
         if action not in {
-            "capabilities", "screenshot", "click", "move", "scroll", "type", "key"
+            "capabilities", "screenshot", "inspect_elements", "click_element",
+            "set_element_text", "click", "move", "scroll", "type", "key"
         }:
             return self.create_error_response(
                 ErrorCode.INVALID_PARAM, "Unsupported desktop action", safe_input)
@@ -95,7 +106,50 @@ class ComputerUseTool(Tool):
                 driver = self._driver
                 if action == "capabilities":
                     result = driver.capabilities()
+                elif action == "inspect_elements":
+                    # A new snapshot always revokes all previous refs, even
+                    # when the platform API fails during inspection.
+                    self._element_refs.clear()
+                    self._inspection = None
+                    inspection = driver.inspect_elements()
+                    prefix = uuid.uuid4().hex[:16]
+                    result = inspection.public(prefix)
+                    self._inspection = inspection
+                    self._element_refs = {
+                        f"{prefix}:{index}": el
+                        for index, el in enumerate(inspection.elements, start=1)
+                    }
+                    result["platform"] = driver.platform
+                    result["driver"] = driver.name
+                elif action in {"click_element", "set_element_text"}:
+                    reference = parameters.get("element_ref")
+                    if not isinstance(reference, str) or reference not in self._element_refs:
+                        raise ValueError("Unknown or expired element_ref; inspect_elements again")
+                    element = self._element_refs[reference]
+                    inspection = self._inspection
+                    self._element_refs.clear()
+                    self._inspection = None
+                    if inspection is None or element.sensitive:
+                        raise ValueError("Accessibility element unavailable or protected")
+                    if action == "click_element":
+                        if not element.can_press:
+                            raise ValueError("Element is not actionable")
+                        driver.click_element(inspection, element)
+                        result = {"action": action, "platform": driver.platform}
+                    else:
+                        typed = parameters.get("text")
+                        if not element.can_set_text or not isinstance(typed, str) or len(typed) > 500:
+                            raise ValueError("Element is not editable or text exceeds 500 characters")
+                        driver.set_element_text(inspection, element, typed)
+                        result = {
+                            "action": action, "platform": driver.platform,
+                            "typed_characters": len(typed),
+                        }
                 else:
+                    # Any whole-desktop input invalidates native element refs,
+                    # because focus, application or screen layout may change.
+                    self._element_refs.clear()
+                    self._inspection = None
                     width, height = driver.size()
                     result: dict[str, Any] = {
                         "width": width, "height": height,
@@ -142,6 +196,8 @@ class ComputerUseTool(Tool):
                         result["screenshot_path"] = str(path)
             if action == "capabilities":
                 msg = "Desktop driver capabilities returned; no input was sent."
+            elif action == "inspect_elements":
+                msg = "Native foreground accessibility elements returned; refs are one-shot."
             elif "screenshot_path" in result:
                 msg = "Desktop screenshot: " + result["screenshot_path"]
             else:
@@ -163,6 +219,8 @@ class ComputerUseTool(Tool):
         with self._lock:
             if not self._closed:
                 self._closed = True
+                self._element_refs.clear()
+                self._inspection = None
                 try:
                     self._driver.close()
                 finally:
