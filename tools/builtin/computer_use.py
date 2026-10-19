@@ -104,9 +104,12 @@ class ComputerUseTool(Tool):
                         raise ValueError("Key is not in the safe allowlist")
                     pyautogui.press(key)
                 else:
-                    path = Path(self._artifacts.name) / (uuid.uuid4().hex + ".png")
+                    if len(list(Path(self._artifacts.name).glob("*.jpg"))) >= 20:
+                        raise ValueError("Screenshot limit reached; close the Agent session")
+                    path = Path(self._artifacts.name) / (uuid.uuid4().hex + ".jpg")
                     image = pyautogui.screenshot()
-                    image.save(path)
+                    image.thumbnail((1600, 1000))
+                    image.convert("RGB").save(path, format="JPEG", quality=70)
                     result["screenshot_path"] = str(path)
             msg = (
                 "Desktop screenshot: " + result["screenshot_path"]
