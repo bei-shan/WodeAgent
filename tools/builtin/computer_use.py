@@ -107,9 +107,19 @@ class ComputerUseTool(Tool):
                     if len(list(Path(self._artifacts.name).glob("*.jpg"))) >= 20:
                         raise ValueError("Screenshot limit reached; close the Agent session")
                     path = Path(self._artifacts.name) / (uuid.uuid4().hex + ".jpg")
-                    image = pyautogui.screenshot()
+                    # MSS captures the active display directly (including
+                    # disposable Xvfb), without relying on PyScreeze's Linux
+                    # desktop-app screenshot fallback.
+                    from mss import mss
+                    from PIL import Image
+                    with mss() as capture:
+                        monitors = capture.monitors
+                        if len(monitors) < 2:
+                            raise RuntimeError("No active screen to capture")
+                        raw = capture.grab(monitors[1])
+                        image = Image.frombytes("RGB", raw.size, raw.rgb)
                     image.thumbnail((1600, 1000))
-                    image.convert("RGB").save(path, format="JPEG", quality=70)
+                    image.save(path, format="JPEG", quality=70)
                     result["screenshot_path"] = str(path)
             msg = (
                 "Desktop screenshot: " + result["screenshot_path"]
