@@ -59,18 +59,18 @@ Files: `core/team_engine/execution.py`, `core/team_engine/turn_executor.py`, `to
 
 Files: `desktop/web/package.json`, `desktop/web/package-lock.json`, PostCSS/CSS integration, migration-sensitive class sites and browser tests where needed.
 
-- [ ] Save the existing generated CSS and run baseline build before changing dependencies.
-- [ ] Pin the verified compatible patched dependency versions from the design. Update the lockfile through npm without force overrides that hide findings.
-- [ ] Replace the Tailwind PostCSS integration, explicitly load the existing theme and preserve renamed shadow/radius/outline and spacing behavior.
-- [ ] Validate generated/computed CSS for the existing layout; run browser regressions, including security-sensitive Markdown rendering.
-- [ ] Run `npm ci`, `npm run build`, `npm audit --json` and `npm audit --omit=dev --json`; require zero findings and record browser floors.
-- [ ] Pass independent task review.
+- [x] Save the existing generated CSS and run baseline build before changing dependencies.
+- [x] Pin the verified compatible patched dependency versions from the design. Update the lockfile through npm without force overrides that hide findings.
+- [x] Replace the Tailwind PostCSS integration, explicitly load the existing theme and preserve renamed shadow/radius/outline and spacing behavior.
+- [x] Validate generated/computed CSS for the existing layout; run browser regressions, including security-sensitive Markdown rendering.
+- [x] Run `npm ci`, `npm run build`, `npm audit --json` and `npm audit --omit=dev --json`; require zero findings and record browser floors.
+- [x] Pass independent task review.
 
 ## Task 4: Comparison record and delivery
 
 - [x] Freeze the three reference revisions and save inspected source outside the repository.
 - [x] Record the rejected hook-mutation hypothesis and passing boundary probes.
-- [ ] Update the audit record with source evidence, repaired defects, checked-safe boundaries and outstanding production gates.
+- [x] Update the audit record with source evidence, repaired defects, checked-safe boundaries and outstanding production gates.
 - [ ] Run combined regression/eval and independent whole-branch review.
 - [ ] Push a repair branch, create/attach a PR, and verify exact-head Linux full/browser/Docker/MCP/TUI/docs CI.
 - [ ] Merge only the approved green head, fast-forward local main and independently compare remote SHA/file tree.
