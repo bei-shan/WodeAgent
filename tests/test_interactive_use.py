@@ -132,6 +132,9 @@ def test_browser_run_snapshot_and_cleanup_without_installed_playwright(tmp_path)
 
 
 def test_native_driver_bounds_and_no_text_echo(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     click = Mock()
     fake = SimpleNamespace(
         FAILSAFE=False, PAUSE=0, size=lambda: (100, 80),
@@ -181,6 +184,9 @@ def test_text_is_redacted_even_if_browser_driver_crashes(tmp_path):
 
 
 def test_text_is_redacted_even_if_native_typing_crashes(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     fake = SimpleNamespace(
         FAILSAFE=False, PAUSE=0, size=lambda: (100, 80),
         write=Mock(side_effect=RuntimeError("simulated keyboard failure")),
@@ -191,4 +197,94 @@ def test_text_is_redacted_even_if_native_typing_crashes(tmp_path, monkeypatch):
     result = tool.run({"action": "type", "text": "private-token"})
     assert json.loads(result)["status"] == "error"
     assert "private-token" not in result
+    tool.close()
+
+
+
+def test_computer_driver_dispatch_is_os_scoped_and_does_not_fallback():
+    from core.computer.platforms import create_native_desktop_driver
+    from core.computer.platforms.linux import LinuxX11DesktopDriver
+    from core.computer.platforms.windows import WindowsDesktopDriver
+    from core.computer.platforms.macos import MacOSDesktopDriver
+
+    assert isinstance(create_native_desktop_driver(
+        platform="linux", environ={"DISPLAY": ":8", "XDG_SESSION_TYPE": "x11"}
+    ), LinuxX11DesktopDriver)
+    assert isinstance(create_native_desktop_driver(platform="win32"), WindowsDesktopDriver)
+    assert isinstance(create_native_desktop_driver(platform="darwin"), MacOSDesktopDriver)
+    with pytest.raises(RuntimeError, match="no supported"):
+        create_native_desktop_driver(platform="freebsd")
+
+
+def test_computer_wayland_and_headless_linux_fail_closed(monkeypatch, tmp_path):
+    from core.computer.platforms import create_native_desktop_driver
+    for env in (
+        {"DISPLAY": ":1", "XDG_SESSION_TYPE": "wayland"},
+        {"DISPLAY": ":1", "WAYLAND_DISPLAY": "wayland-0"},
+        {"XDG_SESSION_TYPE": "x11"},
+    ):
+        driver = create_native_desktop_driver(platform="linux", environ=env)
+        with pytest.raises(RuntimeError):
+            driver.size()
+    monkeypatch.setenv("DISPLAY", ":1")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    tool = ComputerUseTool(tmp_path, Config(
+        computer_use_enabled=True, computer_use_host_acknowledge_risk=True))
+    caps = json.loads(tool.run({"action": "capabilities"}))
+    assert caps["status"] == "success"
+    assert caps["data"]["display_server"] == "wayland-unsupported"
+    result = json.loads(tool.run({"action": "click", "x": 30, "y": 30}))
+    assert result["status"] == "error"
+    tool.close()
+
+
+def test_platform_capabilities_explicitly_mark_missing_native_ax_uia_atspi():
+    from core.computer.platforms import create_native_desktop_driver
+    for platform in ("linux", "win32", "darwin"):
+        driver = create_native_desktop_driver(
+            platform=platform, environ={"DISPLAY": ":99", "XDG_SESSION_TYPE": "x11"})
+        caps = driver.capabilities()
+        assert caps["accessibility_tree"] is False
+        assert caps["background_input"] is False
+        assert caps["platform"] == platform
+        assert caps["host_desktop"] is True
+
+
+def test_macos_accessibility_permission_fail_closed(monkeypatch):
+    from core.computer.platforms.macos import MacOSDesktopDriver
+
+    class FakeFn:
+        def __call__(self):
+            return False
+
+    lib = SimpleNamespace(AXIsProcessTrusted=FakeFn())
+    monkeypatch.setattr("ctypes.cdll.LoadLibrary", lambda _: lib)
+    driver = MacOSDesktopDriver(environ={})
+    with pytest.raises(RuntimeError, match="Accessibility permission"):
+        driver.size()
+
+
+def test_windows_interactive_desktop_preflight(monkeypatch):
+    import ctypes
+    from core.computer.platforms.windows import WindowsDesktopDriver
+    fake = SimpleNamespace(user32=SimpleNamespace(GetProcessWindowStation=lambda: 0))
+    monkeypatch.setattr(ctypes, "windll", fake, raising=False)
+    driver = WindowsDesktopDriver(environ={})
+    with pytest.raises(RuntimeError, match="window station"):
+        driver.size()
+
+
+def test_computer_capabilities_do_not_invoke_pyautogui(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    blocked = Mock()
+    monkeypatch.setitem(sys.modules, "pyautogui", blocked)
+    tool = ComputerUseTool(tmp_path, Config(
+        computer_use_enabled=True, computer_use_host_acknowledge_risk=True))
+    response = json.loads(tool.run({"action": "capabilities"}))
+    assert response["status"] == "success"
+    assert response["data"]["platform"] == sys.platform
+    blocked.size.assert_not_called()
     tool.close()
