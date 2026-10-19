@@ -3,3 +3,5 @@
 playwright>=1.55,<2
 # Desktop input is intentionally optional and requires an attended GUI session.
 pyautogui>=0.9.54,<1
+# Required to capture and resize desktop screenshots reliably.
+Pillow>=10,<13
