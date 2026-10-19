@@ -30,6 +30,25 @@ class MacOSDesktopDriver(LocalDesktopBase):
                 "macOS Accessibility permission missing for the Ridge host app"
             )
 
+    def screenshot(self, path) -> None:
+        # Query TCC permission; never request a grant automatically inside
+        # the agent worker or capture a permission dialog as model context.
+        try:
+            framework = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+            )
+            preflight = framework.CGPreflightScreenCaptureAccess
+            preflight.argtypes = []
+            preflight.restype = ctypes.c_bool
+            allowed = bool(preflight())
+        except (AttributeError, OSError) as exc:
+            raise RuntimeError("Cannot verify macOS Screen Recording permission") from exc
+        if not allowed:
+            raise RuntimeError(
+                "macOS Screen Recording permission missing for the Ridge host app"
+            )
+        super().screenshot(path)
+
     def capabilities(self):
         result = super().capabilities()
         result["ready_hint"] = (
