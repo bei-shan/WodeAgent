@@ -81,58 +81,92 @@ RIDGE_COMPUTER_USE_HOST_ACKNOWLEDGE_RISK=true
 
 `ComputerUse` supports `screenshot`, `click`, `move`, `scroll`,
 `type` and restricted `key` actions. Its mouse and keyboard operate the
-**operator's actual HOST**, not a sandbox guest. On unsupported headless
+**operator's actual HOST**, not a sandbox guest. Native foreground-element
+inspection/click/edit are also supported when the relevant OS package is
+installed. On unsupported headless
 systems `pyautogui` will fail closed with a tool error. Move the mouse to the
 screen corner to trigger PyAutoGUI's fail-safe. It cannot handle cross-platform
 IME reliably for all scripts; test non-ASCII input separately.
 
-## Platform-specific Computer Use backend boundary
+## Native Computer Use: macOS AX, Windows UIA, Linux AT-SPI
 
-The first draft incorrectly used one cross-platform PyAutoGUI adapter without
-OS-specific lifecycle/permission checks. It now dispatches by **trusted
-`sys.platform`**, never by model input:
+`ComputerUseTool` now uses a trusted `sys.platform` factory to select one
+platform driver. Model tool arguments cannot select another OS or target
+a different desktop. The high-risk local opt-in flags remain mandatory.
 
-| Backend | Supported phase-1 local transport | Prerequisite | Important limits |
+| Host | Native foreground element transport | Explicit OS gate | Coordinate fallback |
 | --- | --- | --- | --- |
-| `darwin` → `MacOSDesktopDriver` | PyAutoGUI input / MSS capture | macOS Accessibility approval (TCC preflight); Screen Recording approval for capture | No AXUIElement tree or background window actions yet; requires real macOS acceptance |
-| `win32` → `WindowsDesktopDriver` | PyAutoGUI input / MSS capture | Interactive USER32 window station | No native UI Automation tree yet; no service desktop, UAC bypass, or guarantee on high-DPI/multi-monitor |
-| `linux` → `LinuxX11DesktopDriver` | PyAutoGUI X11 input / MSS X11 capture | Attended X11 or **disposable Xvfb** display | Explicitly **rejects Wayland** instead of silently sending XWayland/global input; AT-SPI/portals require a separate backend |
+| macOS | AXUIElement: read focused AX window, `AXPress`, writable `AXValue` | Accessibility TCC; Screen Recording TCC for capture | Available as a **separate explicit** action only |
+| Windows | UI Automation: foreground HWND, Invoke/Toggle patterns, ValuePattern | Visible interactive USER32 window station | Separate explicit action; no UIA-to-coordinate fallback |
+| Linux X11 | AT-SPI: active accessible window, Action interface, EditableText interface | X11 DISPLAY + AT-SPI session bus | Separate explicit action; **Wayland rejected** |
 
-`ComputerUse({"action":"capabilities"})` returns the selected platform,
-driver name, display protocol, supported actions and the explicit flags
-`accessibility_tree=false`, `background_input=false`. It does not move the
-pointer or read sensitive screen pixels. All input actions check the driver's
-OS-specific permission/display preflight before dispatch.
+Mac integration requires optional `pyobjc-framework-ApplicationServices` and
+`pyobjc-framework-Cocoa`; Windows requires `uiautomation`. They are
+installed only on their respective platforms via the optional
+`requirements-interactive-use.txt`.
 
-### Comparison with CCB and accessibility-first Computer Use
+On Linux the AT-SPI packages are typically provided by the distribution:
+`python3-pyatspi`, `python3-gi`, and an enabled accessibility D-Bus bus.
+The interpreter running Ridge must be able to import `pyatspi` without
+copying arbitrary system packages into a shared hosted worker. Missing OS
+packages or permissions yield an explicit tool error, never implicit shell,
+mouse, keyboard or browser fallback.
 
-- [CCB's input module](https://github.com/claude-code-best/claude-code/tree/main/packages/@ant/computer-use-input/src/backends)
-  routes `darwin.ts`, `win32.ts` and `linux.ts` explicitly. The macOS
-  implementation uses CoreGraphics/JXA; Windows uses USER32/PowerShell; Linux
-  uses xdotool. Ridge now matches the **OS dispatch boundary**, not CCB's
-  native input implementations.
-- [AnomalyCo open-computer-use](https://github.com/anomalyco/computer-use),
-  [Munim Computer Use](https://github.com/munimtechnologies/munim-computer-use)
-  and [Qwen open-computer-use](https://github.com/QwenLM/open-computer-use)
-  go further: accessibility tree, element actions, app/window targeting and
-  background input where available. In Ridge these are **next-stage** native
-  interfaces, not features falsely advertised by this PR.
+### New model-visible actions
 
-A future native backend should introduce
-`observe_accessibility_tree(window)`, `click_element(ref)` and
-`activate_window(id)` with snapshot-generation validation, stale reference
-rejection, per-application permissions, and user-approved global-pointer
-fallback. Native integrations may also be added as explicitly trusted local
-MCP servers, using the existing MCP registry. **Do not silently fall back**
-from native element actions to whole-desktop coordinates.
+```json
+{"action":"capabilities"}
+{"action":"inspect_elements"}
+{"action":"click_element","element_ref":"<fresh element ref>"}
+{"action":"inspect_elements"}
+{"action":"set_element_text","element_ref":"<fresh element ref>","text":"hello"}
+```
 
-### Validation
+`inspect_elements` returns a bounded list of up to 64 actionable foreground
+elements with semantic role, label and supported actions. It **never reads
+element values** and masks password/secure controls. Traversal visits at most
+240 nodes, with max depth 5. The native handle stays entirely in the local
+Agent session, and is not serialized to the model.
 
-Linux X11 is exercised in CI under isolated Xvfb with **real** mouse,
-keyboard and screenshot interactions. Pure unit tests cover Linux Wayland
-refusal, platform routing, Windows interactive-desktop denial and macOS TCC
-denial. Actual Windows/macOS GUI + permission-dialog tests are **not run**
-on the Linux runner and remain staging acceptance gates.
+Element refs are random snapshot-scoped tokens, valid for one action only.
+Any subsequent action, whole-desktop input, new inspection or Agent close
+revokes all prior refs. The backend rechecks the foreground window, element
+role/label and native action eligibility before executing. If native
+automation fails it **never silently clicks screen coordinates**.
+`set_element_text` result echoes are redacted even on errors. The raw model
+tool argument still contains the requested text, so it is **not appropriate
+for credentials, secrets or OTPs**.
+
+The capability response marks `accessibility_tree=true` only when the
+platform-native optional package is detected and the local display protocol
+is supported. `background_input=false` throughout: this implementation
+operates the foreground application, not arbitrary background windows.
+
+### CCB comparison and limits
+
+[CCB](https://github.com/claude-code-best/claude-code/tree/main/packages/@ant/computer-use-input/src/backends)
+uses distinct macOS, Windows and Linux execution backends. Ridge now also has
+**actual native semantic element operations**, not merely OS-specific input
+preflight. It still deliberately omits global application discovery,
+cross-window actions, accessibility events subscription, native Wayland
+portals, privileged UAC interaction, and automatic sensitive-action approval.
+
+The current Python adapters are in-process and may hang on a non-responsive
+system accessibility provider. They must move behind cancellable per-tenant
+GUI workers before hosted production enablement.
+
+### Validation coverage
+
+`tests/test_computer_native_elements.py` verifies AX/UIA/AT-SPI native
+invoke/edit mapping using controlled fake OS objects, one-shot refs,
+stale foreground rejection, password masking and error redaction.
+`tests/test_interactive_computer_integration.py` drives **real** X11 input
+and MSS screenshots under disposable Xvfb in CI.
+
+Actual macOS TCC dialogs / AX app operations, Windows UIA on signed-in
+interactive hosts, and end-to-end AT-SPI on a running GTK app are **not**
+validated by Linux CI. Those are separate OS acceptance gates, not claimed
+production evidence.
 
 ## Existing logged-in Chrome: external Browser Control over MCP
 
@@ -211,13 +245,13 @@ not a complete browser security boundary.
   `external_submit`, `host_input`) enforced at dispatcher boundaries.
 - Add authenticated screenshot streaming/Web UI live view, secure artifact
   links, cancellation and session reconnect/reaper.
-- Add real Playwright/GUI E2E tests, SSRF/DNS rebinding tests, load/soak tests,
+- Add native macOS/Windows/GTK-AT-SPI real-app E2E; SSRF/DNS rebinding tests, load/soak tests,
   cross-tenant isolation tests and telemetry redaction tests.
 
 ## Test
 
 ```bash
-python -m pytest tests/test_interactive_use.py -q
+python -m pytest tests/test_interactive_use.py tests/test_computer_native_elements.py -q
 python -m pytest tests/test_interactive_browser_integration.py -q
 # Computer integration only in disposable GUI environment, never real user host.
 RIDGE_COMPUTER_GUI_SMOKE=1 xvfb-run -a python -m pytest tests/test_interactive_computer_integration.py -q
