@@ -267,3 +267,18 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1280x800x24' python -m pytest tests/test_interactive_computer_integration.py -q
         env:
           RIDGE_COMPUTER_GUI_SMOKE: '1'
+
+  native-atspi-gtk-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install distro AT-SPI, GTK3 and disposable X11 dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyatspi python3-gi gir1.2-gtk-3.0 at-spi2-core openbox xvfb xauth dbus-x11
+      - name: Real AT-SPI inspect, edit and activate inside Xvfb
+        env:
+          NO_AT_BRIDGE: '0'
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' /usr/bin/python3 tests/native/atspi_live_smoke.py
