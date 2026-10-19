@@ -163,10 +163,14 @@ stale foreground rejection, password masking and error redaction.
 `tests/test_interactive_computer_integration.py` drives **real** X11 input
 and MSS screenshots under disposable Xvfb in CI.
 
-Actual macOS TCC dialogs / AX app operations, Windows UIA on signed-in
-interactive hosts, and end-to-end AT-SPI on a running GTK app are **not**
-validated by Linux CI. Those are separate OS acceptance gates, not claimed
-production evidence.
+The `native-atspi-gtk-smoke` CI lane launches a real GTK3 app in an
+ephemeral Xvfb + D-Bus/Openbox session and verifies AT-SPI inspect,
+EditableText assignment and Action invocation using system Python and
+distro packages.
+
+Actual macOS TCC dialogs / AX app operations and Windows UIA on signed-in
+interactive hosts are **not** validated by Linux CI. Those remain separate
+OS acceptance gates and must not be represented as production evidence.
 
 ## Existing logged-in Chrome: external Browser Control over MCP
 
@@ -261,4 +265,4 @@ RIDGE_COMPUTER_GUI_SMOKE=1 xvfb-run -a python -m pytest tests/test_interactive_c
 
 The `interactive-browser-smoke` CI job installs Chromium and exercises actual
 navigation, ref-based interaction, back navigation and screenshot capture.
-A dedicated `interactive-computer-smoke` CI job exercises PyAutoGUI against a disposable Xvfb virtual display. Physical desktop, macOS, Windows and VM guest desktop acceptance remain separate manual production gates.
+A dedicated `interactive-computer-smoke` job exercises PyAutoGUI against disposable Xvfb; `native-atspi-gtk-smoke` exercises real GTK3 AT-SPI operations on Linux. Physical macOS, Windows and guest-VM desktop acceptance remain separate production gates.
