@@ -104,6 +104,20 @@ class ToolBootstrap:
             if module_full_name in _TEAM_TOOL_MODULES:
                 continue
 
+            # Interactive capabilities are strictly opt-in, bound to one local
+            # Agent and never even constructed for a hosted/isolated worker.
+            optional_flag = {
+                "browser_use": "browser_use_enabled",
+                "computer_use": "computer_use_enabled",
+            }.get(module_info.name)
+            if optional_flag is not None:
+                config = self._providers.get("config")
+                if (config is None or getattr(config, optional_flag, None) is not True
+                        or getattr(config, "sandbox_mode", None) != "local_trusted"
+                        or (module_info.name == "computer_use" and
+                            getattr(config, "computer_use_host_acknowledge_risk", None) is not True)):
+                    continue
+
             try:
                 module = importlib.import_module(module_full_name)
             except Exception as exc:
