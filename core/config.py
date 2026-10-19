@@ -44,6 +44,12 @@ class Config(BaseModel):
     # Opt-in bounded deferred catalog; default keeps all existing tool schemas.
     tool_deferred_discovery_enabled: bool = False
     tool_discovery_max_promoted: int = 18
+    # Local interactive automation, disabled by default. Not hosted tenant capabilities.
+    browser_use_enabled: bool = False
+    browser_use_headless: bool = True
+    browser_use_allow_private_addresses: bool = False
+    computer_use_enabled: bool = False
+    computer_use_host_acknowledge_risk: bool = False
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
     sandbox_mode: str = "local_trusted"  # local_trusted | docker | boxlite | e2b
@@ -181,6 +187,11 @@ class Config(BaseModel):
             tool_max_concurrency=max(1, min(8, env_int("TOOL_MAX_CONCURRENCY", 4))),
             tool_deferred_discovery_enabled=env_bool("TOOL_DEFERRED_DISCOVERY_ENABLED", False),
             tool_discovery_max_promoted=max(1, min(48, env_int("TOOL_DISCOVERY_MAX_PROMOTED", 18))),
+            browser_use_enabled=env_bool("RIDGE_BROWSER_USE_ENABLED", False),
+            browser_use_headless=env_bool("RIDGE_BROWSER_USE_HEADLESS", True),
+            browser_use_allow_private_addresses=env_bool("RIDGE_BROWSER_USE_ALLOW_PRIVATE", False),
+            computer_use_enabled=env_bool("RIDGE_COMPUTER_USE_ENABLED", False),
+            computer_use_host_acknowledge_risk=env_bool("RIDGE_COMPUTER_USE_HOST_ACKNOWLEDGE_RISK", False),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
