@@ -18,6 +18,7 @@ from core.team_engine.execution import ExecutionService
 from core.team_engine.manager import TeamManager
 from core.team_engine.turn_executor import TurnExecutor
 from tools.builtin.task import TaskTool
+from tools.builtin.task_output import TaskOutputTool
 from tools.builtin.write_file import WriteTool
 from tools.registry import ToolRegistry
 
@@ -266,34 +267,65 @@ def test_worker_never_replays_task_after_tool_side_effects(tmp_path, monkeypatch
     assert any(m.get("role") == "tool" for m in caught.value.partial_messages)
 
 
-@pytest.mark.parametrize("background", [False, True])
-@pytest.mark.parametrize("response,max_steps", [
-    (raw("partial", "length"), 5), (raw(), 5), (raw(calls=[call()]), 1),
-    (raw("partial", "content_filter"), 5),
-    (raw("partial", "content_filter", [call("effect")]), 5),
+@pytest.mark.parametrize("boundary", ["foreground", "persisted", "retrieved"])
+@pytest.mark.parametrize("response,max_steps,kind,retryable", [
+    (raw("PRIVATE_PARTIAL", "length"), 5, "output_truncated", False),
+    (raw(), 5, "empty_response", False),
+    (raw(calls=[call("Read")]), 1, "step_limit", False),
+    (raw("PRIVATE_PARTIAL", "content_filter"), 5, "output_filtered", False),
+    (raw("PRIVATE_PARTIAL", "content_filter", [call("Read")]), 5, "output_filtered", False),
+    (ModelInvocationError("network", retryable=True,
+                          partial_messages=[{"role": "tool", "content": "PRIVATE_OBSERVATION"}]),
+     5, "network", True),
 ])
-def test_task_tool_reports_incomplete_execution_as_failure(tmp_path, response, max_steps, background):
+def test_task_tool_reports_incomplete_execution_as_failure(tmp_path, response, max_steps, kind, retryable, boundary):
+    if isinstance(response, ModelInvocationError):
+        response.provider_payload = "PRIVATE_PROVIDER"
     provider = ScriptedProvider([response])
     effects = []
     registry = ToolRegistry()
-    registry.register_tool(SimpleNamespace(name="effect", description="effect", get_parameters=lambda: [],
-                                         run=lambda args: effects.append(args) or "changed"))
+    registry.register_tool(SimpleNamespace(name="Read", description="effect", get_parameters=lambda: [],
+                                         run=lambda args: effects.append(args) or "PRIVATE_OBSERVATION"))
     tool = TaskTool(project_root=tmp_path, main_llm=provider, tool_registry=registry)
     tool._subagent_max_steps = max_steps
     runner = BackgroundTaskRunner(tmp_path)
     tool._background_runner = runner
     result = json.loads(tool.run({"description": "finish", "prompt": "finish", "model": "main",
-                                 "run_in_background": background}))
-    if not background:
+                                 "run_in_background": boundary != "foreground"}))
+    if boundary == "foreground":
         assert result["status"] == "error"
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+        public = result["data"]
     else:
+        assert result["status"] == "success"
         task_id = result["data"]["task_id"]
         deadline = time.monotonic() + 3
         while runner.get_result(task_id) is None and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert runner.get_result(task_id)["status"] == "failed"
+        persisted = json.loads((tmp_path / ".tasks/output" / f"{task_id}.json").read_text(encoding="utf-8"))
+        assert persisted == runner.get_result(task_id)
+        assert persisted["status"] == "failed"
+        assert persisted["result"]
+        assert persisted["tool_usage"] == {}
+        public = persisted
+        if boundary == "retrieved":
+            # Reopen the disk result with a new runner; no in-memory exception is available.
+            output = TaskOutputTool(project_root=tmp_path, background_runner=BackgroundTaskRunner(tmp_path))
+            result = json.loads(output.run({"task_id": task_id}))
+            assert result["status"] == "success"
+            public = result["data"]
+            for field in ("status", "result", "tool_usage", "finished_at"):
+                assert public[field] == persisted[field]
+        assert "PRIVATE_PARTIAL" not in json.dumps(persisted)
+        assert "PRIVATE_OBSERVATION" not in json.dumps(persisted)
+        assert "partial_messages" not in json.dumps(persisted)
     assert provider.calls == 1
-    assert not effects
+    assert len(effects) == (1 if kind == "step_limit" else 0)
+    assert "PRIVATE_PARTIAL" not in json.dumps(result)
+    assert "PRIVATE_OBSERVATION" not in json.dumps(result)
+    assert "PRIVATE_PROVIDER" not in json.dumps(result)
+    assert "partial_messages" not in json.dumps(result)
+    assert public["error"] == {"kind": kind, "retryable": retryable}
 
 
 @pytest.mark.parametrize("background", [False, True])
@@ -308,6 +340,7 @@ def test_task_tool_valid_final_preserves_provider_compatibility(tmp_path, backgr
     if not background:
         assert result["status"] == "success"
         assert result["data"]["result"] == "done"
+        assert "error" not in result["data"]
     else:
         task_id = result["data"]["task_id"]
         deadline = time.monotonic() + 3
@@ -315,4 +348,11 @@ def test_task_tool_valid_final_preserves_provider_compatibility(tmp_path, backgr
             time.sleep(0.01)
         assert runner.get_result(task_id)["status"] == "completed"
         assert runner.get_result(task_id)["result"] == "done"
+        assert "error" not in runner.get_result(task_id)
+        output = TaskOutputTool(project_root=tmp_path, background_runner=runner)
+        retrieved = json.loads(output.run({"task_id": task_id}))
+        assert retrieved["status"] == "success"
+        assert retrieved["data"]["status"] == "completed"
+        assert retrieved["data"]["result"] == "done"
+        assert "error" not in retrieved["data"]
     assert provider.calls == 1

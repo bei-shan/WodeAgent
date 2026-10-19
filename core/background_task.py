@@ -21,6 +21,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from core.llm_recovery import ModelInvocationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -131,7 +133,11 @@ class BackgroundTaskRunner:
                     result, tool_usage = runner_callable()
                 self._save_result(task_id, "completed", result, tool_usage)
             except Exception as exc:
-                self._save_result(task_id, "failed", str(exc), {})
+                error = (
+                    {"kind": exc.kind, "retryable": exc.retryable}
+                    if isinstance(exc, ModelInvocationError) else None
+                )
+                self._save_result(task_id, "failed", str(exc), {}, error=error)
             finally:
                 # Write a final "done" marker.
                 try:
@@ -311,7 +317,10 @@ class BackgroundTaskRunner:
     # Internal
     # ------------------------------------------------------------------
 
-    def _save_result(self, task_id: str, status: str, result: str, tool_usage: dict) -> None:
+    def _save_result(
+        self, task_id: str, status: str, result: str, tool_usage: dict,
+        *, error: dict | None = None,
+    ) -> None:
         """Persist task result with atomic write."""
         output = {
             "task_id": task_id,
@@ -320,6 +329,8 @@ class BackgroundTaskRunner:
             "tool_usage": tool_usage or {},
             "finished_at": time.time(),
         }
+        if error is not None:
+            output["error"] = error
         # Atomic write: tmp → rename
         tmp_path = self._output_dir / f"{task_id}.tmp"
         final_path = self._output_dir / f"{task_id}.json"

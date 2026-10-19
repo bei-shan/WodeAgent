@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import time
+import json
 
 import pytest
 
 from core.background_task import BackgroundTaskRunner
+from tools.builtin.task_output import TaskOutputTool
 
 
 def _await_result(background: BackgroundTaskRunner, task_id: str) -> dict:
@@ -37,6 +39,14 @@ def test_runner_error_after_effect_is_persisted_without_replay(tmp_path, error_t
     assert result["status"] == "failed"
     assert "provider failed after tool effect" in result["result"]
     assert result["result"] != "false completion"
+    assert result["tool_usage"] == {}
+    assert "error" not in result
+    tool = TaskOutputTool(project_root=tmp_path, background_runner=background)
+    retrieved = json.loads(tool.run({"task_id": "failed-once"}))
+    assert retrieved["status"] == "success"
+    assert retrieved["data"]["status"] == "failed"
+    assert retrieved["data"]["result"] == result["result"]
+    assert "error" not in retrieved["data"]
 
 
 def test_runner_with_callback_completes_once(tmp_path):

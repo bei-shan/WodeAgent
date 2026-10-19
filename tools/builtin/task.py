@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.llm import HelloAgentsLLM
+from core.llm_recovery import ModelInvocationError
 from core.message import Message
 from core.runtime.subagent_bridge import SubagentEventBridge
 from core.runtime.config_scope import active_config
@@ -276,7 +277,6 @@ class SubagentRunner:
             if turn["done"]:
                 final_result = turn.get("final_result") or ""
                 if not str(final_result).strip():
-                    from core.llm_recovery import ModelInvocationError
                     raise ModelInvocationError("empty_response", partial_messages=self.messages)
                 if self.event_bridge:
                     self.event_bridge.emit_finished(
@@ -292,7 +292,6 @@ class SubagentRunner:
                 result_preview="Subagent reached maximum steps without completing.",
                 steps=self.max_steps,
             )
-        from core.llm_recovery import ModelInvocationError
         raise ModelInvocationError("step_limit", partial_messages=self.messages)
 
 
@@ -551,9 +550,14 @@ class TaskTool(Tool):
             
         except Exception as e:
             logger.exception("Subagent execution error")
+            error_data = (
+                {"error": {"kind": e.kind, "retryable": e.retryable}}
+                if isinstance(e, ModelInvocationError) else None
+            )
             return self.create_error_response(
                 error_code=ErrorCode.INTERNAL_ERROR,
                 message=f"Subagent execution failed: {str(e)}",
+                data=error_data,
                 params_input=params_input,
                 time_ms=int((time.monotonic() - start_time) * 1000),
             )
