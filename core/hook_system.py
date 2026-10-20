@@ -33,6 +33,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from core.runtime.subprocess_environment import safe_child_env
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -446,7 +447,9 @@ class HookManager:
             return None
 
         # Prepare environment
-        env = os.environ.copy()
+        # Hook code trust does not grant access to every model/cloud token in
+        # the Agent's ambient environment. Explicit hook runtime metadata only.
+        env = safe_child_env()
         env["MYCODE_PROJECT_DIR"] = str(self._project_root)
         env["MYCODE_HOOK_EVENT"] = str(input_data.get("hook_event_name", ""))
         env["MYCODE_SESSION_ID"] = self._session_id
