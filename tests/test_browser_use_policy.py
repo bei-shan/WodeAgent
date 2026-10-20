@@ -106,3 +106,38 @@ def test_auto_bootstrap_does_not_offer_host_browser(tmp_path):
     registry = ToolRegistry()
     ToolBootstrap(registry=registry, project_root=str(tmp_path)).discover_and_register()
     assert "BrowserUse" not in registry.list_tools()
+
+
+def test_agent_binds_browser_only_in_trusted_local_mode(tmp_path):
+    from agents.codeAgent import CodeAgent
+    from core.config import Config
+    from tests.test_e2e_agent import ScriptedMockLLM
+    from tools.registry import ToolRegistry
+
+    def build(config):
+        return CodeAgent(
+            name="browser-test", llm=ScriptedMockLLM([]),
+            tool_registry=ToolRegistry(), project_root=str(tmp_path),
+            config=config,
+        )
+
+    config = Config(
+        browser_enabled=True,
+        browser_allowed_origins="http://127.0.0.1:8179",
+        browser_allow_loopback=True,
+        show_react_steps=False,
+    )
+    agent = build(config)
+    try:
+        assert "BrowserUse" in agent.tool_registry.list_tools()
+        assert agent.tool_registry.get_tool("BrowserUse") is agent._browser_tool
+        assert agent._browser_tool._session._thread is None  # no eager browser
+        assert agent.tool_registry.derive_worker_registry().get_tool("BrowserUse") is None
+    finally:
+        agent.close()
+    assert agent._browser_tool is None
+
+    with pytest.raises(PermissionError, match="trusted local"):
+        build(config.model_copy(update={"sandbox_mode": "docker"}))
+    with pytest.raises(PermissionError, match="trusted local"):
+        build(config.model_copy(update={"require_isolated_execution": True}))
