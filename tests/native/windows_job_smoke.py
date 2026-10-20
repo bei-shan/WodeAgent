@@ -23,12 +23,15 @@ def main():
         # The child creates a detached-looking grandchild, but inherits the
         # Job from its parent. The grandchild writes a marker only if it
         # survives beyond the parent timeout.
+        grandchild = (
+            "import time,pathlib;"
+            "time.sleep(2);"
+            f"pathlib.Path({str(marker)!r}).write_text('survived')"
+        )
         child = (
-            "import subprocess,sys;"
-            "code='import time,pathlib; time.sleep(2); "
-            f"pathlib.Path({str(marker)!r}).write_text(\\\"survived\\\")';"
-            "subprocess.Popen([sys.executable,'-c',code]);"
-            "import time;time.sleep(20)"
+            "import subprocess,sys,time;"
+            f"subprocess.Popen([sys.executable,'-c',{grandchild!r}]);"
+            "time.sleep(20)"
         )
         result = run_process(
             [sys.executable, "-c", child], shell=False,
