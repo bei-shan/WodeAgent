@@ -76,9 +76,11 @@ class PluginManifest:
         self.version = str(data.get("version", "0.1.0"))[:50]
         self.description = str(data.get("description", ""))[:300]
         self.plugin_dir = plugin_dir
-        parts = data.get("features", {})
+        if "features" in data:
+            raise ValueError("Legacy plugin features field is not supported; use components")
+        parts = data.get("components", {})
         if not isinstance(parts, dict):
-            raise ValueError("Plugin features must be an object")
+            raise ValueError("Plugin components must be an object")
         default_skills = ["skills"] if (plugin_dir / "skills").is_dir() else []
         self.skills_dirs = _paths(parts.get("skills", default_skills))
         self.output_styles_dirs = _paths(parts.get("output_styles", []))

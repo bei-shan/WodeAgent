@@ -46,8 +46,8 @@ class TestToolOutputTruncation:
         assert parsed["data"]["truncation"]["original_bytes"] > 50 * 1024
         assert "preview" in parsed["data"]
 
-    def test_skip_truncation_flag(self):
-        """context.truncation_skip 生效"""
+    def test_untrusted_truncation_skip_flag_is_ignored(self):
+        """Tool-provided flags cannot disable context budgeting."""
         content = "x" * (60 * 1024)
         result = {
             "status": "success",
@@ -56,7 +56,7 @@ class TestToolOutputTruncation:
         }
         raw = json.dumps(result)
         output = compress_tool_result("AnyTool", raw)
-        assert output == raw
+        assert json.loads(output)["data"]["truncated"] is True
 
 
 class TestInputPreprocessor:

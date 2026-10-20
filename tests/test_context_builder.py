@@ -21,7 +21,7 @@ class TestContextBuilder(unittest.TestCase):
         """Plan mode is entered by calling EnterPlanMode, so a session that has
         not called it must not be told it is already read-only."""
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
         }
         with self._make_project(structure) as project:
             registry = DummyToolRegistry()
@@ -29,7 +29,7 @@ class TestContextBuilder(unittest.TestCase):
                 SimpleNamespace(name="EnterPlanMode", usage_notes="")
             ]
             builder = ContextBuilder(
-                tool_registry=registry, project_root=str(project.root)
+                tool_registry=registry, project_root=str(project.root), trusted_prompt_root=str(project.root)
             )
             text = builder._build_l1()
             self.assertIn("# Plan Mode", text)
@@ -38,16 +38,16 @@ class TestContextBuilder(unittest.TestCase):
 
     def test_build_messages_with_history(self):
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
             "prompts/tools_prompts/ls_prompt.py": "ls_prompt = 'LS tool'",
             "CODE_LAW.md": "Rule A",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
             history = [{"role": "user", "content": "hi"}]
             messages = builder.build_messages(history)
             self.assertEqual(messages[0]["role"], "system")
-            self.assertEqual(messages[1]["role"], "system")
+            self.assertEqual(messages[1]["role"], "user")
             self.assertEqual(messages[2]["role"], "user")
 
     def test_system_prompt_override(self):
@@ -59,7 +59,7 @@ class TestContextBuilder(unittest.TestCase):
             registry.get_all_tools = lambda: [ListFilesTool(project_root=str(project.root))]
             builder = ContextBuilder(
                 tool_registry=registry,
-                project_root=str(project.root),
+                project_root=str(project.root), trusted_prompt_root=str(project.root),
                 system_prompt_override="OVERRIDE {tools}",
             )
             messages = builder.get_system_messages()
@@ -68,35 +68,35 @@ class TestContextBuilder(unittest.TestCase):
 
     def test_code_law_lowercase_name(self):
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1",
             "code_law.md": "lowercase rule",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
-            messages = builder.get_system_messages()
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
+            messages = builder.build_messages([])
             self.assertEqual(len(messages), 2)
             self.assertIn("lowercase rule", messages[1]["content"])
 
     def test_code_law_cache_refresh(self):
         """CODE_LAW uses mtime cache — changes detected on file modification."""
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1",
             "CODE_LAW.md": "Rule A",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
-            messages1 = builder.get_system_messages()
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
+            messages1 = builder.build_messages([])
             self.assertIn("Rule A", messages1[1]["content"])
             time.sleep(0.01)
             project.path("CODE_LAW.md").write_text("Rule B", encoding="utf-8")
             # Late Binding: mtime changed → auto-detected, no manual invalidation needed
-            messages2 = builder.get_system_messages()
+            messages2 = builder.build_messages([])
             self.assertIn("Rule B", messages2[1]["content"])
 
     def test_tool_prompts_from_usage_notes(self):
         """Tool prompts come from Tool.usage_notes, not from prompt files."""
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
         }
         with self._make_project(structure) as project:
             from tools.builtin.read_file import ReadTool
@@ -106,7 +106,7 @@ class TestContextBuilder(unittest.TestCase):
                 ReadTool(project_root=str(project.root)),
                 BashTool(project_root=str(project.root)),
             ]
-            builder = ContextBuilder(tool_registry=registry, project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=registry, project_root=str(project.root), trusted_prompt_root=str(project.root))
             messages = builder.get_system_messages()
             content = messages[0]["content"]
             self.assertIn("Read:", content)
@@ -114,10 +114,10 @@ class TestContextBuilder(unittest.TestCase):
 
     def test_missing_tool_prompts_dir(self):
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
             messages = builder.get_system_messages()
             self.assertIn("L1", messages[0]["content"])
             self.assertNotIn("Available Tools", messages[0]["content"])
@@ -125,10 +125,10 @@ class TestContextBuilder(unittest.TestCase):
     def test_mcp_tools_prompt_injection(self):
         """MCP tools get their own system message in Late Binding mode."""
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
             builder.set_mcp_tools_prompt("MCP tool list")
             messages = builder.get_system_messages()
             # MCP tools as separate system message
@@ -138,22 +138,22 @@ class TestContextBuilder(unittest.TestCase):
 
     def test_skills_prompt_injection(self):
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
             "prompts/tools_prompts/skill_prompt.py": "skill_prompt = 'Skills: {{available_skills}}'",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
             builder.set_skills_prompt("SkillA, SkillB")
             messages = builder.get_system_messages()
             self.assertIn("SkillA, SkillB", messages[0]["content"])
 
     def test_cache_invalidated_on_set_skills_prompt(self):
         structure = {
-            "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1 {tools}'",
+            "prompts/agents_prompts/L1_system_prompt.md": "L1 {tools}",
             "prompts/tools_prompts/skill_prompt.py": "skill_prompt = 'Skills: {{available_skills}}'",
         }
         with self._make_project(structure) as project:
-            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
+            builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root), trusted_prompt_root=str(project.root))
             messages1 = builder.get_system_messages()
             self.assertNotIn("SkillA", messages1[0]["content"])
             builder.set_skills_prompt("SkillA")
@@ -163,3 +163,17 @@ class TestContextBuilder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_untrusted_workspace_python_prompt_cannot_execute(tmp_path):
+    marker = tmp_path / "executed"
+    prompt_dir = tmp_path / "prompts" / "agents_prompts"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "L1_system_prompt.py").write_text(
+        "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('bad')\n"
+    )
+    (prompt_dir / "L1_system_prompt.md").write_text("UNTRUSTED OVERRIDE")
+    builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(tmp_path))
+    system = builder.get_system_messages()
+    assert system and "UNTRUSTED OVERRIDE" not in str(system)
+    assert not marker.exists()

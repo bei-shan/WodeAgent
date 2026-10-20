@@ -6,7 +6,7 @@
 
 | 目的 | 推荐文档 |
 | --- | --- |
-| 安装、运行 Web/TUI | [命令参考](COMMANDS.md)、[根目录 README](../README.md)、[TypeScript TUI](../tui-v2/README.md) |
+| 安装、运行 Web/TUI | [命令参考](COMMANDS.md)、[根目录 README](../README.md)、[TypeScript TUI](../tui/README.md) |
 | 模块边界、依赖方向、尚未完成的迁移 | [当前架构](ARCHITECTURE.md) |
 | 开发约定和测试 | [CONTRIBUTING](../CONTRIBUTING.md)、[CI](../.github/workflows/) |
 | Agent 任务评测 | [确定性离线评测基准](design/2026-10-15-agent-eval-baseline.md) |

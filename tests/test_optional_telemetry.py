@@ -55,7 +55,7 @@ class DummyHost:
                 return '{"status":"success","text":"PRIVATE_TOOL_OUTPUT"}'
         ToolRuntime(Tool(), self.logger).execute(
             "Read", {"input": "SECRET_FILE_CONTENT"},
-            agent=self, features=[], emit_messages=lambda *_: None,
+            agent=self, interceptors=[], emit_messages=lambda *_: None,
             record_timing=lambda *_: None,
         )
         return "PRIVATE_MODEL_OUTPUT"

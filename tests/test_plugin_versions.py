@@ -15,7 +15,7 @@ from tests.test_web_service import FakeAgent
 
 def version_zip(version: str, *, name: str = "review-kit") -> bytes:
     return bundle(name=name, manifest={
-        "name": name, "version": version, "features": {"skills": ["skills"]},
+        "name": name, "version": version, "components": {"skills": ["skills"]},
     }, extras={"skills/review/references/version.md": version})
 
 

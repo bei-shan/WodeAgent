@@ -108,7 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "web":
         return _ui("npm", "desktop/web", ["run", "dev"])
     if args.command == "tui":
-        return _ui("bun", "tui-v2", ["run", "dev"])
+        return _ui("bun", "tui", ["run", "dev"])
     if args.command == "eval":
         from scripts.agent_eval import main as evaluate
         options = ["--json"] if args.json else []

@@ -47,3 +47,12 @@ def test_plugin_loader_cannot_import_project_python_entrypoints():
     validator = inspect.getsource(PluginManifest)
     assert '"custom_features" in parts' in validator
     assert "not supported" in validator
+
+
+def test_no_old_feature_protocol_or_manifest_loader():
+    runtime = (ROOT / "core/runtime/tool_runtime.py").read_text(encoding="utf-8")
+    loader = (ROOT / "core/plugin_loader.py").read_text(encoding="utf-8")
+    assert "class ToolFeature" not in runtime
+    assert "features: Iterable" not in runtime
+    assert 'data.get("features"' not in loader
+    assert 'data.get("components"' in loader

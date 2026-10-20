@@ -49,11 +49,11 @@ python -m ridgecode web
 先启动 Python API，再从根目录运行：
 
 ```bash
-cd tui-v2 && bun install --frozen-lockfile && cd ..
+cd tui && bun install --frozen-lockfile && cd ..
 python -m ridgecode tui
 ```
 
-可用 `RIDGECODE_SERVER` 指定服务端；设置了 `WEB_AUTH_TOKEN` 时，TUI 使用相同的 `RIDGECODE_AUTH_TOKEN`。详见 [TUI 文档](tui-v2/README.md)。
+可用 `RIDGECODE_SERVER` 指定服务端；设置了 `WEB_AUTH_TOKEN` 时，TUI 使用相同的 `RIDGECODE_AUTH_TOKEN`。详见 [TUI 文档](tui/README.md)。
 
 ### 4. 日常检查与评测
 
@@ -87,7 +87,7 @@ ToolRegistry / Sandbox / ModelGateway
 - `core/context_engine/`、`core/team_engine/`：上下文和团队运行时。
 - `core/skills/`、`core/plugin_loader.py`：Skills、声明式插件与授权 Hook。
 - `tools/`、`core/sandbox/`：工具注册、权限与隔离执行。
-- `desktop/service/`、`desktop/web/`、`tui-v2/`：服务端和两个客户端。
+- `desktop/service/`、`desktop/web/`、`tui/`：服务端和两个客户端。
 - `db/`、`core/persistence/`：多租户元数据与持久队列基础设施。
 
 已删除旧 Python AgentFeature 框架与旧 Python TUI；托管 API **仅提供元数据服务，尚不能执行生产级共享租户 Agent 回合**。准确的目录职责见 [现役架构](docs/ARCHITECTURE.md)。
@@ -115,7 +115,7 @@ Web 服务为正在执行的 Agent 回合设置进程内的并发上限：
 
 插件管理现在支持本地 ZIP 的 **SHA-256 校验、版本锁定、显式更新和上一版回滚**；更新或回滚会自动禁用插件并撤销代码信任。校验和不能替代发布者签名，当前不会自动下载远程插件。详见 [插件升级与回退说明](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
 
-插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。旧 `custom_features` 声明会直接拒绝。启用命令 Hook 必须同时有逐插件的内容指纹信任和服务端 `RIDGE_ALLOW_TRUSTED_HOOKS=1`；命令 Hook 在受信任的本地宿主执行，**不是沙箱**，不在托管 Worker 内加载。旧 `RIDGE_ALLOW_PLUGIN_CODE` 已失效。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
+插件清单使用 `components` 字段声明 Skills / Hooks / 输出样式，不再支持旧 `features` 字段。插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。旧 `custom_features` 声明会直接拒绝。启用命令 Hook 必须同时有逐插件的内容指纹信任和服务端 `RIDGE_ALLOW_TRUSTED_HOOKS=1`；命令 Hook 在受信任的本地宿主执行，**不是沙箱**，不在托管 Worker 内加载。旧 `RIDGE_ALLOW_PLUGIN_CODE` 已失效。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
 
 ## 可选 Langfuse / OpenTelemetry 追踪
 
@@ -141,7 +141,7 @@ python -m pytest tests/test_web_service.py tests/test_session_manager.py tests/t
 cd desktop/web && npm ci && npm run build
 
 # 新版 TUI 测试（另一个终端）
-cd tui-v2 && bun install && bun run typecheck && bun test
+cd tui && bun install && bun run typecheck && bun test
 ```
 
 Web 样式构建使用 Tailwind CSS 4；支持的浏览器最低版本为 Safari 16.4、Chrome 111、Firefox 128。

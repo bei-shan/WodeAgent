@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MAINTAINED = (
     "README.md",
     "CONTRIBUTING.md",
-    "tui-v2/README.md",
+    "tui/README.md",
     "docs/README.md",
     "docs/ARCHITECTURE.md",
     "docs/AUDIT_2026-10-13.md",

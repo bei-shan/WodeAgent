@@ -13,7 +13,7 @@ python -m ridgecode serve
 然后在另一终端：
 
 ```bash
-cd tui-v2
+cd tui
 bun install --frozen-lockfile
 bun run typecheck
 bun test

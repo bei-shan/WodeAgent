@@ -31,7 +31,7 @@ CodeAgent → AgentLoop / ContextRuntime / ModelGateway
 | --- | --- |
 | `ridgecode/` | 统一的本地用户命令 `python -m ridgecode` |
 | `desktop/web/` | React Web UI 与浏览器 E2E |
-| `tui-v2/` | Bun / Solid / OpenTUI 终端 UI |
+| `tui/` | Bun / Solid / OpenTUI 终端 UI |
 | `desktop/service/` | local trusted API 与独立 hosted metadata API |
 | `desktop/service/application/` | 路由之外的应用服务 |
 | `agents/codeAgent.py` | Agent 入口、工具编排与模型服务协调 |
@@ -57,7 +57,7 @@ python -m ridgecode setup
 python -m ridgecode doctor --target all
 python -m ridgecode serve
 python -m ridgecode web      # 需要先 cd desktop/web && npm ci
-python -m ridgecode tui      # 需要先 cd tui-v2 && bun install --frozen-lockfile
+python -m ridgecode tui      # 需要先 cd tui && bun install --frozen-lockfile
 python -m ridgecode eval --json
 ```
 
