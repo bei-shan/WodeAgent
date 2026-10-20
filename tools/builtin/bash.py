@@ -284,6 +284,7 @@ class BashTool(Tool):
                 result = run_process(
                     run_args, shell=use_shell, cwd=str(target_dir), env=env,
                     timeout=timeout_sec, cancel_event=current_cancel_event(),
+                    max_output_bytes=self.OUTPUT_MAX_BYTES,
                 )
             stdout = result.stdout
             stderr = result.stderr
