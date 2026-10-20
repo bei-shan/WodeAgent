@@ -43,7 +43,14 @@ class BrowserSession:
                     accept_downloads=False, service_workers="block",
                     permissions=[], ignore_https_errors=False,
                 )
+                mutation_window = {"allowed": False}
                 def guard(route):
+                    # Pages can trigger fetch/POST on load without a tool
+                    # click. Read/navigation/fill never grant network writes.
+                    if (route.request.method.upper() not in {"GET", "HEAD"}
+                            and not mutation_window["allowed"]):
+                        route.abort(error_code="blockedbyclient")
+                        return
                     # Playwright's route.continue_() follows ALL redirects
                     # without re-invoking routing: an allowed origin can
                     # redirect to metadata/localhost/another tenant. Never
@@ -85,12 +92,18 @@ class BrowserSession:
                     try:
                         if cancelled is not None and cancelled.is_set():
                             raise InterruptedError("Browser action interrupted before execution")
+                        # Only a previously approved BrowserUse click may
+                        # briefly allow a mutating HTTP request. The tool
+                        # requires an exact fresh UI broker grant before call().
+                        mutation_window["allowed"] = action == "click"
                         result = self._operate(page, action, opts)
                         if cancelled is not None and cancelled.is_set():
                             raise InterruptedError("Browser action interrupted")
                         answer.put((True, result))
                     except BaseException as exc:
                         answer.put((False, exc))
+                    finally:
+                        mutation_window["allowed"] = False
         except BaseException as exc:
             self._startup_error = exc
             self._ready.set()
