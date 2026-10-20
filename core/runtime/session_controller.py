@@ -115,7 +115,7 @@ class AgentSession:
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def send_message(self, content: str) -> bool:
+    def send_message(self, content: str, attachment_parts: list[dict] | None = None) -> bool:
         """Start one turn without allowing unbounded parallel worker threads.
 
         Returns False for an already-busy/closed session. Capacity exhaustion
@@ -138,7 +138,7 @@ class AgentSession:
                 self._agent.interrupt()
             self._thread = threading.Thread(
                 target=self._run_turn,
-                args=(content,),
+                args=(content, tuple(attachment_parts or ())),
                 daemon=True,
                 name=f"agent-{self.session_id[:8]}",
             )
@@ -334,8 +334,12 @@ class AgentSession:
         self._agent = agent
         logger.info("Agent created for session %s", self.session_id[:8])
 
-    def _run_turn(self, content: str) -> None:
+    def _run_turn(self, content: str, attachment_parts: tuple[dict, ...] = ()) -> None:
         """Execute exactly one turn; publish one canonical terminal outcome."""
+        # Never store image base64 in Agent history or session snapshots.
+        # Only the active owner worker can set this ephemeral field.
+        if attachment_parts:
+            self._agent._turn_attachment_parts = list(attachment_parts)
         try:
             response = self._agent.run(content)
             status = getattr(self._agent, "last_turn_status", "completed")
@@ -350,6 +354,10 @@ class AgentSession:
         except Exception as exc:
             logger.exception("Agent turn failed in session %s", self.session_id[:8])
             outcome = failure_outcome(exc)
+        # Drop binary parts on both provider success and failure; do not leak
+        # them into a following turn or a persisted Agent snapshot.
+        if attachment_parts:
+            self._agent._turn_attachment_parts = []
         self.last_turn = outcome
         try:
             persist_turn_outcome(self.session_id, outcome)
