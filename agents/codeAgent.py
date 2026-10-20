@@ -90,6 +90,8 @@ class CodeAgent(Agent):
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
         if self._sandbox_mode not in {"local_trusted", "docker", "boxlite", "e2b"}:
             raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker, boxlite or e2b")
+        if getattr(self.config, "require_isolated_execution", False) and self._sandbox_mode == "local_trusted":
+            raise PermissionError("This deployment requires isolated execution; local_trusted is forbidden")
         if hosted_tool_authority is not None and self._sandbox_mode == "local_trusted":
             raise PermissionError("Hosted Agent tools require an isolated sandbox, not local_trusted")
         self._hosted_tool_authority = hosted_tool_authority
