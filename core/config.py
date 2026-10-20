@@ -47,6 +47,7 @@ class Config(BaseModel):
 
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
     sandbox_mode: str = "local_trusted"  # local_trusted | docker | boxlite | e2b
+    require_isolated_execution: bool = False  # opt-in hard policy for untrusted repositories
     sandbox_docker_image: str = "python:3.12-alpine"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
@@ -182,6 +183,7 @@ class Config(BaseModel):
             tool_deferred_discovery_enabled=env_bool("TOOL_DEFERRED_DISCOVERY_ENABLED", False),
             tool_discovery_max_promoted=max(1, min(48, env_int("TOOL_DISCOVERY_MAX_PROMOTED", 18))),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
+            require_isolated_execution=env_bool("AGENT_REQUIRE_ISOLATED_EXECUTION", False),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
             sandbox_cpus=env_float("AGENT_SANDBOX_CPUS", 1.0),
