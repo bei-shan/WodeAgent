@@ -22,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import time
 import logging
 from datetime import datetime, timedelta
@@ -366,26 +367,72 @@ class ObservationTruncator:
         """将 JSON 字符串中的 \\n 还原为真实换行，提升可读性"""
         return raw_result.replace("\\n", "\n")
     
-    def _save_full_output(self, tool_name: str, content: str) -> Optional[Path]:
-        """Write private, unique output receipts; never trust a tool name as a path."""
+    def _open_receipt_dir_fd(self, *, create: bool) -> int:
+        """Walk POSIX receipt directories relative to verified directory fds.
+
+        Reject symlinks at every segment. Pinning directory handles closes the
+        path-check/open race for writes and deletion. Local trusted mode still
+        needs OS/container isolation from a malicious same-UID process.
+        """
+        if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+            raise OSError("Secure receipt directory operations are unavailable")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fd = os.open(self._project_root, flags)
         try:
-            # Reject already-symlinked output directories and ancestors.
-            # Hostile concurrent filesystem mutation still needs OS isolation.
-            current = self._project_root
             for component in self._output_dir.relative_to(self._project_root).parts:
-                current = current / component
-                if current.is_symlink():
-                    raise ValueError("Symlinked tool output directory")
-                current.mkdir(exist_ok=True)
+                if create:
+                    try:
+                        os.mkdir(component, mode=0o700, dir_fd=directory_fd)
+                    except FileExistsError:
+                        pass
+                next_fd = os.open(component, flags, dir_fd=directory_fd)
+                os.close(directory_fd)
+                directory_fd = next_fd
+            return directory_fd
+        except BaseException:
+            os.close(directory_fd)
+            raise
+
+    def _save_full_output(self, tool_name: str, content: str) -> Optional[Path]:
+        """Write private, unique receipts without following attacker-supplied paths."""
+        try:
             safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(tool_name))[:40] or "tool"
-            filename = f"tool_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}_{secrets.token_hex(8)}.json"
+            filename = (
+                f"tool_{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+                f"{safe_name}_{secrets.token_hex(8)}.json"
+            )
             filepath = self._output_dir / filename
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
-            fd = os.open(filepath, flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as output:
-                output.write(content)
+
+            if os.name == "posix":
+                directory_fd = self._open_receipt_dir_fd(create=True)
+                try:
+                    fd = os.open(filename, flags, 0o600, dir_fd=directory_fd)
+                    with os.fdopen(fd, "w", encoding="utf-8") as output:
+                        output.write(content)
+                    # Refuse a misleading receipt link when a concurrent
+                    # rename/symlink swap moved the visible directory.
+                    original = os.fstat(directory_fd)
+                    visible = os.stat(self._output_dir, follow_symlinks=False)
+                    if (original.st_dev, original.st_ino) != (visible.st_dev, visible.st_ino):
+                        raise OSError("Receipt directory changed while writing")
+                finally:
+                    os.close(directory_fd)
+            else:
+                # Windows remains local-trusted: this is a best-effort guard,
+                # not an OS-enforced replacement for isolated workers.
+                current = self._project_root
+                for component in self._output_dir.relative_to(self._project_root).parts:
+                    current = current / component
+                    if current.is_symlink():
+                        raise ValueError("Symlinked tool output directory")
+                    current.mkdir(exist_ok=True)
+                fd = os.open(filepath, flags, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    output.write(content)
+
             logger.debug("Stored private tool output receipt")
             return filepath
         except (OSError, ValueError) as exc:
@@ -423,25 +470,51 @@ class ObservationTruncator:
         self._cleanup_expired_files()
     
     def _cleanup_expired_files(self):
-        """清理过期的输出文件"""
+        """Remove only old regular receipt files inside the pinned directory."""
         try:
+            retention_days = _get_retention_days()
+            cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
+            # Include legacy receipt names while excluding arbitrary files.
+            filename_pattern = re.compile(
+                r"tool_\d{8}_\d{6}_[A-Za-z0-9_-]{1,40}(?:_[a-f0-9]{16})?\.json"
+            )
+            if os.name == "posix":
+                try:
+                    directory_fd = self._open_receipt_dir_fd(create=False)
+                except FileNotFoundError:
+                    return
+                try:
+                    for name in os.listdir(directory_fd):
+                        if not filename_pattern.fullmatch(name):
+                            continue
+                        try:
+                            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                            if stat.S_ISREG(entry.st_mode) and entry.st_mtime < cutoff:
+                                os.unlink(name, dir_fd=directory_fd)
+                        except OSError:
+                            logger.warning("Could not clean up a tool receipt")
+                finally:
+                    os.close(directory_fd)
+                return
+
+            # Windows fallback is only supported in trusted local mode.
+            current = self._project_root
+            for component in self._output_dir.relative_to(self._project_root).parts:
+                current = current / component
+                if current.is_symlink():
+                    return
             if not self._output_dir.exists():
                 return
-            
-            retention_days = _get_retention_days()
-            cutoff = datetime.now() - timedelta(days=retention_days)
-            
             for filepath in self._output_dir.glob("tool_*.json"):
+                if not filename_pattern.fullmatch(filepath.name) or filepath.is_symlink():
+                    continue
                 try:
-                    mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
-                    if mtime < cutoff:
+                    if filepath.is_file() and filepath.stat().st_mtime < cutoff:
                         filepath.unlink()
-                        logger.debug("Deleted expired file: %s", filepath)
-                except Exception as e:
-                    logger.warning("Failed to delete %s: %s", filepath, e)
-                    
-        except Exception as e:
-            logger.warning("Cleanup failed: %s", e)
+                except OSError:
+                    logger.warning("Could not clean up a tool receipt")
+        except OSError:
+            logger.warning("Tool receipt cleanup failed")
 
 
 # =============================================================================
