@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from core.env import load_env
+from core.env import load_env, get_operator_env
 
 load_env()
 
@@ -22,7 +22,7 @@ DEFAULT_CONFIG_FILES = (
 
 
 def _load_from_env() -> dict[str, Any] | None:
-    raw = os.environ.get("MCP_SERVERS")
+    raw = get_operator_env("MCP_SERVERS")
     if not raw:
         return None
     try:
@@ -71,7 +71,7 @@ def load_mcp_servers(project_root: str) -> dict[str, Any]:
     # repository-controlled configuration as an operator trust grant.
     data = _load_from_env()
     if not data:
-        if os.environ.get("MCP_TRUST_PROJECT_CONFIG", "").strip().lower() not in {
+        if (get_operator_env("MCP_TRUST_PROJECT_CONFIG") or "").strip().lower() not in {
             "true", "1", "yes", "on",
         }:
             # Fail closed before parsing/connecting any project-defined server.
