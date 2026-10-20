@@ -72,6 +72,17 @@ command-name filter. No amount of environment filtering turns host Bash into
 network isolation or an OS sandbox. A real isolated backend is required when
 repository contents or tool results are untrusted.
 
+- Repo-provided `mcp_servers.json`, `.mcp.json`, and `mcp.json` now
+  require `MCP_TRUST_PROJECT_CONFIG=true` before any project server is loaded.
+  A backend-set `MCP_SERVERS` JSON is the out-of-repository operator path.
+  Background/manual MCP connection can execute stdio commands: inspect
+  commands, args, explicit environment credentials, destinations and
+  server update mechanisms before opting in.
+- Trusted command hooks now use the same minimal inherited subprocess environment.
+  A hook's explicit trust is not an implicit grant for unrelated model/cloud
+  credentials. Hooks nevertheless run on the host with the operator's OS
+  filesystem/network privileges and are not safe in a malicious workspace.
+
 ## Remaining risks / mandatory production gates
 
 - **Host command execution:** `tools/builtin/bash.py` uses shell parsing
