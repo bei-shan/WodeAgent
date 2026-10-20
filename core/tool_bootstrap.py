@@ -48,6 +48,10 @@ _TEAM_TOOL_MODULES = frozenset({
     "tools.builtin.team_retry",
 })
 
+# Host browser cannot be auto-discovered: it requires explicit trusted config,
+# dedicated session ownership and must never be registered in isolated modes.
+_OPTIONAL_TOOL_MODULES = frozenset({"tools.builtin.browser_use"})
+
 
 class ToolBootstrap:
     """工具自动发现与注册。
@@ -101,7 +105,7 @@ class ToolBootstrap:
             module_full_name = f"tools.builtin.{module_info.name}"
 
             # 跳过团队工具模块
-            if module_full_name in _TEAM_TOOL_MODULES:
+            if module_full_name in _TEAM_TOOL_MODULES or module_full_name in _OPTIONAL_TOOL_MODULES:
                 continue
 
             try:
