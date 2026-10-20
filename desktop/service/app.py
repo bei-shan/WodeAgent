@@ -420,9 +420,17 @@ def create_app(
 
     @app.post("/api/sessions/{sid}/messages")
     async def send_message(sid: str, body: MessageSend):
-        # Lazy Agent creation touches files/plugins/models and can block.
-        # Keep the ASGI loop responsive even on a cold session.
-        return await asyncio.to_thread(app.state.turn_service.send, sid, body.content)
+        # Resolve every attachment through this session's anchored workspace
+        # before any new Agent turn is admitted. Client-provided paths alone
+        # are never accepted as media authorization.
+        if not body.content.strip() and not body.attachments:
+            raise InvalidInputError("Message text or attachment is required")
+        parts = await asyncio.to_thread(
+            app.state.workspace_service.prepare_attachments, sid, body.attachments
+        )
+        return await asyncio.to_thread(
+            app.state.turn_service.send, sid, body.content, parts,
+        )
 
     @app.post("/api/sessions/{sid}/interrupt")
     async def interrupt(sid: str):
