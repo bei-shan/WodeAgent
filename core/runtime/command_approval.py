@@ -38,15 +38,13 @@ def classify_command(command: str) -> CommandDecision:
     first = tokens[0].lower()
     if first == "pwd" and len(tokens) == 1:
         return CommandDecision("read", False, digest)
-    if first == "git" and len(tokens) >= 2:
-        sub = tokens[1].lower()
-        if sub in {"status", "diff", "log", "show", "rev-parse"} and all(
-            not arg.startswith(("--output", "--exec", "--ext-diff", "--config-env"))
-            and not arg.startswith("-c")
-            and "=" not in arg
-            for arg in tokens[2:]
-        ):
-            return CommandDecision("read", False, digest)
+    if first == "git" and tokens in (
+        ["git", "status"], ["git", "status", "--short"],
+        ["git", "status", "--porcelain"],
+        ["git", "diff"], ["git", "diff", "--stat"],
+        ["git", "log"], ["git", "log", "-1"],
+    ):
+        return CommandDecision("read", False, digest)
     if first in {"curl", "wget", "ssh", "scp", "nc", "npm", "pip"}:
         return CommandDecision("external_network", True, digest)
     if first in {"rm", "mv", "cp", "mkdir", "touch", "tee", "sed"}:
