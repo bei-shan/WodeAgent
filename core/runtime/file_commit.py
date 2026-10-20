@@ -85,8 +85,12 @@ def _commit_anchored(
                     raise ConcurrentFileChange("Target was deleted or changed")
                 if _identity(latest) != _identity(expected_stat):
                     raise ConcurrentFileChange("Target changed since it was read")
-                os.chmod(temporary, stat.S_IMODE(latest.st_mode),
-                         dir_fd=parent_fd, follow_symlinks=False)
+                temp_fd = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW,
+                                  dir_fd=parent_fd)
+                try:
+                    os.fchmod(temp_fd, stat.S_IMODE(latest.st_mode))
+                finally:
+                    os.close(temp_fd)
                 os.replace(temporary, filename, src_dir_fd=parent_fd,
                            dst_dir_fd=parent_fd)
             published = True
