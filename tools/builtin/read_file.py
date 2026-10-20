@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
+from core.runtime.file_commit import open_regular_workspace_file
 
 
 class ReadTool(Tool):
@@ -343,7 +344,7 @@ class ReadTool(Tool):
         """
         try:
             # 读取文件前 8KB
-            with open(path, "rb") as f:
+            with open_regular_workspace_file(path, self._root) as f:
                 chunk = f.read(self.BINARY_CHECK_SIZE)
                 # 如果包含 null byte，判定为二进制文件
                 return b"\x00" in chunk
@@ -371,7 +372,7 @@ class ReadTool(Tool):
             line_has_data = False
             count = 0
             clipped = False
-            with open(path, "r", encoding="utf-8", errors=errors) as file:
+            with open_regular_workspace_file(path, self._root, text=True, errors=errors) as file:
                 while True:
                     fragment = file.readline(8192)
                     if not fragment:
