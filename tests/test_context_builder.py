@@ -52,7 +52,7 @@ class TestContextBuilder(unittest.TestCase):
             self.assertEqual(messages[3], history[0])
 
     def test_system_prompt_override(self):
-        """Override replaces L1, {tools} gets usage_notes from registered tools."""
+        """Operator override is system text; tool notes remain low trust."""
         structure = {}
         with self._make_project(structure) as project:
             from tools.builtin.list_files import ListFilesTool
@@ -65,7 +65,9 @@ class TestContextBuilder(unittest.TestCase):
             )
             messages = builder.get_system_messages()
             self.assertIn("OVERRIDE", messages[0]["content"])
-            self.assertIn("LS:", "\n".join(m["content"] for m in messages))
+            self.assertNotIn("LS:", "\n".join(m["content"] for m in messages))
+            refs = builder.get_reference_messages()
+            self.assertTrue(any(m["role"] == "user" and "LS:" in m["content"] for m in refs))
 
     def test_code_law_lowercase_name(self):
         structure = {
@@ -109,10 +111,15 @@ class TestContextBuilder(unittest.TestCase):
                 BashTool(project_root=str(project.root)),
             ]
             builder = ContextBuilder(tool_registry=registry, project_root=str(project.root))
-            messages = builder.get_system_messages()
-            content = "\n".join(m["content"] for m in messages)
-            self.assertIn("Read:", content)
-            self.assertIn("Bash:", content)
+            system = builder.get_system_messages()
+            system_text = "\n".join(m["content"] for m in system)
+            self.assertNotIn("Read:", system_text)
+            self.assertNotIn("Bash:", system_text)
+            refs = builder.get_reference_messages()
+            reference_text = "\n".join(m["content"] for m in refs)
+            self.assertIn("Read:", reference_text)
+            self.assertIn("Bash:", reference_text)
+            self.assertTrue(all(m["role"] == "user" for m in refs))
 
     def test_missing_tool_prompts_dir(self):
         structure = {
