@@ -54,7 +54,7 @@ function AppCore() {
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
+  const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string; attachment_ref: string}[]>([])
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -230,7 +230,7 @@ function AppCore() {
     // Send structured refs separately: never force binary paths into a
     // prompt string where they could be forged by user input.
     const content = input.trim()
-    const attachments = uploadedFiles.map(f => f.path)
+    const attachments = uploadedFiles.map(f => f.attachment_ref)
     setInput(''); setSending(true); setSubagentStatus('')
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
@@ -286,7 +286,7 @@ function AppCore() {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/upload`, { method: 'POST', body: form })
         if (!res.ok) throw new Error('HTTP ' + res.status)
         const data = await res.json()
-        setUploadedFiles(prev => prev.length >= 4 ? prev : [...prev, { name: data.name, path: data.path }])
+        setUploadedFiles(prev => prev.length >= 4 ? prev : [...prev, { name: data.name, path: data.path, attachment_ref: data.attachment_ref }])
       } catch (error: any) { alert('上传失败：' + error.message) }
     }
     e.target.value = ''
