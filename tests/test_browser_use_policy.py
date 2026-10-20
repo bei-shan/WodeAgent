@@ -136,6 +136,24 @@ def test_agent_binds_browser_only_in_trusted_local_mode(tmp_path):
     finally:
         agent.close()
     assert agent._browser_tool is None
+    assert "BrowserUse" not in agent.tool_registry.list_tools()
+
+    # A shared registry cannot silently lend an active browser to another Agent.
+    shared_registry = ToolRegistry()
+    first = CodeAgent(
+        name="first", llm=ScriptedMockLLM([]),
+        tool_registry=shared_registry, project_root=str(tmp_path), config=config,
+    )
+    try:
+        with pytest.raises(PermissionError, match="already owned"):
+            CodeAgent(
+                name="second", llm=ScriptedMockLLM([]),
+                tool_registry=shared_registry, project_root=str(tmp_path),
+                config=Config(browser_enabled=False),
+            )
+    finally:
+        first.close()
+    assert "BrowserUse" not in shared_registry.list_tools()
 
     with pytest.raises(PermissionError, match="trusted local"):
         build(config.model_copy(update={"sandbox_mode": "docker"}))
