@@ -16,7 +16,8 @@ class UploadRejected(ValueError):
     """Upload failed a required malware scan or the scanner is unavailable."""
 
 
-def scan_uploaded_file(file_path: str | os.PathLike[str]) -> None:
+def scan_uploaded_fd(fd: int) -> None:
+    """Scan an already-open regular file descriptor; never reopen paths."""
     required = os.getenv("RIDGE_ATTACHMENT_SCAN_REQUIRED", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
@@ -32,7 +33,7 @@ def scan_uploaded_file(file_path: str | os.PathLike[str]) -> None:
             stream.settimeout(8)
             stream.connect(sock_path)
             stream.sendall(b"zINSTREAM\x00")
-            with open(file_path, "rb") as source:
+            with os.fdopen(os.dup(fd), "rb") as source:
                 while True:
                     chunk = source.read(64 * 1024)
                     if not chunk:
