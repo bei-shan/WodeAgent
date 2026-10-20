@@ -12,6 +12,10 @@ import pytest
 from core.browser_session import BrowserSession
 from core.browser_url_policy import BrowserURLPolicy
 
+# The broad regression lane intentionally does not install optional Playwright.
+# The dedicated live Chromium CI lane DOES install it and rejects ANY skips.
+pytest.importorskip("playwright.sync_api", reason="requires optional real Chromium integration lane")
+
 
 @pytest.fixture
 def sites():
