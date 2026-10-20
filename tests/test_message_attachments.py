@@ -78,9 +78,10 @@ def test_web_uploaded_image_attached_to_one_turn_without_base64_history(web):
     )
     assert response.status_code == 200
     uploaded_path = response.json()["path"]
+    upload_ref = response.json()["attachment_ref"]
     result = client.post(
         f"/api/sessions/{sid}/messages",
-        json={"content": "", "attachments": [uploaded_path]},
+        json={"content": "", "attachments": [upload_ref]},
     )
     assert result.status_code == 200
     from time import sleep
@@ -101,13 +102,13 @@ def test_attachment_cross_session_and_traversal_denied(web):
     app, client = web
     sid_a = client.post("/api/sessions", json={}).json()["id"]
     sid_b = client.post("/api/sessions", json={}).json()["id"]
-    client.post(
+    upload = client.post(
         f"/api/sessions/{sid_a}/upload",
         files={"file": ("only-a.txt", b"SECRET_A", "text/plain")},
-    )
+    ).json()
     bad = client.post(
         f"/api/sessions/{sid_b}/messages",
-        json={"content": "hi", "attachments": ["only-a.txt"]},
+        json={"content": "hi", "attachments": [upload["attachment_ref"]]},
     )
     assert bad.status_code in (400, 403, 404)
     traversal = client.post(
@@ -115,6 +116,11 @@ def test_attachment_cross_session_and_traversal_denied(web):
         json={"content": "hi", "attachments": ["../" + sid_a + "/only-a.txt"]},
     )
     assert traversal.status_code in (400, 403)
+    # Existing workspace files cannot become model attachments unless uploaded.
+    assert client.post(
+        f"/api/sessions/{sid_a}/messages",
+        json={"content": "hi", "attachments": ["only-a.txt"]},
+    ).status_code == 403
     assert client.post(
         f"/api/sessions/{sid_b}/messages",
         json={"content": "", "attachments": []},
