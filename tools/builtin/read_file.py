@@ -262,7 +262,7 @@ class ReadTool(Tool):
         
         try:
             # 读取文件内容，支持分页和编码回退
-            content, total_lines, encoding_used, fallback_used, content_clipped = self._read_file_content(
+            content, total_lines, encoding_used, fallback_used, content_clipped, displayed_lines = self._read_file_content(
                 target, start_line, limit
             )
         except Exception as e:
@@ -315,6 +315,7 @@ class ReadTool(Tool):
         return self._format_response(
             content=content,
             content_clipped=content_clipped,
+            displayed_lines=displayed_lines,
             rel_path=rel_path,
             start_line=start_line,
             limit=limit,
@@ -355,15 +356,16 @@ class ReadTool(Tool):
         path: Path,
         start_line: int,
         limit: int,
-    ) -> Tuple[str, int, str, bool, bool]:
+    ) -> Tuple[str, int, str, bool, bool, int]:
         """Read line fragments, not the entire file (bounded memory).
 
         `readline(size)` caps even newline-free files. The iterator must
         still scan to EOF to preserve total_lines and legacy pagination
         semantics, but only the requested window is kept in memory.
         """
-        def scan(errors: str) -> tuple[str, int, bool]:
+        def scan(errors: str) -> tuple[str, int, bool, int]:
             rendered: list[str] = []
+            displayed = 0
             captured_chars = 0
             partial = ""
             line_has_data = False
@@ -392,6 +394,7 @@ class ReadTool(Tool):
                             display = f"{count:4d} | {partial.rstrip(chr(10) + chr(13))}\n"
                             if captured_chars + len(display) <= self.MAX_CONTENT_CHARS:
                                 rendered.append(display)
+                                displayed += 1
                                 captured_chars += len(display)
                             else:
                                 clipped = True
@@ -403,21 +406,23 @@ class ReadTool(Tool):
                     display = f"{count:4d} | {partial.rstrip(chr(10) + chr(13))}\n"
                     if captured_chars + len(display) <= self.MAX_CONTENT_CHARS:
                         rendered.append(display)
+                        displayed += 1
                     else:
                         clipped = True
-            return "".join(rendered), count, clipped
+            return "".join(rendered), count, clipped, displayed
 
         try:
-            content, total_lines, clipped = scan("strict")
-            return content, total_lines, "utf-8", False, clipped
+            content, total_lines, clipped, displayed = scan("strict")
+            return content, total_lines, "utf-8", False, clipped, displayed
         except UnicodeDecodeError:
-            content, total_lines, clipped = scan("replace")
-            return content, total_lines, "utf-8 (replace)", True, clipped
+            content, total_lines, clipped, displayed = scan("replace")
+            return content, total_lines, "utf-8 (replace)", True, clipped, displayed
 
     def _format_response(
         self,
         content: str,
         content_clipped: bool,
+        displayed_lines: int,
         rel_path: str,
         start_line: int,
         limit: int,
@@ -462,7 +467,7 @@ class ReadTool(Tool):
         else:
             start_idx = start_line - 1
             end_idx = min(start_idx + limit, total_lines)
-            lines_read = end_idx - start_idx
+            lines_read = displayed_lines
             end_line = start_line + lines_read - 1 if lines_read > 0 else 0
         
         # 判断是否截断（还有剩余行未读取）
