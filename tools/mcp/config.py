@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from core.env import load_env
+from core.env import load_env, get_operator_env
 
 load_env()
 
@@ -22,7 +22,7 @@ DEFAULT_CONFIG_FILES = (
 
 
 def _load_from_env() -> dict[str, Any] | None:
-    raw = os.environ.get("MCP_SERVERS")
+    raw = get_operator_env("MCP_SERVERS")
     if not raw:
         return None
     try:
@@ -66,7 +66,23 @@ def _load_from_files(project_root: str) -> dict[str, Any] | None:
 
 
 def load_mcp_servers(project_root: str) -> dict[str, Any]:
-    data = _load_from_env() or _load_from_files(project_root)
+    # A repository can supply .mcp.json and request execution of arbitrary
+    # stdio processes during "manual" background connection. Never treat
+    # repository-controlled configuration as an operator trust grant.
+    data = _load_from_env()
+    if not data:
+        if (get_operator_env("MCP_TRUST_PROJECT_CONFIG") or "").strip().lower() not in {
+            "true", "1", "yes", "on",
+        }:
+            # Fail closed before parsing/connecting any project-defined server.
+            # MCP_SERVERS is the operator-supplied out-of-repo alternative.
+            if any((Path(project_root) / name).exists() for name in DEFAULT_CONFIG_FILES):
+                logger.warning(
+                    "Project MCP configuration ignored. Set MCP_TRUST_PROJECT_CONFIG=true "
+                    "only after reviewing all defined servers and executable commands."
+                )
+            return {}
+        data = _load_from_files(project_root)
     if not data:
         return {}
     if "mcpServers" in data and isinstance(data["mcpServers"], dict):

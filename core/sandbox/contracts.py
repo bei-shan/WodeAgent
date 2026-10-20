@@ -19,6 +19,7 @@ class CommandResult:
     exit_code: int | None
     timed_out: bool = False
     interrupted: bool = False
+    truncated: bool = False
 
 
 class SandboxUnavailable(RuntimeError):

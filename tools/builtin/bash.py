@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import time
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -15,6 +16,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
 from core.runtime.cancellation import current_cancel_event
 from core.runtime.process_execution import run_process
+from core.runtime.subprocess_environment import safe_child_env
 
 load_env()
 
@@ -84,6 +86,12 @@ class BashTool(Tool):
         
         # 是否允许网络工具（默认禁用）
         self._allow_network = os.environ.get("BASH_ALLOW_NETWORK", "false").lower() == "true"
+        # local_trusted preserves legacy behavior; strict deployments should
+        # set BASH_COMMAND_APPROVAL=ask or require a true isolated backend.
+        self._command_approval = os.environ.get("BASH_COMMAND_APPROVAL", "allow").strip().lower()
+        if self._command_approval not in {"allow", "ask", "deny"}:
+            raise ValueError("BASH_COMMAND_APPROVAL must be allow, ask or deny")
+        self._command_approval_broker = None
 
     def run(self, parameters: Dict[str, Any]) -> str:
         """
@@ -204,13 +212,41 @@ class BashTool(Tool):
                 params_input=params_input,
             )
 
+        # Approval is bound to the *final* command and directory at the
+        # execution boundary. Agent prompts and plugin hooks cannot grant it.
+        # Interactive sessions inject a trusted broker; standalone callers
+        # fail closed when confirmation is required.
+        if self._command_approval != "allow":
+            if self._command_approval == "deny":
+                return self.create_error_response(
+                    error_code=ErrorCode.ACCESS_DENIED,
+                    message="Host command execution is disabled by policy.",
+                    params_input=params_input,
+                )
+            broker = self._command_approval_broker
+            decision = "denied"
+            if callable(broker) and len(command) <= 4096:
+                try:
+                    decision = broker(
+                        f"Directory: {directory_resolved}\\nCommand: {command}",
+                        self.name, "execute-command",
+                    )
+                except Exception:
+                    decision = "denied"
+            if decision != "granted":
+                return self.create_error_response(
+                    error_code=ErrorCode.ACCESS_DENIED,
+                    message="Exact host command approval is required.",
+                    params_input=params_input,
+                )
+
         # =====================================================================
         # 执行命令
         # =====================================================================
 
-        # 设置环境变量
-        env = os.environ.copy()
-        env["MYCODEAGENT"] = "1"
+        # A host command still has host filesystem/network access. Never
+        # additionally pass API keys or cloud credentials from the Agent's
+        # environment; isolate HOME to avoid ambient CLI credentials.
 
         # 转换超时时间为秒
         timeout_sec = timeout_ms / 1000.0
@@ -243,10 +279,13 @@ class BashTool(Tool):
                 run_args = exec_command
 
         try:
-            result = run_process(
-                run_args, shell=use_shell, cwd=str(target_dir), env=env,
-                timeout=timeout_sec, cancel_event=current_cancel_event(),
-            )
+            with tempfile.TemporaryDirectory(prefix="ridge-bash-home-") as home:
+                env = safe_child_env({"MYCODEAGENT": "1"}, home=home)
+                result = run_process(
+                    run_args, shell=use_shell, cwd=str(target_dir), env=env,
+                    timeout=timeout_sec, cancel_event=current_cancel_event(),
+                    max_output_bytes=self.OUTPUT_MAX_BYTES,
+                )
             stdout = result.stdout
             stderr = result.stderr
             exit_code = result.returncode
@@ -295,7 +334,9 @@ class BashTool(Tool):
         stderr_lines = stderr.count("\n") + 1 if stderr else 0
         stderr_bytes = len(stderr.encode("utf-8"))
         output_too_large = (
-            stdout_lines > self.OUTPUT_MAX_LINES
+            getattr(result, "stdout_truncated", False)
+            or getattr(result, "stderr_truncated", False)
+            or stdout_lines > self.OUTPUT_MAX_LINES
             or stdout_bytes > self.OUTPUT_MAX_BYTES
             or stderr_lines > self.OUTPUT_MAX_LINES
             or stderr_bytes > self.OUTPUT_MAX_BYTES

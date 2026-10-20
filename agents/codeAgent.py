@@ -90,6 +90,8 @@ class CodeAgent(Agent):
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
         if self._sandbox_mode not in {"local_trusted", "docker", "boxlite", "e2b"}:
             raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker, boxlite or e2b")
+        if getattr(self.config, "require_isolated_execution", False) and self._sandbox_mode == "local_trusted":
+            raise PermissionError("This deployment requires isolated execution; local_trusted is forbidden")
         if hosted_tool_authority is not None and self._sandbox_mode == "local_trusted":
             raise PermissionError("Hosted Agent tools require an isolated sandbox, not local_trusted")
         self._hosted_tool_authority = hosted_tool_authority
@@ -1149,13 +1151,14 @@ class CodeAgent(Agent):
         self._system_messages_logged = True
 
     def _get_system_messages_for_run(self) -> List[dict]:
-        if self._system_messages_override:
-            return [dict(m) for m in self._system_messages_override]
+        # Session snapshots are untrusted serialized data. Never restore their
+        # former system messages as current higher-priority instructions.
         return self.context_builder.get_system_messages()
 
     def _build_messages(self, history_messages: list[dict]) -> list[dict]:
-        system_messages = self._get_system_messages_for_run()
-        return list(system_messages) + list(history_messages)
+        # The context builder applies the same provenance boundary in the
+        # ordinary and post-compaction paths, without mutating saved history.
+        return self.context_builder.build_messages(history_messages)
 
     # ------------------------------------------------------------------
     # Session management (multi-conversation)

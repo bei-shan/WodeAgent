@@ -17,6 +17,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 import anyio
 from core.runtime.cancellation import current_cancel_event
+from core.runtime.subprocess_environment import safe_child_env
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +111,14 @@ class MCPClient:
         oauth_flow = None
         try:
             if self._config.transport == "stdio":
-                env = None
-                if self._config.env is not None:
-                    env = dict(os.environ)
-                    env.update(self._config.env)
+                # MCP stdio is a subprocess (often third-party code). Even
+                # when config.env is omitted, never inherit Agent/provider
+                # secrets, cloud tokens or shell startup hooks implicitly.
+                # Explicit MCP config.env is an operator-controlled grant.
                 params = StdioServerParameters(
                     command=self._config.command,
                     args=self._config.args or [],
-                    env=env,
+                    env=safe_child_env(self._config.env),
                 )
                 connection = stdio_client(params)
             else:

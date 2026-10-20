@@ -322,6 +322,13 @@ class AgentSession:
         broker = _SessionPermissionBroker(self)
         if hasattr(agent, "_permission_gate") and agent._permission_gate:
             agent._permission_gate._broker = broker
+        # Exact host-Bash approval uses the same authenticated session
+        # permission event/decision broker, not a model-authored grant.
+        if getattr(agent, "_sandbox_mode", "local_trusted") == "local_trusted":
+            get_tool = getattr(agent.tool_registry, "get_tool", None)
+            bash_tool = get_tool("Bash") if callable(get_tool) else None
+            if bash_tool is not None and hasattr(bash_tool, "_command_approval_broker"):
+                bash_tool._command_approval_broker = broker
 
         # Wire AskUser input function → blocks on ask_user.requested events.
         try:

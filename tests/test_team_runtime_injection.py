@@ -4,13 +4,15 @@ from core.context_engine.history_manager import HistoryManager
 from tools.registry import ToolRegistry
 
 
-def test_runtime_notifications_injected_as_system_blocks(tmp_path):
+def test_runtime_notifications_stay_in_untrusted_reference_blocks(tmp_path):
     builder = ContextBuilder(tool_registry=ToolRegistry(), project_root=str(tmp_path), system_prompt_override="base")
     builder.set_runtime_system_blocks(["[Team Runtime]\n- msg-1"])
     messages = builder.build_messages([{"role": "user", "content": "hello"}])
 
     system_blocks = [m for m in messages if m.get("role") == "system"]
-    assert any("[Team Runtime]" in m.get("content", "") for m in system_blocks)
+    assert not any("[Team Runtime]" in m.get("content", "") for m in system_blocks)
+    reference_blocks = [m for m in messages if m.get("role") == "user"]
+    assert any("[Team Runtime]" in m.get("content", "") and "<untrusted_data" in m.get("content", "") for m in reference_blocks)
     assert messages[-1]["role"] == "user"
 
 

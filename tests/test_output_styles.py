@@ -275,12 +275,14 @@ class TestContextBuilderIntegration:
         )
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
-        # Load system messages — the style prompt should be inside L1.
+        # Style text is workspace-selected data, not trusted application L1.
         msgs = builder.get_system_messages()
         l1_content = msgs[0]["content"] if msgs else ""
-
-        assert "Output Style: explanatory" in l1_content
-        assert "Insight" in l1_content
+        references = builder.get_reference_messages()
+        assert "Output Style: explanatory" not in l1_content
+        assert any(msg["role"] == "user"
+                   and "Output Style: explanatory" in msg["content"]
+                   and "Insight" in msg["content"] for msg in references)
 
     def test_context_builder_skips_default_style(self, real_project_root):
         from core.context_engine.context_builder import ContextBuilder
@@ -317,14 +319,17 @@ class TestContextBuilderIntegration:
 
         first = builder.get_system_messages()
 
-        # Change style — cache should be invalidated.
+        # Change style — the live reference must update without changing L1.
         mgr.set_current("explanatory")
         builder.set_output_style_prompt(mgr.get_current_prompt())
 
         second = builder.get_system_messages()
         second_l1 = second[0]["content"] if second else ""
-
-        assert "Output Style: explanatory" in second_l1
+        second_refs = builder.get_reference_messages()
+        assert first == second
+        assert "Output Style: explanatory" not in second_l1
+        assert any(m["role"] == "user" and "Output Style: explanatory" in m["content"]
+                   for m in second_refs)
 
     def test_default_prompt_is_empty_string(self, real_project_root):
         """Verify default style returns empty prompt (not None)."""

@@ -85,7 +85,8 @@ class SandboxBashTool(BashTool):
         # stdout/stderr can contain untrusted data; don't echo host exceptions.
         stdout = result.stdout[: self.OUTPUT_MAX_BYTES]
         stderr = result.stderr[: self.OUTPUT_MAX_BYTES]
-        truncated = len(result.stdout) > len(stdout) or len(result.stderr) > len(stderr)
+        truncated = (result.truncated or len(result.stdout) > len(stdout)
+                     or len(result.stderr) > len(stderr))
         data = {
             "stdout": stdout, "stderr": stderr,
             "exit_code": result.exit_code,

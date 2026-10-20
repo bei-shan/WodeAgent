@@ -24,6 +24,7 @@ from threading import Event
 from typing import Any, Callable
 
 from core.sandbox.contracts import CommandResult, SandboxUnavailable
+from core.sandbox.workspace_secrets import assert_no_mounted_credentials
 from core.sandbox.boxlite_pool import BoxliteSessionPool
 from core.sandbox.docker_lifecycle import installation_key_path
 
@@ -54,6 +55,7 @@ class BoxliteCommandProvider:
             raise SandboxUnavailable("Invalid VM workspace") from exc
         if not self.workspace.is_dir():
             raise SandboxUnavailable("VM workspace must be an existing directory")
+        assert_no_mounted_credentials(self.workspace)
         if not isinstance(image, str) or not _IMAGE_RE.fullmatch(image) or ".." in image:
             raise SandboxUnavailable("Invalid BoxLite image")
         if (type(memory_mib) is not int or not 128 <= memory_mib <= 16384
@@ -130,6 +132,7 @@ class BoxliteCommandProvider:
 
     def _make_box(self) -> Any:
         """Do not expose options construction to model/tool arguments."""
+        assert_no_mounted_credentials(self.workspace)
         return self._box_factory(
             image=self.image,
             name=f"ridgecode-{secrets.token_hex(10)}",

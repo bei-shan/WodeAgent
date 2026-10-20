@@ -1,7 +1,8 @@
-"""Cancellable subprocess runner for in-process Bash execution.
+"""Bounded, cancellable subprocess execution for Bash and Docker CLI.
 
-On POSIX spawn a new session and terminate the process group on cancellation
-or timeout so shell grandchildren do not survive as orphaned jobs.
+Drain both child pipes concurrently while retaining a strictly bounded
+number of bytes per stream (128 KiB by default). This is output resource control, not process or network isolation.
+POSIX launches its own process group; Windows still needs Job Object support.
 """
 from __future__ import annotations
 
@@ -10,8 +11,12 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Thread
 from typing import Any
+
+
+MAX_CAPTURE_BYTES = 131_072
+_READ_CHUNK = 16_384
 
 
 @dataclass(frozen=True)
@@ -21,12 +26,8 @@ class ProcessOutcome:
     returncode: int | None
     timed_out: bool = False
     interrupted: bool = False
-
-
-def _as_text(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value if isinstance(value, str) else ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 def _kill_tree(proc: subprocess.Popen[Any]) -> None:
@@ -46,6 +47,37 @@ def _kill_tree(proc: subprocess.Popen[Any]) -> None:
         pass
 
 
+def _bounded_reader(pipe: Any, retained: bytearray, overflow: list[bool],
+                    max_bytes: int) -> None:
+    """Drain until EOF so full pipes never block the child; discard overflow."""
+    try:
+        while True:
+            chunk = os.read(pipe.fileno(), _READ_CHUNK)
+            if not chunk:
+                return
+            left = max_bytes - len(retained)
+            if left > 0:
+                retained.extend(chunk[:left])
+            if len(chunk) > left:
+                overflow[0] = True
+    except (OSError, ValueError):
+        # The owner closes pipes after a bounded wait on cancellation.
+        pass
+
+
+def _write_stdin(pipe: Any, data: bytes) -> None:
+    try:
+        pipe.write(data)
+        pipe.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            pipe.close()
+        except OSError:
+            pass
+
+
 def run_process(
     args: str | list[str],
     *,
@@ -56,32 +88,45 @@ def run_process(
     cancel_event: Event | None = None,
     poll_interval: float = 0.1,
     stdin_data: bytes | None = None,
+    max_output_bytes: int = MAX_CAPTURE_BYTES,
 ) -> ProcessOutcome:
-    """Run a process with a hard deadline and optional cooperative interrupt.
+    """Execute with a hard deadline, live cancellation and bounded pipe memory.
 
-    No external stdout/stderr callbacks are invoked on worker threads.
-    Cancellation is scoped to one invocation, not a global process list.
+    Reader threads are daemonized because a malicious process can create an
+    out-of-group descendant holding a pipe open. We never wait indefinitely
+    for a descendant after the direct process has been reaped.
     """
     if stdin_data is not None and not isinstance(stdin_data, bytes):
         raise ValueError("stdin_data must be bytes")
+    if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int) or not 1 <= max_output_bytes <= 1_048_576:
+        raise ValueError("max_output_bytes must be between 1 and 1048576")
     if cancel_event is not None and cancel_event.is_set():
         return ProcessOutcome("", "", None, interrupted=True)
     opts: dict[str, Any] = {"start_new_session": True} if os.name == "posix" else {}
-    # On Windows, start a new process group so a future dedicated Job Object
-    # implementation can terminate descendants reliably.
     if os.name == "nt":
         opts["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(
         args, shell=shell, cwd=cwd, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE if stdin_data is not None else None,
-        text=stdin_data is None,
+        stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
         **opts,
     )
-    input_pending = stdin_data
+    captured = (bytearray(), bytearray())
+    overflow = ([False], [False])
+    streams = (process.stdout, process.stderr)
+    readers = [
+        Thread(target=_bounded_reader, args=(pipe, buf, flag, max_output_bytes),
+               name="ridge-process-pipe", daemon=True)
+        for pipe, buf, flag in zip(streams, captured, overflow)
+    ]
+    for worker in readers:
+        worker.start()
+    if stdin_data is not None and process.stdin is not None:
+        Thread(target=_write_stdin, args=(process.stdin, stdin_data),
+               name="ridge-process-stdin", daemon=True).start()
+
     deadline = time.monotonic() + timeout
-    timed_out = False
-    interrupted = False
+    timed_out = interrupted = False
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -91,42 +136,41 @@ def run_process(
             if remaining <= 0:
                 timed_out = True
                 break
-            wait = min(remaining, poll_interval) if cancel_event is not None else remaining
             try:
-                try:
-                    stdout, stderr = process.communicate(
-                        input=input_pending, timeout=wait,
-                    )
-                finally:
-                    # CPython's communicate resumes pending pipe writes after
-                    # a TimeoutExpired; resending the bytes would duplicate
-                    # data or raise ValueError on the second invocation.
-                    input_pending = None
-                return ProcessOutcome(_as_text(stdout), _as_text(stderr), process.returncode)
+                process.wait(timeout=min(remaining, poll_interval))
+                break
             except subprocess.TimeoutExpired:
                 continue
     except BaseException:
         _kill_tree(process)
         try:
-            process.communicate(timeout=1)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        raise
-    _kill_tree(process)
-    try:
-        stdout, stderr = process.communicate(timeout=2)
-    except subprocess.TimeoutExpired as exc:
-        # A descendant may have escaped its process group while retaining
-        # inherited pipe descriptors. Do not block a cancelled turn forever.
-        stdout, stderr = exc.stdout, exc.stderr
-        for pipe in (process.stdout, process.stderr):
-            if pipe is not None:
-                pipe.close()
-        try:
             process.wait(timeout=1)
         except subprocess.TimeoutExpired:
+            pass
+        raise
+    finally:
+        if timed_out or interrupted:
             _kill_tree(process)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                _kill_tree(process)
+
+        # The process may have spawned a detached child holding stdout open.
+        # Read what arrived, then close our descriptors without an unbounded
+        # communicate()/join() blocking on that untrusted descendant.
+        for worker in readers:
+            worker.join(timeout=1 if timed_out or interrupted else 2)
+        for stream in streams:
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
     return ProcessOutcome(
-        _as_text(stdout), _as_text(stderr), process.returncode,
+        captured[0].decode("utf-8", errors="replace"),
+        captured[1].decode("utf-8", errors="replace"),
+        process.returncode,
         timed_out=timed_out, interrupted=interrupted,
+        stdout_truncated=overflow[0][0], stderr_truncated=overflow[1][0],
     )

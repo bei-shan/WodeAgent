@@ -145,7 +145,8 @@ class TestHistoryManager(unittest.TestCase):
         hm.append_tool("LS", json.dumps({"status": "success"}))
         messages = hm.to_messages()
         self.assertEqual(messages[0]["role"], "user")
-        self.assertIn("Observation (LS)", messages[0]["content"])
+        self.assertIn("unpaired tool output (LS)", messages[0]["content"])
+        self.assertIn("<untrusted_data", messages[0]["content"])
 
     def test_to_messages_strict_tool_call_metadata(self):
         config = Config(tool_message_format="strict")
