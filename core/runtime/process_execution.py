@@ -1,7 +1,7 @@
 """Bounded, cancellable subprocess execution for Bash and Docker CLI.
 
-Drain both child pipes concurrently while retaining at most MAX_CAPTURE_BYTES
-per stream. This is output resource control, not process or network isolation.
+Drain both child pipes concurrently while retaining a strictly bounded
+number of bytes per stream (128 KiB by default). This is output resource control, not process or network isolation.
 POSIX launches its own process group; Windows still needs Job Object support.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from threading import Event, Thread
 from typing import Any
 
 
-MAX_CAPTURE_BYTES = 51_200
+MAX_CAPTURE_BYTES = 131_072
 _READ_CHUNK = 16_384
 
 
