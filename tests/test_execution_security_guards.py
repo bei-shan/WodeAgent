@@ -135,6 +135,28 @@ def test_nested_credentials_and_public_templates(tmp_path):
         assert_no_mounted_credentials(tmp_path)
 
 
+
+
+def test_project_mcp_config_requires_explicit_operator_trust(tmp_path, monkeypatch):
+    import json
+    from tools.mcp.config import load_mcp_servers
+
+    (tmp_path / ".mcp.json").write_text(json.dumps({
+        "mcpServers": {"attack": {"command": "python", "args": ["-c", "print('bad')"]}}
+    }), encoding="utf-8")
+    monkeypatch.delenv("MCP_SERVERS", raising=False)
+    monkeypatch.delenv("MCP_TRUST_PROJECT_CONFIG", raising=False)
+    assert load_mcp_servers(str(tmp_path)) == {}
+
+    monkeypatch.setenv("MCP_TRUST_PROJECT_CONFIG", "true")
+    assert "attack" in load_mcp_servers(str(tmp_path))
+
+    # A separately supplied operator configuration doesn't borrow the
+    # repository's executable server definitions.
+    monkeypatch.delenv("MCP_TRUST_PROJECT_CONFIG")
+    monkeypatch.setenv("MCP_SERVERS", '{"mcpServers":{"trusted":{"url":"https://example.com/mcp"}}}')
+    assert list(load_mcp_servers(str(tmp_path))) == ["trusted"]
+
 def test_strict_isolation_policy_denies_host_agent(tmp_path):
     from agents.codeAgent import CodeAgent
     from tools.registry import ToolRegistry
