@@ -96,6 +96,26 @@ repository contents or tool results are untrusted.
   constrain spawned processes, unapproved file access by other tools or
   unauthorized network sockets. For untrusted repos use isolated execution.
 
+## Additional enforcement and context fixes (2026-10-20)
+
+- Dynamically registered tool `usage_notes`, temporary disabled-tool
+  listings and output-style text are **no longer interpolated into L1 system
+  instructions**. Even a plugin that advertises a tool can only contribute a
+  framed, escaped reference. Bundled L1 and the application trust-boundary
+  policy retain their separate trusted priority.
+- Serialized history entries claiming `system` or `developer` roles are
+  projected as untrusted data in the model request. The saved session itself
+  is not mutated. This blocks a second role-promotion route beyond the former
+  `system_messages` snapshot field.
+- `core/runtime/process_execution.py` drains stdout/stderr concurrently but
+  retains at most 51,200 bytes **per stream** while the process is running,
+  rather than collecting unbounded output and truncating afterwards. Overflow
+  reaches both host-Bash and Docker tool result envelopes. This addresses
+  capture-memory exhaustion, **not** CPU usage, IO rates, open files or all
+  descendants; Windows descendant termination still requires a Job Object.
+- The dedicated security workflow now includes stream-overflow, child
+  cancellation and Bash behavior regressions alongside prompt-injection tests.
+
 ## Remaining risks / mandatory production gates
 
 - **Host command execution:** `tools/builtin/bash.py` uses shell parsing
