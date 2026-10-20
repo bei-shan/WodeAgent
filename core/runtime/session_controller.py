@@ -325,7 +325,8 @@ class AgentSession:
         # Exact host-Bash approval uses the same authenticated session
         # permission event/decision broker, not a model-authored grant.
         if getattr(agent, "_sandbox_mode", "local_trusted") == "local_trusted":
-            bash_tool = agent.tool_registry.get_tool("Bash")
+            get_tool = getattr(agent.tool_registry, "get_tool", None)
+            bash_tool = get_tool("Bash") if callable(get_tool) else None
             if bash_tool is not None and hasattr(bash_tool, "_command_approval_broker"):
                 bash_tool._command_approval_broker = broker
 
