@@ -118,3 +118,28 @@ def test_gc_preserves_modified_file_even_when_ticket_expires(client):
     result = app.state.workspace_service.cleanup_expired_uploads(now=time.time() + 7201)
     assert result["expired_grants"] >= 1
     assert file.read_text() == "agent deliberately edited this file"
+
+
+def test_gc_retries_after_transient_storage_permission_failure(client, monkeypatch):
+    from unittest.mock import patch
+    app, http = client
+    sid = http.post("/api/sessions", json={}).json()["id"]
+    uploaded = http.post(
+        f"/api/sessions/{sid}/upload",
+        files={"file": ("retry.txt", b"data", "text/plain")},
+    ).json()
+    service = app.state.workspace_service
+    file = service.workspace_base / sid / uploaded["path"]
+    deadline = time.time() + 7201
+    with patch.object(service, "_existing_upload_root_fd",
+                      side_effect=PermissionError("temporary unavailable")):
+        result = service.cleanup_expired_uploads(now=deadline)
+    assert result["retry_pending"] >= 1
+    assert file.read_bytes() == b"data"
+    assert service._uploads.expired_candidates(now=deadline)
+
+    retried = service.cleanup_expired_uploads(now=deadline)
+    assert retried["files_removed"] >= 1
+    assert retried["retry_pending"] == 0
+    assert not file.exists()
+    assert service._uploads.expired_candidates(now=deadline) == []
