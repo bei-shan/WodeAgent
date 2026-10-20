@@ -1,0 +1,1 @@
+"""Trusted local computer-use backends (never hosted worker capabilities)."""

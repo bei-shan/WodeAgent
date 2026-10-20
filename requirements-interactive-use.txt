@@ -1,0 +1,18 @@
+# Optional local interactive-use dependencies (not installed in core).
+# Chromium is installed separately: python -m playwright install chromium
+playwright>=1.55,<2
+# Desktop input is intentionally optional and requires an attended GUI session.
+pyautogui>=0.9.54,<1
+# Required to capture and resize desktop screenshots reliably.
+Pillow>=10,<13
+mss>=10,<12
+
+# Native OS accessibility is opt-in and OS-specific.
+# macOS AXUIElement + frontmost app identity:
+pyobjc-framework-ApplicationServices>=10; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10; sys_platform == "darwin"
+# Windows UI Automation (IUIAutomation Invoke/Toggle/Value patterns):
+uiautomation>=2,<4; sys_platform == "win32"
+# Linux AT-SPI: install OS packages python3-pyatspi, python3-gi,
+# gir1.2-atspi-2.0 and ensure the Python environment can import pyatspi.
+# Do NOT automatically import system site-packages on hosted workers.

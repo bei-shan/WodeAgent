@@ -240,3 +240,45 @@ jobs:
       - run: python -m pytest tests/test_sandbox_docker_integration.py -q
         env:
           AGENT_DOCKER_INTEGRATION: '1'
+
+  interactive-browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt 'playwright>=1.55,<2'
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest tests/test_interactive_use.py tests/test_computer_native_elements.py tests/test_interactive_browser_integration.py -q
+
+  interactive-computer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y xvfb xauth scrot python3-tk
+      - run: python -m pip install -r requirements.txt -r requirements-interactive-use.txt
+      - name: Exercise actual desktop input in disposable Xvfb display
+        run: xvfb-run -a -s '-screen 0 1280x800x24' python -m pytest tests/test_interactive_computer_integration.py -q
+        env:
+          RIDGE_COMPUTER_GUI_SMOKE: '1'
+
+  native-atspi-gtk-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install distro AT-SPI, GTK3 and disposable X11 dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyatspi python3-gi gir1.2-gtk-3.0 at-spi2-core openbox xvfb xauth dbus-x11
+      - name: Real AT-SPI inspect, edit and activate inside Xvfb
+        env:
+          NO_AT_BRIDGE: '0'
+        run: |
+          PYTHONPATH="$PWD" dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' /usr/bin/python3 tests/native/atspi_live_smoke.py

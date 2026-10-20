@@ -92,6 +92,29 @@ ToolRegistry / Sandbox / ModelGateway
 
 已删除旧 Python AgentFeature 框架与旧 Python TUI；托管 API **仅提供元数据服务，尚不能执行生产级共享租户 Agent 回合**。准确的目录职责见 [现役架构](docs/ARCHITECTURE.md)。
 
+## 可选 BrowserUse / ComputerUse（本地实验功能）
+
+两套工具默认关闭，均由独立 Agent 会话持有，不作为托管租户能力：
+
+- `BrowserUse`：Playwright 隔离 Chromium，上下文内网页导航、DOM 元素快照、点击、输入、滚动、截图。
+- `ComputerUse`：双重显式授权；macOS AX、Windows UIA、Linux AT-SPI 原生前台元素观察与点击/赋值（需平台可选依赖），另可使用 PyAutoGUI/MSS 控制**本机宿主桌面**。不是 Docker/BoxLite/E2B 来宾桌面。
+
+```bash
+python -m pip install -r requirements-interactive-use.txt
+python -m playwright install chromium
+# 在本地私有 .env 中显式配置：
+# RIDGE_BROWSER_USE_ENABLED=true
+```
+
+启用 ComputerUse 还必须设置 `RIDGE_COMPUTER_USE_ENABLED=true` 与
+`RIDGE_COMPUTER_USE_HOST_ACKNOWLEDGE_RISK=true`。浏览器默认拒绝私有 IP、
+localhost 和 metadata 地址；打开 localhost 需要单独显式高风险配置。
+
+**限制**：当前仅支持受信任本地使用。原生元素控制先调用 `inspect_elements`，然后使用一次性 `element_ref` 进行 `click_element` 或 `set_element_text`；Linux Wayland 全局输入暂不支持。尚无云端隔离 GUI Worker、
+端到端实时画面、敏感动作逐次授权、经代理强制的 DNS/出站限制；
+不得把这两个工具开放给多租户或公网 Agent。详见
+[Browser/Computer Use 实现与安全边界](docs/design/2026-10-19-browser-computer-use-phase1.md)。
+
 ## 本地运行的并发保护
 
 Web 服务为正在执行的 Agent 回合设置进程内的并发上限：
