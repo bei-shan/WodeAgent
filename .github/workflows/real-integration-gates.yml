@@ -103,7 +103,7 @@ jobs:
           docker info
           docker pull python:3.12-alpine
       - name: Run real Docker integration (no skips)
-        run: python scripts/ci_integration_gate.py tests/test_sandbox_docker_integration.py tests/test_sandbox_snapshot_docker_integration.py
+        run: python scripts/ci_integration_gate.py tests/test_sandbox_docker_integration.py tests/test_sandbox_snapshot_docker_integration.py tests/test_hosted_docker_real.py
 
   opentelemetry-real:
     name: Real OTel SDK in-memory exporter
