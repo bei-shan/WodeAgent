@@ -6,11 +6,14 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional  # noqa: F811
 
-from core.background_task import BackgroundTaskRunner
+from core.background_task import BackgroundTaskRunner, valid_task_id
 from ..base import ErrorCode, Tool, ToolParameter
 
 
 class TaskOutputTool(Tool):
+    strict_input_contract = True
+    MAX_RESULT_CHARS = 20000
+    MAX_EVENT_CHARS = 500
     """Retrieve results of a background task."""
     usage_notes = 'TaskOutput: Fetch results from a background task. Use run_in_background=true on Task first.'
 
@@ -47,15 +50,17 @@ class TaskOutputTool(Tool):
         start_time = time.monotonic()
         params_input = dict(parameters)
         task_id = parameters.get("task_id")
-        if not isinstance(task_id, str) or not task_id.strip():
+        if not valid_task_id(task_id):
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
-                message="Parameter 'task_id' is required.",
+                message="Parameter 'task_id' must be a safe opaque identifier.",
                 params_input=params_input,
             )
 
         status = self._runner.get_status(task_id)
         info = self._runner.get_rich_status(task_id)
+        if not isinstance(info, dict):
+            info = {}
 
         if status == "not_found":
             return self.create_error_response(
@@ -75,8 +80,13 @@ class TaskOutputTool(Tool):
                 "current_tool": info.get("current_tool"),
             }
             last = info.get("last_event")
-            if last:
-                data["last_event"] = last
+            if isinstance(last, dict):
+                data["last_event"] = {
+                    "type": str(last.get("type", ""))[:80],
+                    "content": str(last.get("content", ""))[:self.MAX_EVENT_CHARS],
+                }
+            else:
+                last = None
 
             # Build readable summary for the LLM
             parts = [f"Task '{task_id}' is running ({elapsed:.0f}s)."]
@@ -105,14 +115,22 @@ class TaskOutputTool(Tool):
                 time_ms=int((time.monotonic() - start_time) * 1000),
             )
 
-        task_result = result.get("result", "")
+        raw_result = result.get("result", "")
+        task_result = raw_result if isinstance(raw_result, str) else str(raw_result)
+        result_truncated = len(task_result) > self.MAX_RESULT_CHARS
+        task_result = task_result[:self.MAX_RESULT_CHARS]
         tool_usage = result.get("tool_usage", {})
+        if not isinstance(tool_usage, dict):
+            tool_usage = {}
+        # A corrupt/third-party status payload must not crash aggregation.
+        tool_calls = sum(v for v in tool_usage.values() if type(v) is int and v >= 0)
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         data = {
             "task_id": task_id,
             "status": result.get("status"),
             "result": task_result,
+            "result_truncated": result_truncated,
             "tool_usage": tool_usage,
             "finished_at": result.get("finished_at"),
         }
@@ -122,10 +140,14 @@ class TaskOutputTool(Tool):
 
         return self.create_success_response(
             data=data,
-            text=f"Task '{task_id}' {result.get('status')}.\n\n{task_result}",
+            text=(
+                f"Task '{task_id}' {result.get('status')}.\n\n{task_result}"
+                + ("\n[Result truncated: inspect task artifacts for complete output.]"
+                   if result_truncated else "")
+            ),
             params_input=params_input,
             time_ms=elapsed_ms,
             extra_stats={
-                "tool_calls": sum(tool_usage.values()) if isinstance(tool_usage, dict) else 0,
+                "tool_calls": tool_calls,
             },
         )

@@ -78,6 +78,15 @@ class AgentLoop:
             host._maybe_compress_history(pending_input, trace_logger, step)
 
             messages, base_messages = host._build_step_messages(trace_logger, step)
+            # Media is first-turn, ephemeral model input only. The history
+            # objects and tracing event payloads retain text/path refs, never
+            # base64 image bytes or parsed file bodies.
+            # Retain the user's image/document input across tool calls in
+            # this active turn, while never persisting media in history.
+            from core.runtime.attachment_context import apply_transient_attachments
+            parts = getattr(host, "_turn_attachment_parts", ())
+            messages = apply_transient_attachments(messages, parts, first_step=True)
+            base_messages = apply_transient_attachments(base_messages, parts, first_step=True)
 
             result = host._invoke_llm_with_retry(
                 messages, base_messages, tools_schema, tool_choice,

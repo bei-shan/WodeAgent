@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
+from core.runtime.file_commit import commit_utf8, ConcurrentFileChange, open_regular_workspace_file, read_workspace_bytes
 
 
 class MultiEditTool(Tool):
@@ -368,7 +369,7 @@ class MultiEditTool(Tool):
         try:
             # 以二进制模式读取，保留原始换行符
             # 这样可以准确检测文件的换行符类型（CRLF 或 LF）
-            raw_content = abs_path.read_bytes()
+            raw_content = read_workspace_bytes(abs_path, self._root)
             original_size = len(raw_content)
             
             # 尝试 UTF-8 解码
@@ -538,20 +539,25 @@ class MultiEditTool(Tool):
                         path_resolved=rel_path,
                     )
                 
-                # 原子写入：先写临时文件，再 rename
-                temp_path = abs_path.with_suffix(f".tmp.{os.getpid()}.{int(time.time() * 1000000)}")
-                try:
-                    with open(temp_path, "w", encoding="utf-8", newline="") as f:
-                        f.write(new_content)
-                    temp_path.replace(abs_path)
-                finally:
-                    if temp_path.exists():
-                        temp_path.unlink()
-                
+                # Never clobber a concurrent new file; preserve the
+                # original mode, and reject in-place changes since stat.
+                bytes_written = commit_utf8(
+                    abs_path, new_content,
+                    expected_stat=current_stat,
+                    workspace_root=self._root,
+                )
+
                 applied = True
                 bytes_written = len(new_content.encode("utf-8"))
                 new_size = abs_path.stat().st_size
                 
+            except ConcurrentFileChange:
+                time_ms = int((time.monotonic() - start_time) * 1000)
+                return self.create_error_response(
+                    error_code=ErrorCode.CONFLICT,
+                    message="File changed during commit. Read the file again before editing.",
+                    params_input=params_input, time_ms=time_ms, path_resolved=rel_path,
+                )
             except PermissionError:
                 time_ms = int((time.monotonic() - start_time) * 1000)
                 return self.create_error_response(
@@ -610,7 +616,7 @@ class MultiEditTool(Tool):
             True 如果是二进制文件，False 如果是文本文件
         """
         try:
-            with open(path, "rb") as f:
+            with open_regular_workspace_file(path, self._root) as f:
                 chunk = f.read(self.BINARY_CHECK_SIZE)
                 return b"\x00" in chunk
         except Exception:

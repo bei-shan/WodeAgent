@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.constants import ALWAYS_IGNORE_DIRS
+from core.runtime.process_execution import run_process
+from core.runtime.cancellation import current_cancel_event
 
 
 class MatchItem(TypedDict):
@@ -20,6 +22,14 @@ class MatchItem(TypedDict):
     file: str  # 相对于项目根目录的文件路径
     line: int  # 行号（从1开始）
     text: str  # 完整的行文本
+
+
+class RgOutputLimited(Exception):
+    """Ripgrep produced more data than we can safely publish."""
+    def __init__(self, matches: list[MatchItem], reason: str):
+        super().__init__(reason)
+        self.matches = matches
+        self.reason = reason
 
 
 class GrepTool(Tool):
@@ -32,6 +42,9 @@ class GrepTool(Tool):
 
     # 最大返回结果数
     MAX_RESULTS = 100
+    MAX_RG_OUTPUT_BYTES = 512 * 1024
+    MAX_MATCH_TEXT = 4096
+    MAX_FALLBACK_FILE_BYTES = 2 * 1024 * 1024
 
     # 搜索超时时间（秒）
     TIMEOUT_SEC = 2.0
@@ -88,6 +101,12 @@ class GrepTool(Tool):
             )
 
         path = parameters.get("path", ".")
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="Search path must be a non-empty path string.",
+                params_input=params_input,
+            )
         include = parameters.get("include")
         case_sensitive = parameters.get("case_sensitive", False)
 
@@ -152,6 +171,9 @@ class GrepTool(Tool):
                     include=include,
                     case_sensitive=case_sensitive,
                 )
+            except RgOutputLimited as e:
+                aborted_reason = e.reason
+                matches = e.matches
             except subprocess.TimeoutExpired as e:
                 aborted_reason = "timeout"
                 output = getattr(e, "output", "") or ""
@@ -279,21 +301,23 @@ class GrepTool(Tool):
 
         cmd.extend(["--", pattern, search_path])
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(self._root),
-            capture_output=True,
-            text=True,
-            timeout=self.TIMEOUT_SEC,
+        result = run_process(
+            cmd, shell=False, cwd=str(self._root), env=os.environ.copy(),
+            timeout=self.TIMEOUT_SEC, cancel_event=current_cancel_event(),
+            max_output_bytes=self.MAX_RG_OUTPUT_BYTES,
         )
-
+        if result.interrupted:
+            raise RgOutputLimited(self._parse_rg_json_output(result.stdout), "interrupted")
         if result.returncode == 2:
-            err = result.stderr.strip() or "ripgrep failed"
-            raise ValueError(err)
-        if result.returncode not in (0, 1):
-            raise RuntimeError(result.stderr.strip() or "ripgrep error")
-
-        return self._parse_rg_json_output(result.stdout)
+            raise ValueError(result.stderr.strip()[:300] or "ripgrep failed")
+        if result.returncode not in (0, 1, None):
+            raise RuntimeError(result.stderr.strip()[:300] or "ripgrep error")
+        matches = self._parse_rg_json_output(result.stdout)
+        if result.timed_out or result.output_truncated:
+            raise RgOutputLimited(
+                matches, "timeout" if result.timed_out else "output_limit"
+            )
+        return matches
 
     def _parse_rg_json_output(self, output: str) -> List[MatchItem]:
         """解析 ripgrep 的 JSON 输出"""
@@ -315,18 +339,21 @@ class GrepTool(Tool):
             if not path_text or not line_num or line_text is None:
                 continue
             file_path = Path(path_text)
-            if file_path.is_absolute():
-                try:
-                    rel_file = file_path.resolve().relative_to(self._root).as_posix()
-                except Exception:
-                    rel_file = file_path.as_posix()
-            else:
-                rel_file = file_path.as_posix()
+            try:
+                target = (file_path if file_path.is_absolute()
+                          else self._root / file_path).resolve()
+                rel_file = target.relative_to(self._root).as_posix()
+            except (OSError, ValueError, RuntimeError):
+                # Never publish arbitrary absolute paths or outside-root
+                # matches, even if a third-party rg wrapper produced them.
+                continue
             matches.append({
                 "file": rel_file,
                 "line": int(line_num),
-                "text": line_text.rstrip("\n"),
+                "text": line_text.rstrip("\n")[:self.MAX_MATCH_TEXT],
             })
+            if len(matches) > self.MAX_RESULTS:
+                break
         return matches
 
     def _run_python_search(
@@ -371,15 +398,27 @@ class GrepTool(Tool):
 
                 file_path = Path(current_root) / filename
                 try:
+                    # os.walk does not descend directory symlinks, but it
+                    # *does* list symlinked files. Never read an outside file
+                    # via a workspace symlink in Python fallback.
+                    if file_path.is_symlink():
+                        continue
+                    file_path.resolve().relative_to(self._root)
+                    if file_path.stat().st_size > self.MAX_FALLBACK_FILE_BYTES:
+                        continue
                     with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
                         for line_no, line in enumerate(handle, start=1):
                             if regex.search(line):
                                 matches.append({
                                     "file": rel_display_posix,
                                     "line": line_no,
-                                    "text": line.rstrip("\n"),
+                                    "text": line.rstrip("\n")[:self.MAX_MATCH_TEXT],
                                 })
-                except (OSError, UnicodeError):
+                                if len(matches) > self.MAX_RESULTS:
+                                    return matches, "count_limit"
+                            if self._is_timed_out(start_time):
+                                return matches, "timeout"
+                except (OSError, UnicodeError, ValueError):
                     continue
 
                 if self._is_timed_out(start_time):
@@ -482,7 +521,7 @@ class GrepTool(Tool):
         has_results = len(matches) > 0
         is_timeout_no_results = aborted_reason == "timeout" and not has_results
         # 修复：有结果 + 超时也应该是 partial（移除 aborted_reason != "timeout" 条件）
-        is_partial = fallback_used or (truncated and has_results) or (aborted_reason is not None and has_results)
+        is_partial = fallback_used or truncated or aborted_reason == "output_limit" or (aborted_reason is not None and has_results)
         
         # 构建 data.matches（对象数组：{file, line, text}）
         data: Dict[str, Any] = {
@@ -517,6 +556,9 @@ class GrepTool(Tool):
             else:
                 lines.append("[Error: Search timed out (>2s) without finding results.]")
         
+        if aborted_reason == "output_limit":
+            lines.append("[Partial: ripgrep output was capped. Narrow the pattern or path.]")
+
         if fallback_used:
             if aborted_reason == "rg_not_found":
                 lines.append("[Info: ripgrep not available; used slower Python fallback search.]")

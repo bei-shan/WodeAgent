@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from core.runtime.config_scope import bind_current_context
 import time
@@ -24,6 +25,14 @@ from typing import Any, Callable, Dict, List, Optional
 from core.llm_recovery import ModelInvocationError
 
 logger = logging.getLogger(__name__)
+
+_TASK_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$")
+
+
+def valid_task_id(value: object) -> bool:
+    """Task ids are opaque basenames, never paths or traversal fragments."""
+    return isinstance(value, str) and _TASK_ID_PATTERN.fullmatch(value) is not None
+
 
 
 class BackgroundTaskRunner:
@@ -73,6 +82,8 @@ class BackgroundTaskRunner:
         description:
             Short description shown in runtime summary.
         """
+        if not valid_task_id(task_id):
+            raise ValueError("Background task_id must be a safe opaque identifier")
         with self._lock:
             if task_id in self._tasks:
                 logger.warning("Duplicate background task id: %s", task_id)
@@ -160,6 +171,8 @@ class BackgroundTaskRunner:
 
         Reads ``.tasks/output/{task_id}.json``.
         """
+        if not valid_task_id(task_id):
+            return None
         result_path = self._output_dir / f"{task_id}.json"
         if not result_path.exists():
             return None
@@ -291,6 +304,8 @@ class BackgroundTaskRunner:
 
         Returns entries with step > *since_step*.  Useful for polling.
         """
+        if not valid_task_id(task_id):
+            return []
         progress_path = self._progress_dir / f"{task_id}.jsonl"
         if not progress_path.exists():
             return []
@@ -322,6 +337,8 @@ class BackgroundTaskRunner:
         *, error: dict | None = None,
     ) -> None:
         """Persist task result with atomic write."""
+        if not valid_task_id(task_id):
+            raise ValueError("Refusing to persist unsafe background task_id")
         output = {
             "task_id": task_id,
             "status": status,

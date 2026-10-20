@@ -32,7 +32,10 @@ def test_upload_duplicate_listing_preview_and_download(client):
         files={"file": ("code.py", b"first\nsecond\nthird\n", "text/plain")},
     )
     assert first.status_code == 200
-    assert first.json() == {"path": "code.py", "name": "code.py", "size": 19}
+    assert first.json()["path"] == "code.py"
+    assert first.json()["name"] == "code.py"
+    assert first.json()["size"] == 19
+    assert len(first.json()["attachment_ref"]) >= 32
     second = http.post(
         f"/api/sessions/{sid}/upload",
         files={"file": ("code.py", b"other", "text/plain")},

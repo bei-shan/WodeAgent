@@ -15,6 +15,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
 from core.runtime.cancellation import current_cancel_event
 from core.runtime.process_execution import run_process
+from core.runtime.command_approval import authorize_bash_command
 
 load_env()
 
@@ -22,7 +23,7 @@ load_env()
 class BashTool(Tool):
     strict_input_contract = True
     """Shell 命令执行工具，支持命令串联与沙箱限制"""
-    usage_notes = 'Bash: Execute shell commands in project sandbox. Use for build/test/git/install commands. Do NOT use for: ls/cat/head/tail (use Read/LS), grep/find (use Grep/Glob). Interactive commands blocked. Network tools (curl/wget) blocked by default. Supports chaining (&&, ||, ;).'
+    usage_notes = 'Bash: Execute commands on the selected execution backend. A local process is NOT an OS sandbox; cwd checks and command filters do not confine filesystem/network access. Use for build/test/git/install. Prefer Read/LS/Grep/Glob for inspection. Interactive commands and curl/wget are blocked by default. Chain with &&, ||, ;. Output is bounded.'
 
     # 默认超时时间（毫秒）
     DEFAULT_TIMEOUT_MS = 120000
@@ -32,7 +33,8 @@ class BashTool(Tool):
 
     # 输出截断阈值（与 ObservationTruncator 对齐）
     OUTPUT_MAX_LINES = 2000
-    OUTPUT_MAX_BYTES = 51200  # 50KB
+    OUTPUT_MAX_BYTES = 51200  # 50 KiB; enforced while child is running
+    MAX_COMMAND_CHARS = 20000
 
     # 交互式命令黑名单（直接拒绝）
     INTERACTIVE_COMMANDS: Set[str] = {
@@ -74,7 +76,7 @@ class BashTool(Tool):
         
         super().__init__(
             name=name,
-            description='Execute a shell command within the project sandbox. Supports command chaining (&&, ||, ;) and limited cd inside the project root.',
+            description='Execute a command in a trusted local shell or an explicitly configured sandbox backend. Local cwd and filters are not process isolation. Output is bounded and cancellation is supported.',
             project_root=project_root,
             working_dir=working_dir if working_dir else project_root,
         )
@@ -100,6 +102,16 @@ class BashTool(Tool):
         """
         start_time = time.monotonic()
         params_input = dict(parameters)
+        # Production fail-closed switch: never silently substitute host Bash
+        # when a container/VM sandbox was required by deployment policy.
+        if os.environ.get("RIDGE_BASH_REQUIRE_SANDBOX", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }:
+            return self.create_error_response(
+                error_code=ErrorCode.ACCESS_DENIED,
+                message="Host Bash disabled: an isolated sandbox backend is required.",
+                params_input=params_input,
+            )
         
         # 提取参数
         command = parameters.get("command")
@@ -126,8 +138,21 @@ class BashTool(Tool):
                 params_input=params_input,
             )
         
+        if len(command) > self.MAX_COMMAND_CHARS:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message=f"Command exceeds {self.MAX_COMMAND_CHARS} characters.",
+                params_input=params_input,
+            )
+        if not isinstance(directory, str) or not directory or "\x00" in directory:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="directory must be a non-empty path string.",
+                params_input=params_input,
+            )
+
         # timeout_ms 校验
-        if not isinstance(timeout_ms, int) or timeout_ms < 1 or timeout_ms > self.MAX_TIMEOUT_MS:
+        if type(timeout_ms) is not int or timeout_ms < 1 or timeout_ms > self.MAX_TIMEOUT_MS:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message=f"timeout_ms must be an integer between 1 and {self.MAX_TIMEOUT_MS}.",
@@ -204,6 +229,19 @@ class BashTool(Tool):
                 params_input=params_input,
             )
 
+        # Command approval is scoped to the exact command, never a cached
+        # workspace path decision. The Web session injects the same broker
+        # used by PermissionGate; hosted isolation remains a separate guard.
+        gate = getattr(self, "_permission_gate", None)
+        broker = getattr(gate, "_broker", None) if gate is not None else None
+        strict_approval = os.environ.get("RIDGE_BASH_APPROVAL_MODE", "").lower() == "strict"
+        if not authorize_bash_command(command, broker, strict=strict_approval):
+            return self.create_error_response(
+                error_code=ErrorCode.ACCESS_DENIED,
+                message="Command approval denied or unavailable. No process was started.",
+                params_input=params_input,
+            )
+
         # =====================================================================
         # 执行命令
         # =====================================================================
@@ -246,9 +284,13 @@ class BashTool(Tool):
             result = run_process(
                 run_args, shell=use_shell, cwd=str(target_dir), env=env,
                 timeout=timeout_sec, cancel_event=current_cancel_event(),
+                max_output_bytes=self.OUTPUT_MAX_BYTES,
             )
             stdout = result.stdout
             stderr = result.stderr
+            stdout_total_bytes = result.stdout_bytes
+            stderr_total_bytes = result.stderr_bytes
+            process_truncated = result.output_truncated
             exit_code = result.returncode
             timed_out = result.timed_out
             if result.interrupted:
@@ -289,13 +331,25 @@ class BashTool(Tool):
         
         time_ms = int((time.monotonic() - start_time) * 1000)
         
+        # The subprocess runner limits bytes while the child is still
+        # writing. Also cap logical lines *before* serializing the result.
+        def trim_lines(value: str) -> tuple[str, bool]:
+            lines = value.splitlines(keepends=True)
+            if len(lines) <= self.OUTPUT_MAX_LINES:
+                return value, False
+            return "".join(lines[:self.OUTPUT_MAX_LINES]), True
+
+        stdout, stdout_lines_truncated = trim_lines(stdout)
+        stderr, stderr_lines_truncated = trim_lines(stderr)
+
         # 检测输出大小是否超阈值
         stdout_lines = stdout.count("\n") + 1 if stdout else 0
         stdout_bytes = len(stdout.encode("utf-8"))
         stderr_lines = stderr.count("\n") + 1 if stderr else 0
         stderr_bytes = len(stderr.encode("utf-8"))
         output_too_large = (
-            stdout_lines > self.OUTPUT_MAX_LINES
+            process_truncated or stdout_lines_truncated or stderr_lines_truncated
+            or             stdout_lines > self.OUTPUT_MAX_LINES
             or stdout_bytes > self.OUTPUT_MAX_BYTES
             or stderr_lines > self.OUTPUT_MAX_LINES
             or stderr_bytes > self.OUTPUT_MAX_BYTES
@@ -314,8 +368,10 @@ class BashTool(Tool):
         
         # 构建 stats 字段
         extra_stats = {
-            "stdout_bytes": len(stdout.encode("utf-8")),
-            "stderr_bytes": len(stderr.encode("utf-8")),
+            "stdout_bytes": stdout_total_bytes,
+            "stderr_bytes": stderr_total_bytes,
+            "stdout_captured_bytes": len(stdout.encode("utf-8")),
+            "stderr_captured_bytes": len(stderr.encode("utf-8")),
         }
         
         # 构建 context 字段
@@ -324,6 +380,9 @@ class BashTool(Tool):
             "cwd": directory_resolved,
         }
         
+        # Explicitly explain missing output to the model.
+        truncate_notice = "\n[Output truncated: use a narrower command or targeted Read/Grep.]"
+
         # 构建 text 字段
         if timed_out:
             if stdout or stderr:
@@ -338,7 +397,7 @@ class BashTool(Tool):
                 if stderr:
                     text_lines.append(f"\n--- STDERR ({len(stderr.encode('utf-8'))} bytes) ---")
                     text_lines.append(stderr[:1000] + ("..." if len(stderr) > 1000 else ""))
-                text = "\n".join(text_lines)
+                text = "\n".join(text_lines) + (truncate_notice if output_too_large else "")
                 
                 return self.create_partial_response(
                     data=data,
@@ -370,7 +429,7 @@ class BashTool(Tool):
             if stderr:
                 text_lines.append(f"\n--- STDERR ({len(stderr.encode('utf-8'))} bytes) ---")
                 text_lines.append(stderr[:1000] + ("..." if len(stderr) > 1000 else ""))
-            text = "\n".join(text_lines)
+            text = "\n".join(text_lines) + (truncate_notice if output_too_large else "")
             
             return self.create_success_response(
                 data=data,
@@ -392,7 +451,7 @@ class BashTool(Tool):
             if stderr:
                 text_lines.append(f"\n--- STDERR ({len(stderr.encode('utf-8'))} bytes) ---")
                 text_lines.append(stderr[:2000] + ("..." if len(stderr) > 2000 else ""))
-            text = "\n".join(text_lines)
+            text = "\n".join(text_lines) + (truncate_notice if output_too_large else "")
             
             return self.create_partial_response(
                 data=data,

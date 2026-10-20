@@ -99,6 +99,19 @@ Web 服务为正在执行的 Agent 回合设置进程内的并发上限：
 
 **这不是分布式任务队列或多租户配额**，多 Uvicorn Worker 会各自维护计数器；部署时仍应使用单进程受信任本地模式，等完成统一鉴权、共享数据库与分布式任务租约后再扩容。
 
+## 工具命令审批与附件
+
+Ridge Code 的工具执行分为受信任本地主机执行和 Docker/BoxLite/E2B 沙箱执行。工作目录限制**不等于**进程沙箱：
+
+- `RIDGE_BASH_REQUIRE_SANDBOX=true`：禁止普通本机 Bash 工具执行，必须配置实际隔离执行后端；不能因为沙箱不可用自动回退本机。
+- `RIDGE_BASH_APPROVAL_MODE=strict`：非只读且未经审批的本机命令，在没有交互式审批代理时直接拒绝。Web 会话有审批通道时，逐条请求具体命令授权；授权不自动继承给下一条命令。
+- Windows 本机命令由 Job Object 负责整棵进程树的超时与取消清理，并有独立 Windows CI；此能力不隔离文件权限或网络。
+- 工作区 Write/Edit/MultiEdit 在支持的 POSIX 系统中使用目录文件描述符锚定、协作式锁及原子发布，防止符号链接父目录切换越界。
+
+Web 端上传图片/文档时，文件先进入会话工作区之外的私有暂存目录，经过已配置的 ClamAV 扫描后才会独占发布到 Agent 工作区。上传成功后收到会话绑定的随机附件凭证（不是文件路径权限）；消息只提交凭证，服务端核对上传记录、文件身份和大小，拒绝跨会话或被修改的文件。PNG/JPEG/GIF/WebP 必须通过图片解码和像素上限验证，再作为视觉消息传入当前轮次的**每次模型调用**；UTF-8 文本、PDF、DOCX 可按上限提取为模型文本内容，其他二进制保持路径引用。图片字节和原始文档不会写入会话历史；模型不支持视觉输入时会拒绝或报错。PDF/DOCX 支持独立 Docker 转换：先执行 `docker build -f deploy/document-converter/Dockerfile -t ridge-document-converter:local .`，再设置 `RIDGE_DOCUMENT_CONVERTER_MODE=docker` 与 `RIDGE_DOCUMENT_REQUIRE_SANDBOX=1`，转换容器无网络、无工作区挂载、非 root 且有 CPU/内存/PID/超时限制；容器不可用会拒绝，**不会回退宿主机**。
+
+单个上传限制 25 MiB，单次消息最多 4 个附件、总共 8 MiB，图片最多 4 MiB / 1600 万像素，文本最多 96 KiB，PDF/DOCX 文档解析上限 3 MiB；上传凭证两小时过期。随机凭证的哈希和会话/文件身份信息保存在本地 SQLite，可跨进程恢复；每会话最多 128 份有效上传、100 MiB 有效占用，整库上限 1 GiB。服务启动和每小时执行过期清理，临时失败会重试。可使用 `RIDGE_ATTACHMENT_SCAN_REQUIRED=1` 和 `RIDGE_CLAMD_UNIX_SOCKET=/run/clamav/clamd.ctl` 强制在签发凭证前通过 ClamAV 扫描，扫描服务不可用即拒绝。完整设计和生产边界见 [命令安全和附件处理](docs/design/2026-10-20-command-security-and-attachments.md)。
+
 ## MCP SDK 与连接稳定性
 
 默认使用 MCP Python SDK **2.x**；HTTP 采用新版 Streamable HTTP 客户端，同时保留独立 CI 通道测试 MCP 1.x 的兼容性。MCP stdio 子进程和 HTTP 会话由同一异步所有者管理，同一客户端连续同步工具调用会复用连接，不再每次启动新的 MCP Server。测试包含本地真实 stdio 和 Streamable HTTP 服务，覆盖初始化、调用、资源关闭及超时／取消。

@@ -56,7 +56,7 @@ function AppCore() {
   const [sending, setSending] = useState(false)
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
+  const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string; attachment_ref: string}[]>([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(260)
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -214,7 +214,7 @@ function AppCore() {
 
   // ── Send ────────────────────────────────────────────────────────
   const sendMessage = async () => {
-    if (!input.trim() || sending) return
+    if ((!input.trim() && uploadedFiles.length === 0) || sending) return
     // Auto-create session if none active
     let sid = activeSidRef.current
     if (!sid) {
@@ -227,17 +227,17 @@ function AppCore() {
         connectSession(sid, true)
       } catch (e: any) { alert('创建会话失败：' + e.message); return }
     }
-    // Append @file references for uploaded files
-    let content = input.trim()
-    if (uploadedFiles.length > 0) {
-      const refs = uploadedFiles.map(f => `@${f.path}`).join(' ')
-      content = content ? `${content}\n${refs}` : refs
-      setUploadedFiles([])
-    }
+    // Send structured refs separately: never force binary paths into a
+    // prompt string where they could be forged by user input.
+    const content = input.trim()
+    const attachments = uploadedFiles.map(f => f.attachment_ref)
     setInput(''); setSending(true); setSubagentStatus('')
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
-    try { await api.sessions.send(sid, content) } catch (e: any) {
+    try {
+      await api.sessions.send(sid, content, attachments)
+      setUploadedFiles([])
+    } catch (e: any) {
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `${e.message}`, streaming: false } : m)); setSending(false)
     }
   }
@@ -269,14 +269,24 @@ function AppCore() {
     let sid: string
     try { sid = await ensureSession() }
     catch (error: any) { alert('创建会话失败：' + error.message); e.target.value = ''; return }
-    for (const file of Array.from(files)) {
+    const slots = Math.max(0, 4 - uploadedFiles.length)
+    if (!slots) {
+      alert('每条消息最多附加 4 个文件')
+      e.target.value = ''
+      return
+    }
+    for (const file of Array.from(files).slice(0, slots)) {
+      if (file.size > 25 * 1024 * 1024) {
+        alert(`文件 ${file.name} 超过 25 MiB 上传限制`)
+        continue
+      }
       const form = new FormData()
       form.append('file', file)
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/upload`, { method: 'POST', body: form })
         if (!res.ok) throw new Error('HTTP ' + res.status)
         const data = await res.json()
-        setUploadedFiles(prev => [...prev, { name: data.name, path: data.path }])
+        setUploadedFiles(prev => prev.length >= 4 ? prev : [...prev, { name: data.name, path: data.path, attachment_ref: data.attachment_ref }])
       } catch (error: any) { alert('上传失败：' + error.message) }
     }
     e.target.value = ''

@@ -238,12 +238,30 @@ def create_app(
             headers=headers,
         )
 
+    async def _upload_gc_loop():
+        # Files and grants may predate this server process. The GC uses only
+        # descriptor-anchored existing session paths, never arbitrary client
+        # strings, and never recreates deleted workspaces.
+        while True:
+            try:
+                await asyncio.to_thread(app.state.workspace_service.cleanup_expired_uploads)
+            except Exception:
+                logger.exception("Attachment GC iteration failed")
+            await asyncio.sleep(3600)
+
     @app.on_event("startup")
     async def _startup():
+        app.state.upload_gc_task = asyncio.create_task(
+            _upload_gc_loop(), name="ridge-upload-gc"
+        )
         logger.info("Service started — project_root=%s", app.state.project_root)
 
     @app.on_event("shutdown")
     async def _shutdown():
+        gc_task = getattr(app.state, "upload_gc_task", None)
+        if gc_task is not None:
+            gc_task.cancel()
+            await asyncio.gather(gc_task, return_exceptions=True)
         ctrl: SessionController = app.state.controller
         # Do not close shared MCP clients or delete worktrees while a worker
         # is executing. Keep the event loop responsive during the bounded drain.
@@ -362,7 +380,9 @@ def create_app(
 
     @app.delete("/api/sessions/{sid}")
     async def delete_session(sid: str):
-        return app.state.session_service.delete(sid)
+        response = app.state.session_service.delete(sid)
+        await asyncio.to_thread(app.state.workspace_service.revoke_session_uploads, sid)
+        return response
 
     @app.put("/api/sessions/{sid}/rename")
     async def rename_session(sid: str, body: dict):
@@ -420,9 +440,17 @@ def create_app(
 
     @app.post("/api/sessions/{sid}/messages")
     async def send_message(sid: str, body: MessageSend):
-        # Lazy Agent creation touches files/plugins/models and can block.
-        # Keep the ASGI loop responsive even on a cold session.
-        return await asyncio.to_thread(app.state.turn_service.send, sid, body.content)
+        # Resolve every attachment through this session's anchored workspace
+        # before any new Agent turn is admitted. Client-provided paths alone
+        # are never accepted as media authorization.
+        if not body.content.strip() and not body.attachments:
+            raise InvalidInputError("Message text or attachment is required")
+        parts = await asyncio.to_thread(
+            app.state.workspace_service.prepare_attachments, sid, body.attachments
+        )
+        return await asyncio.to_thread(
+            app.state.turn_service.send, sid, body.content, parts,
+        )
 
     @app.post("/api/sessions/{sid}/interrupt")
     async def interrupt(sid: str):

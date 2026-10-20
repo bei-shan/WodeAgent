@@ -157,8 +157,8 @@ export const sessions = {
     req<{ status: string }>('PUT', `/sessions/${id}/rename`, { title }),
   togglePin: (id: string) =>
     req<{ pinned: boolean }>('POST', `/sessions/${id}/pin`),
-  send:   (id: string, content: string) =>
-    req<{ status: string }>('POST', `/sessions/${id}/messages`, { content }),
+  send:   (id: string, content: string, attachments: string[] = []) =>
+    req<{ status: string }>('POST', `/sessions/${id}/messages`, { content, attachments }),
   interrupt: (id: string) =>
     req<{ status: string }>('POST', `/sessions/${id}/interrupt`),
   resolvePerm: (sid: string, rid: string, decision: string) =>

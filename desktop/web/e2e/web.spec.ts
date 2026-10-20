@@ -1,9 +1,9 @@
 import { test, expect, type Page } from '@playwright/test'
 
-type MockState = { modelChanges: string[]; interrupts: number; messages: string[]; uploads: number }
+type MockState = { modelChanges: string[]; interrupts: number; messages: string[]; uploads: number; attachments: string[][] }
 
 async function mockBackend(page: Page): Promise<MockState> {
-  const state: MockState = { modelChanges: [], interrupts: 0, messages: [], uploads: 0 }
+  const state: MockState = { modelChanges: [], interrupts: 0, messages: [], uploads: 0, attachments: [] }
   // Simulate a transport connection independent of the real LLM provider.
   await page.addInitScript(() => {
     const target = window as any
@@ -78,6 +78,7 @@ async function mockBackend(page: Page): Promise<MockState> {
     })
     if (path.endsWith('/messages') && method === 'POST') {
       state.messages.push(request.postDataJSON().content)
+      state.attachments.push(request.postDataJSON().attachments ?? [])
       return ok({ status: 'accepted' })
     }
     if (path.endsWith('/interrupt') && method === 'POST') {
@@ -86,7 +87,7 @@ async function mockBackend(page: Page): Promise<MockState> {
     }
     if (path.endsWith('/upload') && method === 'POST') {
       state.uploads++
-      return ok({ name: 'uploaded.txt', path: 'uploaded.txt', size: 10 })
+      return ok({ name: 'uploaded.txt', path: 'uploaded.txt', size: 10, attachment_ref: 'mock-upload-token' })
     }
     if (path.endsWith('/files') && method === 'GET') {
       return ok({ path: url.searchParams.get('path') || '.',
@@ -548,7 +549,8 @@ test('file attachment can create a session from an empty chat', async ({ page })
   await expect(page.getByLabel('待发送的附件').getByText('uploaded.txt')).toBeVisible()
   await page.getByPlaceholder('问任何问题').fill('检查附件')
   await page.getByRole('button', { name: '发送消息' }).click()
-  await expect.poll(() => state.messages).toEqual(['检查附件\n@uploaded.txt'])
+  await expect.poll(() => state.messages).toEqual(['检查附件'])
+  await expect.poll(() => state.attachments).toEqual([['mock-upload-token']])
   await expect(page.locator('.chat-composer')).toHaveCount(1)
   await expect(page.getByPlaceholder('问任何问题')).toHaveCount(1)
 })

@@ -14,6 +14,10 @@ load_env()
 
 class SkillTool(Tool):
     """Load a skill by name and return its expanded content."""
+
+    strict_input_contract = True
+    MAX_ARGUMENT_CHARS = 4000
+    MAX_LOADED_SKILL_BYTES = 256 * 1024
     usage_notes = 'Skill: Load a named skill by its identifier. Use when user mentions a skill by name (e.g. $code-review) or when task clearly matches a skill description. Do not preload all skills.'
 
     def __init__(
@@ -47,8 +51,8 @@ class SkillTool(Tool):
             ToolParameter(
                 name="name",
                 type="string",
-                description="Skill name (required for load/create)",
-                required=True,
+                description="Skill name (required for load/create/read_resource, optional for list)",
+                required=False,
             ),
             ToolParameter(
                 name="resource",
@@ -84,9 +88,33 @@ class SkillTool(Tool):
         start_time = time.monotonic()
         params_input = dict(parameters)
 
-        action = (parameters.get("action") or "load").strip().lower()
+        requested_action = parameters.get("action", "load")
+        if not isinstance(requested_action, str):
+            return self.create_error_response(
+                ErrorCode.INVALID_PARAM, "Skill action must be a string.",
+                params_input=params_input,
+            )
+        action = requested_action.strip().lower()
+        if action not in {"load", "list", "create", "read_resource"}:
+            return self.create_error_response(
+                ErrorCode.INVALID_PARAM, "Unsupported Skill action.",
+                params_input=params_input,
+            )
         name = parameters.get("name")
         args = parameters.get("args") or ""
+        if (not isinstance(args, str) or len(args) > self.MAX_ARGUMENT_CHARS):
+            return self.create_error_response(
+                ErrorCode.INVALID_PARAM, "Skill arguments must be a short string.",
+                params_input=params_input,
+            )
+        if action == "create" and any(
+            key in parameters and not isinstance(parameters[key], str)
+            for key in ("description", "content")
+        ):
+            return self.create_error_response(
+                ErrorCode.INVALID_PARAM, "Skill description and content must be strings.",
+                params_input=params_input,
+            )
 
         if action == "list":
             skills = self._skill_loader.list_skills(refresh=True)
@@ -227,6 +255,16 @@ class SkillTool(Tool):
         except ValueError:
             rel_path = str(skill_path)
         try:
+            if not self._skill_loader._safe_skill_path(skill_path):
+                return self.create_error_response(
+                    ErrorCode.PERMISSION_DENIED, "Skill path is not authorized.",
+                    params_input=params_input, path_resolved=rel_path,
+                )
+            if skill_path.stat().st_size > self.MAX_LOADED_SKILL_BYTES:
+                return self.create_error_response(
+                    ErrorCode.INVALID_PARAM, "Skill exceeds 256 KiB.",
+                    params_input=params_input, path_resolved=rel_path,
+                )
             raw_content = skill_path.read_text(encoding="utf-8")
         except PermissionError:
             return self.create_error_response(

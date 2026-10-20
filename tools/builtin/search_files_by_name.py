@@ -72,10 +72,10 @@ class SearchFilesByNameTool(Tool):
         params_input = dict(parameters)
         
         pattern = parameters.get("pattern")
-        if not pattern:
+        if not isinstance(pattern, str) or not pattern.strip():
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
-                message="Missing required parameter 'pattern'.",
+                message="Missing required parameter 'pattern' (non-empty string).",
                 params_input=params_input,
             )
 
@@ -84,7 +84,19 @@ class SearchFilesByNameTool(Tool):
         include_hidden = parameters.get("include_hidden", False)
         include_ignored = parameters.get("include_ignored", False)
 
-        if not isinstance(limit, int) or limit < 1 or limit > 200:
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="path must be a non-empty string.",
+                params_input=params_input,
+            )
+        if type(include_hidden) is not bool or type(include_ignored) is not bool:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="include_hidden and include_ignored must be booleans.",
+                params_input=params_input,
+            )
+        if type(limit) is not int or limit < 1 or limit > 200:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message="limit must be an integer between 1 and 200.",
@@ -178,6 +190,16 @@ class SearchFilesByNameTool(Tool):
                     # 展示路径：相对于项目根目录
                     rel_display_path = Path(current_root).resolve().relative_to(self._root) / filename
                     rel_display_posix = rel_display_path.as_posix()
+
+                    # A symlink to an outside-workspace file is not an
+                    # accessible workspace file. LS may show the link itself,
+                    # but Glob must not recommend it as a usable search hit.
+                    entry_path = Path(current_root) / filename
+                    if entry_path.is_symlink():
+                        try:
+                            entry_path.resolve().relative_to(self._root)
+                        except (ValueError, OSError, RuntimeError):
+                            continue
 
                     # 检查文件是否匹配 glob 模式
                     if self._match_pattern(rel_match_posix, pattern_normalized):
