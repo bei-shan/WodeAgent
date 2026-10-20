@@ -50,3 +50,15 @@ def test_bash_strict_mode_without_broker_fails_closed(tmp_path, monkeypatch):
     out = json.loads(tool.run({"command": "python -V"}))
     assert out["status"] == "error"
     assert out["error"]["code"] == "ACCESS_DENIED"
+
+
+def test_isolated_only_policy_never_starts_host_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIDGE_BASH_REQUIRE_SANDBOX", "true")
+    tool = BashTool(project_root=tmp_path)
+    from unittest.mock import patch
+    with patch("tools.builtin.bash.run_process") as child:
+        result = json.loads(tool.run({"command": "git status"}))
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "ACCESS_DENIED"
+    assert "isolated sandbox" in result["error"]["message"]
+    child.assert_not_called()
