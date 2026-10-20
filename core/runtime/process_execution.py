@@ -2,7 +2,7 @@
 
 Drain both child pipes concurrently while retaining a strictly bounded
 number of bytes per stream (128 KiB by default). This is output resource control, not process or network isolation.
-POSIX launches its own process group; Windows still needs Job Object support.
+POSIX launches its own process group; Windows assigns children to a kill-on-close Job Object.
 """
 from __future__ import annotations
 
@@ -30,7 +30,15 @@ class ProcessOutcome:
     stderr_truncated: bool = False
 
 
-def _kill_tree(proc: subprocess.Popen[Any]) -> None:
+def _kill_tree(proc: subprocess.Popen[Any], job: Any = None) -> None:
+    # A completed shell may have living grandchildren; kill its Job Object
+    # even when the direct child has already exited.
+    if job is not None:
+        try:
+            job.terminate()
+            return
+        except OSError:
+            pass
     if proc.poll() is not None:
         return
     if os.name == "posix":
@@ -103,14 +111,41 @@ def run_process(
     if cancel_event is not None and cancel_event.is_set():
         return ProcessOutcome("", "", None, interrupted=True)
     opts: dict[str, Any] = {"start_new_session": True} if os.name == "posix" else {}
+    job = None
     if os.name == "nt":
+        from core.runtime.windows_process_job import WindowsProcessJob
+        # Set up containment BEFORE spawning. If unavailable, no command runs.
+        job = WindowsProcessJob()
         opts["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    process = subprocess.Popen(
-        args, shell=shell, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-        **opts,
-    )
+    try:
+        process = subprocess.Popen(
+            args, shell=shell, cwd=cwd, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+            **opts,
+        )
+    except BaseException:
+        if job is not None:
+            job.close()
+        raise
+    if job is not None:
+        try:
+            job.assign(process.pid)
+        except OSError as exc:
+            # Do not silently downgrade to killing only the direct process.
+            job.close()
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            raise OSError("Windows Job Object assignment failed; refusing uncontained execution") from exc
     captured = (bytearray(), bytearray())
     overflow = ([False], [False])
     streams = (process.stdout, process.stderr)
@@ -142,7 +177,7 @@ def run_process(
             except subprocess.TimeoutExpired:
                 continue
     except BaseException:
-        _kill_tree(process)
+        _kill_tree(process, job)
         try:
             process.wait(timeout=1)
         except subprocess.TimeoutExpired:
@@ -150,11 +185,16 @@ def run_process(
         raise
     finally:
         if timed_out or interrupted:
-            _kill_tree(process)
+            _kill_tree(process, job)
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                _kill_tree(process)
+                _kill_tree(process, job)
+
+        # Closing the last Job Object handle kills any remaining descendants
+        # even when the shell already completed successfully.
+        if job is not None:
+            job.close()
 
         # The process may have spawned a detached child holding stdout open.
         # Read what arrived, then close our descriptors without an unbounded
