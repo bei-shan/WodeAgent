@@ -10,13 +10,12 @@ import os
 import re
 import stat
 import secrets
-import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
 from core.runtime.session_controller import SessionController
+from .attachment_store import AttachmentGrantStore, AttachmentQuotaExceeded
 from .errors import ForbiddenError, InvalidInputError, NotFoundError, PayloadTooLargeError
 
 _SESSION_ID = re.compile(r"[0-9a-f]{12}\Z")
@@ -37,12 +36,11 @@ class WorkspaceService:
     def __init__(self, controller: SessionController, data_dir: str | Path):
         self.controller = controller
         self.workspace_base = Path(data_dir) / "sessions"
-        # Random, short-lived upload capabilities. Never grant arbitrary
-        # workspace paths as attachments; uploaded files may be unrelated
-        # to Agent-generated private/config files. Local server owns this
-        # registry; distributed hosted mode needs its own durable asset DB.
-        self._uploaded: dict[str, dict[str, tuple[str, tuple[int, ...], float]]] = {}
-        self._uploaded_lock = threading.RLock()
+        # Durable hashed credentials survive local API restarts and are
+        # safe across multiple workers sharing the same local data directory.
+        # Hosted deployments must use a tenant-aware object store instead.
+        self._tenant_id = "local"
+        self._uploads = AttachmentGrantStore(Path(data_dir) / "attachments.sqlite3")
 
     def _validate_session(self, sid: str) -> None:
         if not _SESSION_ID.fullmatch(sid) or self.controller.get_session(sid) is None:
@@ -211,20 +209,18 @@ class WorkspaceService:
             for path in paths
         ):
             raise InvalidInputError("Invalid or repeated attachment reference")
-        with self._uploaded_lock:
-            session_uploads = self._uploaded.get(sid, {})
-            # Always refuse a guessed filename, even if it exists under
-            # the session root and would otherwise be readable.
-            tickets = [session_uploads.get(ref) for ref in paths]
+        # Only an issued, unexpired credential may designate a model
+        # attachment. A path string is never itself an authorization.
+        tickets = [
+            self._uploads.resolve(ref, self._tenant_id, sid) for ref in paths
+        ]
         if any(ticket is None for ticket in tickets):
             raise ForbiddenError("Attachment upload credential missing or expired")
         parts = []
         total = 0
         for ticket in tickets:
             assert ticket is not None
-            path, expected_identity, issued = ticket
-            if time.monotonic() - issued > 7200:
-                raise ForbiddenError("Attachment upload credential expired")
+            path, expected_identity = ticket.filename, ticket.identity
             # _parts and _open_file enforce descriptor-based per-session root
             # confinement, including O_NOFOLLOW for symlinks.
             components = self._parts(path)
@@ -255,6 +251,38 @@ class WorkspaceService:
             except ValueError as exc:
                 raise InvalidInputError(str(exc)) from exc
         return parts
+
+    def cleanup_expired_uploads(self, *, now: float | None = None) -> dict:
+        """Revoke expired grants and unlink ONLY unchanged session upload files.
+
+        Unlinking is confined by the session root fd and the exact identity
+        saved when uploaded. A user-created replacement or symlink is never
+        removed. Caller should schedule this periodically for idle servers.
+        """
+        removed = 0
+        expired = self._uploads.expire(now=now)
+        for grant in expired:
+            if grant.tenant_id != self._tenant_id:
+                continue
+            try:
+                with self._directory(grant.session_id, ".") as parent_fd:
+                    latest = os.stat(
+                        grant.filename, dir_fd=parent_fd, follow_symlinks=False,
+                    )
+                    identity = (
+                        latest.st_dev, latest.st_ino, latest.st_size,
+                        latest.st_mtime_ns, latest.st_ctime_ns,
+                    )
+                    if stat.S_ISREG(latest.st_mode) and identity == grant.identity:
+                        os.unlink(grant.filename, dir_fd=parent_fd)
+                        removed += 1
+            except (OSError, NotFoundError, ForbiddenError):
+                # A deleted, replaced or inaccessible file is no longer ours.
+                continue
+        return {"expired_grants": len(expired), "files_removed": removed}
+
+    def revoke_session_uploads(self, sid: str) -> None:
+        self._uploads.revoke_session(self._tenant_id, sid)
 
     def upload(self, sid: str, filename: str, source: BinaryIO) -> dict:
         name = Path((filename or "upload").replace("\\", "/")).name
@@ -292,12 +320,16 @@ class WorkspaceService:
             identity = (live.st_dev, live.st_ino, live.st_size,
                         live.st_mtime_ns, live.st_ctime_ns)
             credential = secrets.token_urlsafe(32)
-            with self._uploaded_lock:
-                registry = self._uploaded.setdefault(sid, {})
-                # Bound memory and revoke oldest pending upload grants.
-                while len(registry) >= 128:
-                    registry.pop(next(iter(registry)))
-                registry[credential] = (candidate, identity, time.monotonic())
+            try:
+                self._uploads.issue(
+                    credential, self._tenant_id, sid, candidate, identity,
+                )
+            except AttachmentQuotaExceeded as exc:
+                os.unlink(candidate, dir_fd=root_fd)
+                raise PayloadTooLargeError("Attachment quota exceeded") from exc
+            except BaseException:
+                os.unlink(candidate, dir_fd=root_fd)
+                raise
             return {
                 "path": candidate, "name": name, "size": size,
                 "attachment_ref": credential,
