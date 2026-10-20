@@ -1,0 +1,34 @@
+name: Document converter isolation
+
+on:
+  pull_request:
+    paths:
+      - 'core/runtime/attachment_context.py'
+      - 'core/runtime/document_worker.py'
+      - 'core/runtime/document_container.py'
+      - 'deploy/document-converter/**'
+      - 'tests/test_document_container_*.py'
+      - 'requirements.txt'
+      - '.github/workflows/document-converter-isolation.yml'
+  push:
+    branches: [main]
+
+jobs:
+  docker-document-parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install host-side model attachment test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Build isolated non-root document converter image
+        run: docker build --pull -f deploy/document-converter/Dockerfile -t ridge-document-converter:local .
+      - name: Run real sandbox and malformed document acceptance
+        run: python -m pytest -q tests/test_document_container_smoke.py tests/test_document_container_policy.py
+        env:
+          RIDGE_DOCUMENT_DOCKER_SMOKE: '1'
+          RIDGE_DOCUMENT_CONVERTER_MODE: docker
+          RIDGE_DOCUMENT_REQUIRE_SANDBOX: '1'
