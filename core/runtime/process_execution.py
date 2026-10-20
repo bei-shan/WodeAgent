@@ -131,7 +131,10 @@ def run_process(
         {"start_new_session": True} if os.name == "posix" else {}
     )
     if os.name == "nt":
-        opts["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        # No child code may run before the Job Object owns it.
+        opts["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_SUSPENDED
+        )
     process = subprocess.Popen(
         args, shell=shell, cwd=cwd, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -145,6 +148,7 @@ def run_process(
         try:
             from core.runtime.windows_job import WindowsProcessJob
             job = WindowsProcessJob(int(process._handle))
+            job.resume(process.pid)
         except BaseException:
             _kill_tree(process)
             try:
