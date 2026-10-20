@@ -8,7 +8,7 @@ host filesystem exposure is provided by this API.
 from __future__ import annotations
 
 from queue import Empty, Queue
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 from typing import Any
 
 from core.browser_url_policy import BrowserAccessDenied, BrowserURLPolicy
@@ -74,6 +74,7 @@ class BrowserSession:
                     except BaseException as exc:
                         answer.put((False, exc))
         except BaseException as exc:
+            self._startup_error = exc
             self._ready.set()
             # If startup fails, inform any queued caller rather than deadlock.
             while True:
@@ -83,7 +84,6 @@ class BrowserSession:
                     break
                 if task is not None:
                     task[3].put((False, exc))
-            self._startup_error = exc
         finally:
             if context is not None:
                 try:
@@ -174,7 +174,7 @@ class BrowserSession:
             self._queue.put(None, timeout=1)
         except Exception:
             pass
-        if worker is not Thread.current_thread() if False else True:
+        if worker is not current_thread():
             worker.join(timeout=15)
         if worker.is_alive():
             raise BrowserUnavailable("Browser owner did not stop within bounded shutdown")
