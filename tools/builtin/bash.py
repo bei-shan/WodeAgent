@@ -333,7 +333,9 @@ class BashTool(Tool):
         stderr_lines = stderr.count("\n") + 1 if stderr else 0
         stderr_bytes = len(stderr.encode("utf-8"))
         output_too_large = (
-            stdout_lines > self.OUTPUT_MAX_LINES
+            getattr(result, "stdout_truncated", False)
+            or getattr(result, "stderr_truncated", False)
+            or stdout_lines > self.OUTPUT_MAX_LINES
             or stdout_bytes > self.OUTPUT_MAX_BYTES
             or stderr_lines > self.OUTPUT_MAX_LINES
             or stderr_bytes > self.OUTPUT_MAX_BYTES
