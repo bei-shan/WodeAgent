@@ -28,7 +28,7 @@ class TestToolOutputTruncation:
         }
         raw = json.dumps(result)
         output = compress_tool_result("AnyTool", raw)
-        assert json.loads(output)["data"]["truncated"] is True
+        assert output == raw
 
     def test_large_output_truncated(self):
         """超过阈值时触发统一截断"""
@@ -56,7 +56,7 @@ class TestToolOutputTruncation:
         }
         raw = json.dumps(result)
         output = compress_tool_result("AnyTool", raw)
-        assert output == raw
+        assert json.loads(output)["data"]["truncated"] is True
 
 
 class TestInputPreprocessor:
