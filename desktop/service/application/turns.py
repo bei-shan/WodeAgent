@@ -28,10 +28,19 @@ class TurnService:
         outcome = session.last_turn if session is not None else load_turn_outcome(sid)
         return outcome.to_dict() if outcome is not None else {"status": "idle"}
 
-    def send(self, sid: str, content: str) -> dict:
+    def send(self, sid: str, content: str, attachments: list[dict] | None = None) -> dict:
         session = self._require_active(sid)
+        parts = attachments or []
+        if parts:
+            # Only names enter durable history; media blocks remain memory-
+            # only until the first model invocation in this turn.
+            import json
+            refs = [p["path"] for p in parts]
+            content = (content.strip() or "Analyze the attached files.") + (
+                "\n[Session attachments: " + json.dumps(refs, ensure_ascii=False) + "]"
+            )
         try:
-            accepted = session.send_message(content)
+            accepted = session.send_message(content, attachment_parts=parts)
         except TurnCapacityExceeded as exc:
             raise CapacityError("Agent turn capacity exhausted; retry later") from exc
         if not accepted:
