@@ -544,6 +544,7 @@ class MultiEditTool(Tool):
                 bytes_written = commit_utf8(
                     abs_path, new_content,
                     expected_stat=current_stat,
+                    workspace_root=self._root,
                 )
 
                 applied = True
