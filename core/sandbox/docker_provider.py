@@ -36,10 +36,13 @@ class DockerCommandProvider:
         docker_binary: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
         lease_manager: DockerLeaseManager | None = None,
+        snapshot_workspace: bool = False,
     ):
         if os.name != "posix":
             raise SandboxUnavailable("Docker sandbox currently requires a POSIX host")
         self.workspace = Path(workspace).resolve(strict=True)
+        self.host_workspace = self.workspace
+        self._workspace_snapshot = None
         if not self.workspace.is_dir():
             raise SandboxUnavailable("Sandbox workspace is not a directory")
         assert_no_mounted_credentials(self.workspace)
@@ -89,6 +92,16 @@ class DockerCommandProvider:
             raise SandboxUnavailable(
                 "Private Docker ownership cannot be established"
             ) from exc
+        if type(snapshot_workspace) is not bool:
+            raise ValueError("snapshot_workspace must be boolean")
+        if snapshot_workspace:
+            # Private copy is not usable by the nobody uid on a root-owned
+            # host; fail closed rather than chmod private staging directories.
+            if os.getuid() == 0:
+                raise SandboxUnavailable("Snapshot mode requires a non-root service owner")
+            from core.sandbox.workspace_snapshot import SandboxWorkspaceSnapshot
+            self._workspace_snapshot = SandboxWorkspaceSnapshot(self.host_workspace)
+            self.workspace = self._workspace_snapshot.workspace
 
     def command_argv(self, command: str, directory: str = ".", *, timeout_seconds: float = 120) -> tuple[list[str], str]:
         # Re-evaluate immediately before creating the bind mount. This
@@ -244,3 +257,15 @@ class DockerCommandProvider:
             raise SandboxUnavailable("Docker invocation failed; host fallback is forbidden") from exc
         finally:
             self._leases.deactivate(container_name)
+
+    def export_guest_file(self, relative: str, *, authorize) -> bytes:
+        """Explicit trusted export of guest changes; never automatic host writes."""
+        if self._workspace_snapshot is None:
+            raise PermissionError("Explicit snapshot mode is required for export")
+        return self._workspace_snapshot.export(relative, authorize=authorize)
+
+    def close(self) -> None:
+        snapshot = self._workspace_snapshot
+        self._workspace_snapshot = None
+        if snapshot is not None:
+            snapshot.close()
