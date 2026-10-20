@@ -1,0 +1,36 @@
+name: Windows process tree isolation
+
+on:
+  pull_request:
+    paths:
+      - "core/runtime/process_execution.py"
+      - "core/runtime/windows_process_job.py"
+      - "tests/test_windows_process_tree.py"
+      - ".github/workflows/windows-process-tree.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/runtime/process_execution.py"
+      - "core/runtime/windows_process_job.py"
+      - "tests/test_windows_process_tree.py"
+      - ".github/workflows/windows-process-tree.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-job-object:
+    name: Windows Job Object subtree termination
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Verify no real isolation tests were skipped
+        run: python scripts/ci_integration_gate.py tests/test_windows_process_tree.py
+      - name: Run bounded subprocess capture checks on Windows
+        run: python -m pytest tests/test_process_execution_capture.py -q -ra
