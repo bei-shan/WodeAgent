@@ -1,0 +1,43 @@
+name: Browser Use real Chromium acceptance
+
+on:
+  pull_request:
+    paths:
+      - "agents/codeAgent.py"
+      - "core/browser_*"
+      - "core/config.py"
+      - "core/tool_bootstrap.py"
+      - "tools/builtin/browser_use.py"
+      - "tests/test_browser_*"
+      - "requirements-browser.txt"
+      - ".github/workflows/browser-use-real.yml"
+  push:
+    branches: [main]
+    paths:
+      - "agents/codeAgent.py"
+      - "core/browser_*"
+      - "core/config.py"
+      - "core/tool_bootstrap.py"
+      - "tools/builtin/browser_use.py"
+      - "tests/test_browser_*"
+      - "requirements-browser.txt"
+      - ".github/workflows/browser-use-real.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-chromium:
+    name: Chromium URL policy and session ownership
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-browser.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Security, authorization and real Chromium checks (no skips)
+        run: python scripts/ci_integration_gate.py tests/test_browser_url_policy.py tests/test_browser_use_policy.py tests/test_browser_use_real.py

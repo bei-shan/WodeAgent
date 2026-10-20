@@ -48,6 +48,10 @@ class Config(BaseModel):
     # ===== Sandboxed Tool Execution (explicit opt-in) =====
     sandbox_mode: str = "local_trusted"  # local_trusted | docker | boxlite | e2b
     require_isolated_execution: bool = False  # opt-in hard policy for untrusted repositories
+    # Experimental trusted-local browser; never enabled in hosted or shell-only isolation.
+    browser_enabled: bool = False
+    browser_allowed_origins: str = ""  # explicit comma-separated scheme://host:port
+    browser_allow_loopback: bool = False  # explicit trusted local-development override
     sandbox_docker_image: str = "python:3.12-alpine"
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
@@ -184,6 +188,9 @@ class Config(BaseModel):
             tool_discovery_max_promoted=max(1, min(48, env_int("TOOL_DISCOVERY_MAX_PROMOTED", 18))),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
             require_isolated_execution=env_bool("AGENT_REQUIRE_ISOLATED_EXECUTION", False),
+            browser_enabled=env_bool("AGENT_BROWSER_ENABLED", False),
+            browser_allowed_origins=env_str("AGENT_BROWSER_ALLOWED_ORIGINS", ""),
+            browser_allow_loopback=env_bool("AGENT_BROWSER_ALLOW_LOOPBACK", False),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
             sandbox_cpus=env_float("AGENT_SANDBOX_CPUS", 1.0),

@@ -87,9 +87,18 @@ class CodeAgent(Agent):
         # session rebinds only its tools to a per-session workspace.
         self._skill_catalog_root = str(Path(project_root).resolve())
         self.tool_registry = tool_registry
+        # A BrowserUse adapter owns a live browser/cookie profile and must
+        # never be adopted by a second Agent sharing this registry.
+        if self.tool_registry.owner_of("BrowserUse") is not None:
+            raise PermissionError("BrowserUse registry is already owned by another Agent session")
         self._sandbox_mode = str(getattr(self.config, "sandbox_mode", "local_trusted")).strip().lower()
         if self._sandbox_mode not in {"local_trusted", "docker", "boxlite", "e2b"}:
             raise ValueError("Unknown AGENT_SANDBOX_MODE; expected local_trusted, docker, boxlite or e2b")
+        if getattr(self.config, "browser_enabled", False) and (
+            self._sandbox_mode != "local_trusted" or hosted_tool_authority is not None
+            or getattr(self.config, "require_isolated_execution", False)
+        ):
+            raise PermissionError("Host BrowserUse is only allowed for explicitly trusted local sessions")
         if getattr(self.config, "require_isolated_execution", False) and self._sandbox_mode == "local_trusted":
             raise PermissionError("This deployment requires isolated execution; local_trusted is forbidden")
         if hosted_tool_authority is not None and self._sandbox_mode == "local_trusted":
@@ -267,6 +276,12 @@ class CodeAgent(Agent):
         if self.enable_agent_teams and self.team_manager:
             team_registered = register_team_tools(bootstrap)
             self.logger.debug("Registered %d team tools: %s", len(team_registered), team_registered)
+
+        if getattr(self.config, "browser_enabled", False):
+            from tools.builtin.browser_use import BrowserUseTool
+            self._browser_tool = BrowserUseTool(project_root=Path(self.project_root), code_agent=self)
+            self._browser_tool_owner = "browser:" + uuid.uuid4().hex
+            self.tool_registry.register_tool(self._browser_tool, owner=self._browser_tool_owner)
 
         if self._sandbox_mode != "local_trusted":
             self._runtime_services.ensure("sandbox")
@@ -641,6 +656,20 @@ class CodeAgent(Agent):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+
+        browser_tool = getattr(self, "_browser_tool", None)
+        if browser_tool is not None:
+            self._browser_tool = None
+            try:
+                browser_tool.close()
+            except Exception:
+                self.logger.warning("Browser session teardown failed")
+            owner = getattr(self, "_browser_tool_owner", None)
+            if owner and self.tool_registry.owner_of("BrowserUse") == owner:
+                try:
+                    self.tool_registry.unregister("BrowserUse", owner=owner)
+                except Exception:
+                    self.logger.warning("Browser tool deregistration failed")
 
         runtime_services = getattr(self, "_runtime_services", None)
         if runtime_services is not None:
