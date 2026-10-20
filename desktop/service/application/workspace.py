@@ -9,6 +9,9 @@ from __future__ import annotations
 import os
 import re
 import stat
+import secrets
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator
@@ -34,6 +37,12 @@ class WorkspaceService:
     def __init__(self, controller: SessionController, data_dir: str | Path):
         self.controller = controller
         self.workspace_base = Path(data_dir) / "sessions"
+        # Random, short-lived upload capabilities. Never grant arbitrary
+        # workspace paths as attachments; uploaded files may be unrelated
+        # to Agent-generated private/config files. Local server owns this
+        # registry; distributed hosted mode needs its own durable asset DB.
+        self._uploaded: dict[str, dict[str, tuple[str, tuple[int, ...], float]]] = {}
+        self._uploaded_lock = threading.RLock()
 
     def _validate_session(self, sid: str) -> None:
         if not _SESSION_ID.fullmatch(sid) or self.controller.get_session(sid) is None:
@@ -198,20 +207,36 @@ class WorkspaceService:
         if not isinstance(paths, list) or len(paths) > MAX_ATTACHMENTS:
             raise InvalidInputError("At most four attachments per message")
         if len(paths) != len(set(paths)) or any(
-            not isinstance(path, str) or not path or len(path) > 240
+            not isinstance(path, str) or not path or len(path) > 128
             for path in paths
         ):
             raise InvalidInputError("Invalid or repeated attachment reference")
+        with self._uploaded_lock:
+            session_uploads = self._uploaded.get(sid, {})
+            # Always refuse a guessed filename, even if it exists under
+            # the session root and would otherwise be readable.
+            tickets = [session_uploads.get(ref) for ref in paths]
+        if any(ticket is None for ticket in tickets):
+            raise ForbiddenError("Attachment upload credential missing or expired")
         parts = []
         total = 0
-        for path in paths:
+        for ticket in tickets:
+            assert ticket is not None
+            path, expected_identity, issued = ticket
+            if time.monotonic() - issued > 7200:
+                raise ForbiddenError("Attachment upload credential expired")
             # _parts and _open_file enforce descriptor-based per-session root
             # confinement, including O_NOFOLLOW for symlinks.
             components = self._parts(path)
             if not components:
                 raise InvalidInputError("Invalid attachment path")
             with self._open_file(sid, path) as (_, stream):
-                length = os.fstat(stream.fileno()).st_size
+                live = os.fstat(stream.fileno())
+                identity = (live.st_dev, live.st_ino, live.st_size,
+                            live.st_mtime_ns, live.st_ctime_ns)
+                if identity != expected_identity:
+                    raise ForbiddenError("Uploaded file changed; upload it again")
+                length = live.st_size
                 if length > MAX_UPLOAD_BYTES:
                     raise PayloadTooLargeError("Attachment exceeds upload limit")
                 total += length
@@ -258,4 +283,17 @@ class WorkspaceService:
             except BaseException:
                 os.unlink(candidate, dir_fd=root_fd)
                 raise
-            return {"path": candidate, "name": name, "size": size}
+            live = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
+            identity = (live.st_dev, live.st_ino, live.st_size,
+                        live.st_mtime_ns, live.st_ctime_ns)
+            credential = secrets.token_urlsafe(32)
+            with self._uploaded_lock:
+                registry = self._uploaded.setdefault(sid, {})
+                # Bound memory and revoke oldest pending upload grants.
+                while len(registry) >= 128:
+                    registry.pop(next(iter(registry)))
+                registry[credential] = (candidate, identity, time.monotonic())
+            return {
+                "path": candidate, "name": name, "size": size,
+                "attachment_ref": credential,
+            }
