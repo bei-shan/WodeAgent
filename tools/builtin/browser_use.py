@@ -101,10 +101,10 @@ class BrowserUseTool(Tool):
             return self._deny(ErrorCode.INTERRUPTED, "Browser operation interrupted", raw, started)
         except BrowserAccessDenied:
             return self._deny(ErrorCode.ACCESS_DENIED, "Browser navigation blocked", raw, started)
-        except (BrowserUnavailable, OSError, RuntimeError) as exc:
+        except (BrowserUnavailable, OSError, RuntimeError):
             # Do not expose raw browser/OS exception strings to the model.
             return self._deny(ErrorCode.EXECUTION_ERROR, "Browser runtime unavailable or operation failed", raw, started)
-        except (ValueError, TimeoutError):
+        except Exception:
             return self._deny(ErrorCode.EXECUTION_ERROR, "Browser action could not complete", raw, started)
         return self.create_success_response(
             data=result,
@@ -117,7 +117,7 @@ class BrowserUseTool(Tool):
         # Do not echo 'fill' values or raw selectors to the model via error context.
         return self.create_error_response(
             error_code=code, message=message,
-            params_input={"action": raw.get("action")},
+            params_input={"action": raw.get("action") if isinstance(raw.get("action"), str) else None},
             time_ms=int((time.monotonic() - started) * 1000),
         )
 
