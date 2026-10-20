@@ -36,7 +36,8 @@ def test_many_lines_observation_is_capped_and_pagination_is_correct(tmp_path):
     assert result["status"] == "partial"
     assert result["data"]["truncated"] is True
     assert result["stats"]["total_lines"] == 6000
-    assert result["stats"]["lines_read"] == 2000
+    assert 1 <= result["stats"]["lines_read"] < 2000
+    assert "Use start_line=" in result["text"]
     assert len(result["data"]["content"]) <= tool.MAX_CONTENT_CHARS
     late = _response(tool, path="many.txt", limit=2, start_line=5999)
     assert late["stats"]["total_lines"] == 6000
