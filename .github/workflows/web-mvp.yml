@@ -177,7 +177,9 @@ jobs:
       # Include every Python test, not just the curated API smoke list.
       # Live Docker isolation has a separate opt-in job below.
       - run: python -m pip check
-      - run: python -m pytest tests/ -q
+      # Display each skip reason in the broad, dependency-light regression lane.
+      # Dedicated real-integration-gates.yml runs those same integration cases with live services.
+      - run: python -m pytest tests/ -q -ra
 
   mcp-v1-compat:
     runs-on: ubuntu-latest
