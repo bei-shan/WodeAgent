@@ -318,7 +318,7 @@ class WorkspaceService:
                     continue
                 try:
                     for name in os.listdir(dir_fd):
-                        if not _re.fullmatch(r"\\.ridge-incoming-[0-9a-f]{24}", name):
+                        if not _re.fullmatch(r"\.ridge-incoming-[0-9a-f]{24}", name):
                             continue
                         try:
                             info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
