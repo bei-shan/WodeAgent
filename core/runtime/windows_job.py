@@ -86,9 +86,67 @@ class WindowsProcessJob:
             self.close()
             raise
 
+    def resume(self, process_id: int) -> None:
+        """Resume a CREATE_SUSPENDED child only after Job assignment.
+
+        Win32 subprocess.Popen closes its initial thread handle. Toolhelp
+        enumerates the child's suspended thread, avoiding an undocumented NT
+        API and the Popen-to-Assign race that can leak a fast grandchild.
+        """
+        from ctypes import wintypes
+
+        class THREADENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD),
+                ("tpBasePri", wintypes.LONG), ("tpDeltaPri", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        dll = self._dll
+        dll.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        dll.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        dll.Thread32First.argtypes = (wintypes.HANDLE, ctypes.POINTER(THREADENTRY32))
+        dll.Thread32First.restype = wintypes.BOOL
+        dll.Thread32Next.argtypes = (wintypes.HANDLE, ctypes.POINTER(THREADENTRY32))
+        dll.Thread32Next.restype = wintypes.BOOL
+        dll.OpenThread.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        dll.OpenThread.restype = wintypes.HANDLE
+        dll.ResumeThread.argtypes = (wintypes.HANDLE,)
+        dll.ResumeThread.restype = wintypes.DWORD
+
+        snapshot = dll.CreateToolhelp32Snapshot(0x00000004, 0)
+        invalid_handle = ctypes.c_void_p(-1).value
+        if not snapshot or snapshot == invalid_handle:
+            raise OSError(ctypes.get_last_error(), "Thread snapshot failed")
+        resumed = 0
+        try:
+            entry = THREADENTRY32()
+            entry.dwSize = ctypes.sizeof(THREADENTRY32)
+            active = dll.Thread32First(snapshot, ctypes.byref(entry))
+            while active:
+                if int(entry.th32OwnerProcessID) == process_id:
+                    thread = dll.OpenThread(0x0002, False, entry.th32ThreadID)
+                    if not thread:
+                        raise OSError(ctypes.get_last_error(), "OpenThread failed")
+                    try:
+                        prior_count = dll.ResumeThread(thread)
+                        if prior_count == 0xFFFFFFFF:
+                            raise OSError(ctypes.get_last_error(), "ResumeThread failed")
+                        resumed += 1
+                    finally:
+                        dll.CloseHandle(thread)
+                active = dll.Thread32Next(snapshot, ctypes.byref(entry))
+        finally:
+            dll.CloseHandle(snapshot)
+        if not resumed:
+            raise RuntimeError("No suspended process thread found")
+
     def terminate(self) -> None:
         if self._handle:
-            self._dll.TerminateJobObject(self._handle, 1)
+            if not self._dll.TerminateJobObject(self._handle, 1):
+                raise OSError(ctypes.get_last_error(), "TerminateJobObject failed")
 
     def close(self) -> None:
         handle, self._handle = getattr(self, "_handle", None), None
