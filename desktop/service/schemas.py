@@ -26,7 +26,9 @@ class SessionInfo(BaseModel):
 # ── Messages ─────────────────────────────────────────────────────────
 
 class MessageSend(BaseModel):
-    content: str = Field(..., min_length=1, description="User message text")
+    content: str = Field(default="", max_length=200000, description="User message text")
+    attachments: list[str] = Field(default_factory=list, max_length=4,
+                                   description="Session-relative uploaded file paths")
 
 
 # ── Permissions ──────────────────────────────────────────────────────
