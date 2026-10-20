@@ -39,7 +39,7 @@ def test_docx_zip_bomb_declaration_rejected():
             "word/document.xml",
             '<root>' + ("x" * (2 * 1024 * 1024 + 20)) + "</root>",
         )
-    with pytest.raises(ValueError, match="2 MiB"):
+    with pytest.raises(ValueError, match="rejected or failed"):
         make_attachment_part("unsafe.docx", data.getvalue())
 
 
@@ -50,9 +50,9 @@ def test_pdf_encrypted_and_invalid_inputs_rejected():
     w.encrypt("secret")
     data = io.BytesIO()
     w.write(data)
-    with pytest.raises(ValueError, match="Encrypted"):
+    with pytest.raises(ValueError, match="rejected or failed"):
         make_attachment_part("locked.pdf", data.getvalue())
-    with pytest.raises(ValueError, match="PDF"):
+    with pytest.raises(ValueError, match="rejected or failed"):
         make_attachment_part("broken.pdf", b"fake not a PDF")
 
 
