@@ -9,11 +9,12 @@
 
 超时策略（E2）：
 - 超时限制：120 秒
-- 降级策略：超时则返回 None，由 HistoryManager 仅做硬截断
+- 降级策略：超时则返回 None，HistoryManager 保留原始历史，不执行破坏性截断
 """
 
 import concurrent.futures
 import logging
+import threading
 from typing import List, Optional, Callable
 
 from ..message import Message
@@ -21,6 +22,10 @@ from ..config import Config
 from .continuity import bound_summary_input
 
 logger = logging.getLogger(__name__)
+
+# A timed-out synchronous provider call may continue on its worker thread.
+# Bound those detached calls across agents; this is NOT a provider cancellation.
+_SUMMARY_CALL_SLOTS = threading.BoundedSemaphore(value=8)
 
 
 def create_summary_generator(
@@ -44,6 +49,7 @@ def create_summary_generator(
     """
     cfg = config or Config()
     timeout = cfg.summary_timeout  # 默认 120 秒
+    in_flight = threading.BoundedSemaphore(value=1)
 
     # Use compact model pointer if configured, else use the provided LLM.
     try:
@@ -79,51 +85,65 @@ def create_summary_generator(
         if verbose:
             logger.info("生成 Summary（超时: %ss）...", timeout)
         
-        # 使用 ThreadPoolExecutor 实现超时控制
+        # ThreadPoolExecutor timeout does NOT stop an already running invoke.
+        # A per-generator gate and a process-wide gate prevent hung calls from
+        # accumulating unbounded workers across repeated user turns.
+        if not in_flight.acquire(blocking=False):
+            logger.warning("Previous summary call is still running; retaining history")
+            return None
+        if not _SUMMARY_CALL_SLOTS.acquire(blocking=False):
+            in_flight.release()
+            logger.warning("Global summary capacity exhausted; retaining history")
+            return None
+
+        def release_slot():
+            _SUMMARY_CALL_SLOTS.release()
+            in_flight.release()
+
         def _call_llm():
             try:
-                response = llm.invoke([{"role": "user", "content": prompt}])
-                return response
-            except Exception as e:
-                if verbose:
-                    logger.warning("LLM 调用失败: %s", e)
-                return None
-        
+                try:
+                    return llm.invoke([{"role": "user", "content": prompt}])
+                except Exception as exc:
+                    if verbose:
+                        logger.warning("Summary provider invocation failed: %s", type(exc).__name__)
+                    return None
+            finally:
+                release_slot()
+
+        executor = None
+        future = None
         try:
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = executor.submit(_call_llm)
             try:
                 result = future.result(timeout=timeout)
-                
-                if result is None:
-                    return None
-                
-                if verbose:
-                    logger.info("Summary 生成完成")
-                
-                result = result.strip()
-                if not result or len(result) > cfg.summary_output_max_chars:
-                    logger.warning("Summary output invalid or beyond configured budget")
-                    return None
-                return result
             except concurrent.futures.TimeoutError:
-                # 超时：取消 future 并立即关闭 executor（不等待）
-                future.cancel()
-                executor.shutdown(wait=False, cancel_futures=True)
+                # Only a *not-yet-started* future can be truly cancelled.
+                # Running workers keep their capacity permit until they exit.
+                if future.cancel():
+                    release_slot()
                 if verbose:
-                    logger.warning(
-                        "Summary generation timed out (%ss), keeping recent history only.",
-                        timeout,
-                    )
+                    logger.warning("Summary timed out; original history retained")
                 return None
-            finally:
-                # 正常完成时也要关闭 executor（但这里用 wait=False 避免阻塞）
-                executor.shutdown(wait=False)
-        except Exception as e:
+            if not isinstance(result, str) or not result.strip():
+                return None
+            result = result.strip()
+            if len(result) > cfg.summary_output_max_chars:
+                logger.warning("Summary output exceeded configured budget")
+                return None
+            return result
+        except Exception as exc:
+            if future is None:
+                # Construction/submit failed before the worker acquired ownership.
+                release_slot()
             if verbose:
-                logger.warning("Summary 生成异常: %s", e)
+                logger.warning("Summary generation failed: %s", type(exc).__name__)
             return None
-    
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+
     return generate_summary
 
 
