@@ -1,27 +1,27 @@
-name: TUI v2
+name: TUI
 
 on:
   push:
     branches: [main]
     paths:
-      - "tui-v2/**"
+      - "tui/**"
       - "desktop/service/**"
       - "core/runtime/**"
       - "core/events.py"
       - "core/session_manager.py"
       - "core/context_engine/history_manager.py"
       - "requirements.txt"
-      - ".github/workflows/tui-v2.yml"
+      - ".github/workflows/tui.yml"
   pull_request:
     paths:
-      - "tui-v2/**"
+      - "tui/**"
       - "desktop/service/**"
       - "core/runtime/**"
       - "core/events.py"
       - "core/session_manager.py"
       - "core/context_engine/history_manager.py"
       - "requirements.txt"
-      - ".github/workflows/tui-v2.yml"
+      - ".github/workflows/tui.yml"
 
 jobs:
   typecheck-and-test:
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 12
     defaults:
       run:
-        working-directory: tui-v2
+        working-directory: tui
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

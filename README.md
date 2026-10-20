@@ -49,11 +49,11 @@ python -m ridgecode web
 先启动 Python API，再从根目录运行：
 
 ```bash
-cd tui-v2 && bun install --frozen-lockfile && cd ..
+cd tui && bun install --frozen-lockfile && cd ..
 python -m ridgecode tui
 ```
 
-可用 `RIDGECODE_SERVER` 指定服务端；设置了 `WEB_AUTH_TOKEN` 时，TUI 使用相同的 `RIDGECODE_AUTH_TOKEN`。详见 [TUI 文档](tui-v2/README.md)。
+可用 `RIDGECODE_SERVER` 指定服务端；设置了 `WEB_AUTH_TOKEN` 时，TUI 使用相同的 `RIDGECODE_AUTH_TOKEN`。详见 [TUI 文档](tui/README.md)。
 
 ### 4. 日常检查与评测
 
@@ -87,7 +87,7 @@ ToolRegistry / Sandbox / ModelGateway
 - `core/context_engine/`、`core/team_engine/`：上下文和团队运行时。
 - `core/skills/`、`core/plugin_loader.py`：Skills、声明式插件与授权 Hook。
 - `tools/`、`core/sandbox/`：工具注册、权限与隔离执行。
-- `desktop/service/`、`desktop/web/`、`tui-v2/`：服务端和两个客户端。
+- `desktop/service/`、`desktop/web/`、`tui/`：服务端和两个客户端。
 - `db/`、`core/persistence/`：多租户元数据与持久队列基础设施。
 
 已删除旧 Python AgentFeature 框架与旧 Python TUI；托管 API **仅提供元数据服务，尚不能执行生产级共享租户 Agent 回合**。准确的目录职责见 [现役架构](docs/ARCHITECTURE.md)。
@@ -141,7 +141,7 @@ python -m pytest tests/test_web_service.py tests/test_session_manager.py tests/t
 cd desktop/web && npm ci && npm run build
 
 # 新版 TUI 测试（另一个终端）
-cd tui-v2 && bun install && bun run typecheck && bun test
+cd tui && bun install && bun run typecheck && bun test
 ```
 
 Web 样式构建使用 Tailwind CSS 4；支持的浏览器最低版本为 Safari 16.4、Chrome 111、Firefox 128。

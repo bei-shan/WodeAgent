@@ -100,7 +100,7 @@ def test_ui_uses_fixed_project_paths_and_no_shell(monkeypatch):
     assert cli.main(["tui"]) == 0
     assert calls == [
         (["/usr/bin/npm", "run", "dev"], {"cwd": cli.ROOT / "desktop/web", "check": False}),
-        (["/usr/bin/bun", "run", "dev"], {"cwd": cli.ROOT / "tui-v2", "check": False}),
+        (["/usr/bin/bun", "run", "dev"], {"cwd": cli.ROOT / "tui", "check": False}),
     ]
 
 
