@@ -106,7 +106,7 @@ export default function ChatComposer({
           </button>
         </div>
         <button type="button" className="composer-send" onClick={onSend}
-          disabled={sending || !input.trim()} aria-label="发送消息" title="发送消息 (Enter)">
+          disabled={sending || (!input.trim() && uploadedFiles.length === 0)} aria-label="发送消息" title="发送消息 (Enter)">
           <Svg d={Icons.send} size={18} />
         </button>
       </div>
