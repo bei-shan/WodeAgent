@@ -206,12 +206,30 @@ class ObservationTruncator:
         if isinstance(parsed_result, dict):
             status = parsed_result.get("status", "success")
             error = parsed_result.get("error")
-            stats = parsed_result.get("stats") or {}
-            context = parsed_result.get("context") or {}
+            # Tool-supplied metadata is untrusted: only keep small scalar
+            # diagnostics, never arbitrary nested payloads or control flags.
+            def small_fields(value):
+                if not isinstance(value, dict):
+                    return {}
+                result = {}
+                for key, item in list(value.items())[:32]:
+                    if not isinstance(key, str) or len(key) > 64 or key == "truncation_skip":
+                        continue
+                    if not isinstance(item, (str, int, float, bool, type(None))):
+                        continue
+                    if isinstance(item, str) and len(item) > 128:
+                        continue
+                    trial = {**result, key: item}
+                    try:
+                        if len(json.dumps(trial, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= 256:
+                            result = trial
+                    except (TypeError, ValueError):
+                        continue
+                return result
+            stats = small_fields(parsed_result.get("stats"))
+            context = small_fields(parsed_result.get("context"))
 
-        # 截断时标记为 partial（除非原本是 error）
-        if status != "error":
-            status = "partial"
+        status = "error" if status == "error" else "partial"
 
         truncated_result: Dict[str, Any] = {
             "status": status,
@@ -239,7 +257,15 @@ class ObservationTruncator:
 
         # 保留错误字段
         if status == "error" and error:
-            truncated_result["error"] = error
+            if isinstance(error, dict):
+                truncated_result["error"] = {
+                    "code": str(error.get("code") or "TOOL_ERROR")[:64],
+                    "message": str(error.get("message") or "")[:160],
+                }
+            else:
+                truncated_result["error"] = {
+                    "code": "TOOL_ERROR", "message": str(error)[:160],
+                }
 
         # 构建提示文本
         hint = self._build_hint(tool_name, relative_path, original_size)
@@ -248,7 +274,43 @@ class ObservationTruncator:
         # 清理过期文件（低频执行）
         self._maybe_cleanup()
         
-        return json.dumps(truncated_result, ensure_ascii=False, separators=(",", ":"))
+        # Bound the entire serialized result, not only the preview. Even a
+        # malicious tool's stats/context/error cannot restore unbounded output.
+        limit = max(2, int(max_bytes))
+        for _ in range(64):
+            reduced = json.dumps(truncated_result, ensure_ascii=False,
+                                 separators=(",", ":"), default=str)
+            if len(reduced.encode("utf-8")) <= limit:
+                return reduced
+            preview = truncated_result["data"]["preview"]
+            if preview:
+                preview = preview[:len(preview) // 2]
+                truncated_result["data"]["preview"] = preview
+                truncated_result["data"]["truncation"]["kept_bytes"] = len(preview.encode("utf-8"))
+                truncated_result["data"]["truncation"]["kept_lines"] = preview.count("\n") + (1 if preview else 0)
+                continue
+            if truncated_result.get("stats") or truncated_result.get("context"):
+                truncated_result["stats"] = {}
+                truncated_result["context"] = {}
+                continue
+            if "error" in truncated_result:
+                truncated_result.pop("error")
+                continue
+            if truncated_result.get("text") != "Tool output truncated":
+                truncated_result["text"] = "Tool output truncated"
+                continue
+            if truncated_result["data"]["truncation"].pop("full_output_path", None):
+                continue
+            break
+        for fallback in (
+            json.dumps({"status": status, "data": {"truncated": True}, "text": "Tool output truncated"},
+                       ensure_ascii=False, separators=(",", ":")),
+            '{"status":"partial"}',
+            "{}",
+        ):
+            if len(fallback.encode("utf-8")) <= limit:
+                return fallback
+        return "{}"
     
     def _truncate_content(
         self,

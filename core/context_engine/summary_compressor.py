@@ -91,13 +91,16 @@ def create_summary_generator(
         if not in_flight.acquire(blocking=False):
             logger.warning("Previous summary call is still running; retaining history")
             return None
-        if not _SUMMARY_CALL_SLOTS.acquire(blocking=False):
+        # Capture the acquired semaphore: the running worker must release the
+        # exact capacity slot it owns, even if process configuration changes.
+        slots = _SUMMARY_CALL_SLOTS
+        if not slots.acquire(blocking=False):
             in_flight.release()
             logger.warning("Global summary capacity exhausted; retaining history")
             return None
 
         def release_slot():
-            _SUMMARY_CALL_SLOTS.release()
+            slots.release()
             in_flight.release()
 
         def _call_llm():
