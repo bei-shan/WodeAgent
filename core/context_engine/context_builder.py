@@ -84,6 +84,13 @@ class ContextBuilder:
     def get_reference_messages(self) -> List[Dict[str, Any]]:
         """Project and extension data has no system-message authority."""
         refs: List[Dict[str, Any]] = []
+        # Tool usage_notes can originate in plugins/MCP adapters. Never let
+        # registry-controlled prose modify the trusted bundled L1 prompt.
+        tool_notes = self._tool_usage_notes()
+        if tool_notes:
+            refs.append(untrusted_reference("tool registry usage notes", tool_notes))
+        if self._output_style_prompt:
+            refs.append(untrusted_reference("output style preference", self._output_style_prompt))
         if self._mcp_tools_prompt:
             refs.append(untrusted_reference("MCP tool descriptions", self._mcp_tools_prompt))
         if self._skills_prompt:
@@ -108,7 +115,7 @@ class ContextBuilder:
         self._output_style_prompt = prompt or ""
 
     def set_runtime_system_blocks(self, blocks: List[str]) -> None:
-        """设置 runtime 通知块（注入 system，不污染 user 轮次）。"""
+        """Runtime/plugin notifications are untrusted user-role references."""
         self._runtime_system_blocks = [
             str(block).strip() for block in (blocks or []) if str(block).strip()
         ]
@@ -132,48 +139,33 @@ class ContextBuilder:
 
         return messages
 
-    def _build_l1(self) -> str:
-        """Build L1 system prompt: base text + usage_notes + disabled tools.
-
-        The base L1 text is mtime-cached (file change → reload).
-        usage_notes come from the live tool registry (always fresh).
-        """
-        # L1 base text (mtime-cached)
-        l1_text = self._load_l1_text()
-
-        # Tool usage notes from live registry (pure memory, always fresh)
-        usage_lines: List[str] = []
+    def _tool_usage_notes(self) -> str:
+        """Collect live tool advice exclusively for low-trust references."""
         try:
-            visible_tools = getattr(self.tool_registry, "get_prompt_tools", None)
-            tools = (visible_tools() if callable(visible_tools)
-                     else self.tool_registry.get_all_tools())
+            visible = getattr(self.tool_registry, "get_prompt_tools", None)
+            tools = visible() if callable(visible) else self.tool_registry.get_all_tools()
         except Exception:
             tools = []
-
+        lines: List[str] = []
         for tool in tools:
             notes = getattr(tool, "usage_notes", "")
-            if notes and notes.strip():
-                usage_lines.append(notes.strip())
-
-        # Disabled tools (live — circuit breaker state)
+            if isinstance(notes, str) and notes.strip():
+                lines.append(notes.strip())
         disabled = self._get_disabled_tools()
         if disabled:
-            usage_lines.append("## Disabled Tools (temporary)")
-            for name in disabled:
-                usage_lines.append(f"- {name}")
+            lines.append("Disabled tools (temporary): " + ", ".join(str(n) for n in disabled))
+        return "\n".join(lines)
 
-        # Replace {tools} placeholder or append
-        tools_text = "\n".join(usage_lines)
-        if "{tools}" in l1_text:
-            l1_text = l1_text.replace("{tools}", tools_text)
+    def _build_l1(self) -> str:
+        """Only bundled static instructions (or trusted operator override).
 
-        # Replace {output_style} placeholder
-        l1_text = l1_text.replace("{output_style}", self._output_style_prompt)
-
-        # Plan mode guidance (conditional)
-        l1_text = self._append_plan_mode_guidance(l1_text)
-
-        return l1_text.strip()
+        Dynamic tool descriptions and output-style strings belong in the
+        untrusted reference section, never inside a system message.
+        """
+        l1_text = self._load_l1_text()
+        l1_text = l1_text.replace("{tools}", "")
+        l1_text = l1_text.replace("{output_style}", "")
+        return self._append_plan_mode_guidance(l1_text).strip()
 
     # ══════════════════════════════════════════════════════════════
     # Lightweight caches
