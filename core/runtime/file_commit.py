@@ -107,6 +107,54 @@ def _commit_anchored(
             fcntl.flock(parent_fd, fcntl.LOCK_UN)
 
 
+@contextmanager
+def open_regular_workspace_file(
+    path: Path, workspace_root: Path, *, text: bool = False,
+    errors: str = "strict",
+):
+    """Open regular workspace files anchored to root, ignoring symlink swaps.
+
+    Explicitly approved external paths continue to use regular file I/O.
+    Avoid using Path.resolve() between authorization and os.open.
+    """
+    path, root = Path(path), Path(workspace_root)
+    try:
+        path.relative_to(root)
+    except ValueError:
+        # External paths are separately guarded by PermissionGate. This is
+        # legacy trusted-local compatibility, not a sandbox security fence.
+        with open(path, "r" if text else "rb",
+                  **({"encoding": "utf-8", "errors": errors} if text else {})) as f:
+            yield f
+        return
+    if not _ANCHOR_SUPPORTED:
+        raise ConcurrentFileChange("Secure workspace reads unavailable on this host")
+    with _anchored_parent(root, path) as (parent_fd, filename):
+        fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ConcurrentFileChange("Target is not a regular workspace file")
+            with os.fdopen(fd, "r" if text else "rb", closefd=False,
+                           **({"encoding": "utf-8", "errors": errors} if text else {})) as f:
+                yield f
+        finally:
+            os.close(fd)
+
+
+def read_workspace_bytes(
+    path: Path, workspace_root: Path, *, limit_bytes: int = 16 * 1024 * 1024,
+) -> bytes:
+    """Read at most one bounded regular file through the anchored filesystem."""
+    with open_regular_workspace_file(path, workspace_root) as source:
+        file_stat = os.fstat(source.fileno())
+        if file_stat.st_size > limit_bytes:
+            raise ValueError("File exceeds 16 MiB edit limit")
+        payload = source.read(limit_bytes + 1)
+        if len(payload) > limit_bytes:
+            raise ValueError("File grew past edit limit while reading")
+        return payload
+
+
 def commit_utf8(
     path: Path, content: str, *, expected_stat: os.stat_result | None,
     workspace_root: Path | None = None,
