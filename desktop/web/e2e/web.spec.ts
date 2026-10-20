@@ -87,7 +87,7 @@ async function mockBackend(page: Page): Promise<MockState> {
     }
     if (path.endsWith('/upload') && method === 'POST') {
       state.uploads++
-      return ok({ name: 'uploaded.txt', path: 'uploaded.txt', size: 10 })
+      return ok({ name: 'uploaded.txt', path: 'uploaded.txt', size: 10, attachment_ref: 'mock-upload-token' })
     }
     if (path.endsWith('/files') && method === 'GET') {
       return ok({ path: url.searchParams.get('path') || '.',
@@ -550,7 +550,7 @@ test('file attachment can create a session from an empty chat', async ({ page })
   await page.getByPlaceholder('问任何问题').fill('检查附件')
   await page.getByRole('button', { name: '发送消息' }).click()
   await expect.poll(() => state.messages).toEqual(['检查附件'])
-  await expect.poll(() => state.attachments).toEqual([['uploaded.txt']])
+  await expect.poll(() => state.attachments).toEqual([['mock-upload-token']])
   await expect(page.locator('.chat-composer')).toHaveCount(1)
   await expect(page.getByPlaceholder('问任何问题')).toHaveCount(1)
 })
