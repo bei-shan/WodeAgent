@@ -29,7 +29,10 @@ _ANCHOR_SUPPORTED = (
     and hasattr(os, "O_NOFOLLOW")
     and hasattr(os, "O_DIRECTORY")
     and os.open in os.supports_dir_fd
-    and os.replace in os.supports_dir_fd
+    # CPython exposes replace(src_dir_fd=..., dst_dir_fd=...) on POSIX but
+    # does not list os.replace in supports_dir_fd; os.rename is the correct
+    # underlying renameat capability probe.
+    and os.rename in os.supports_dir_fd
     and os.link in os.supports_dir_fd
 )
 
