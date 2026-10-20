@@ -929,17 +929,17 @@ class HistoryManager:
                 if tool_call_id:
                     messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": msg.content})
                 else:
-                    messages.append({"role": "user", "content": f"Observation ({tool_name}): {msg.content}"})
+                    from core.context_engine.untrusted_content import frame_untrusted
+                    messages.append({
+                        "role": "user",
+                        "content": frame_untrusted(f"unpaired tool output ({tool_name})", msg.content),
+                    })
             elif msg.role == "summary":
-                # Pi-style: wrap compaction summary as a user message with explicit
-                # XML delimiters so the model treats it as reference background, not
-                # an active instruction. Keeps the system prefix byte-stable, which
-                # matters for prompt-cache friendliness.
-                wrapped = (
-                    "The conversation history before this point was compacted into "
-                    "the following summary:\n\n"
-                    f"<summary>\n{msg.content}\n</summary>"
-                )
+                # Compaction summaries can contain attacker-controlled tool data.
+                # Neither XML marker breakout nor stale model instructions gain
+                # user authority simply by being persisted and compressed.
+                from core.context_engine.untrusted_content import frame_untrusted
+                wrapped = frame_untrusted("compacted conversation summary", msg.content)
                 messages.append({"role": "user", "content": wrapped})
         return messages
 
