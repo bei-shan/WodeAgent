@@ -44,9 +44,27 @@ class BrowserSession:
                     permissions=[], ignore_https_errors=False,
                 )
                 def guard(route):
-                    if self.policy.allows(route.request.url):
-                        route.continue_()
-                    else:
+                    # Playwright's route.continue_() follows ALL redirects
+                    # without re-invoking routing: an allowed origin can
+                    # redirect to metadata/localhost/another tenant. Never
+                    # pass unverified redirect responses to the browser.
+                    if not self.policy.allows(route.request.url):
+                        route.abort(error_code="blockedbyclient")
+                        return
+                    try:
+                        response = route.fetch(max_redirects=0, timeout=10000)
+                        # Fail closed on ANY redirect. Later: permit only
+                        # validated same-origin hops using a redirect-aware
+                        # network proxy, not a 3xx route.fulfill().
+                        if 300 <= response.status < 400:
+                            route.abort(error_code="blockedbyclient")
+                            return
+                        size = response.headers.get("content-length", "")
+                        if size.isdecimal() and int(size) > 2_097_152:
+                            route.abort(error_code="blockedbyclient")
+                            return
+                        route.fulfill(response=response)
+                    except Exception:
                         route.abort(error_code="blockedbyclient")
                 context.route("**/*", guard)
                 # No WebSocket exfiltration in this opt-in local browser.
