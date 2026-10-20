@@ -71,6 +71,58 @@ def test_local_bash_subprocess_receives_temporary_home_and_no_api_keys(tmp_path,
     assert not Path(seen[0]["HOME"]).exists()
 
 
+
+def test_command_approval_requires_exact_session_broker(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("BASH_COMMAND_APPROVAL", "ask")
+    executed = []
+    decisions = []
+
+    def fake_run(args, **kwargs):
+        executed.append(args)
+        return SimpleNamespace(stdout="ok", stderr="", returncode=0,
+                               timed_out=False, interrupted=False)
+
+    monkeypatch.setattr("tools.builtin.bash.run_process", fake_run)
+    shell = BashTool(project_root=tmp_path)
+
+    missing = json.loads(shell.run({"command": "echo hello"}))
+    assert missing["status"] == "error"
+    assert not executed
+
+    def broker(description, name, action):
+        decisions.append((description, name, action))
+        return "granted"
+
+    shell._command_approval_broker = broker
+    allowed = json.loads(shell.run({"command": "echo hello"}))
+    assert allowed["status"] == "success"
+    assert len(executed) == 1
+    assert decisions and "echo hello" in decisions[0][0]
+    assert decisions[0][1:] == ("Bash", "execute-command")
+
+    shell._command_approval_broker = lambda *args: "denied"
+    rejected = json.loads(shell.run({"command": "echo denied"}))
+    assert rejected["status"] == "error"
+    assert len(executed) == 1
+
+    shell._command_approval_broker = broker
+    oversized = json.loads(shell.run({"command": "echo " + "x" * 5000}))
+    assert oversized["status"] == "error"
+    assert len(executed) == 1
+
+
+def test_host_command_policy_deny_is_noninteractive(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setenv("BASH_COMMAND_APPROVAL", "deny")
+    tool = BashTool(project_root=tmp_path)
+    tool._command_approval_broker = lambda *args: "granted"
+    result = json.loads(tool.run({"command": "echo forbidden"}))
+    assert result["status"] == "error"
+    assert "disabled by policy" in result["text"]
+
+
 def test_mcp_stdio_never_inherits_agent_keys(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "stolen")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "stolen")
