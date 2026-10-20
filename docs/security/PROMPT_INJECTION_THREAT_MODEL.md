@@ -83,6 +83,16 @@ repository contents or tool results are untrusted.
   credentials. Hooks nevertheless run on the host with the operator's OS
   filesystem/network privileges and are not safe in a malicious workspace.
 
+- Local trusted Bash can now use `BASH_COMMAND_APPROVAL=ask` to require
+  exact, untruncated command confirmation through the authenticated session
+  permission broker before execution. `deny` blocks host Bash outright;
+  `allow` is the compatibility default for intentionally trusted local
+  workspaces. Without a UI broker, `ask` fails closed. Commands above 4096
+  characters fail closed in approval mode rather than displaying a truncated
+  authorization request. This is a second-line confirmation and does NOT
+  constrain spawned processes, unapproved file access by other tools or
+  unauthorized network sockets. For untrusted repos use isolated execution.
+
 ## Remaining risks / mandatory production gates
 
 - **Host command execution:** `tools/builtin/bash.py` uses shell parsing
