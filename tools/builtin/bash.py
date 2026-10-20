@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import time
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -15,6 +16,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
 from core.runtime.cancellation import current_cancel_event
 from core.runtime.process_execution import run_process
+from core.runtime.subprocess_environment import safe_child_env
 
 load_env()
 
@@ -208,9 +210,9 @@ class BashTool(Tool):
         # 执行命令
         # =====================================================================
 
-        # 设置环境变量
-        env = os.environ.copy()
-        env["MYCODEAGENT"] = "1"
+        # A host command still has host filesystem/network access. Never
+        # additionally pass API keys or cloud credentials from the Agent's
+        # environment; isolate HOME to avoid ambient CLI credentials.
 
         # 转换超时时间为秒
         timeout_sec = timeout_ms / 1000.0
@@ -243,10 +245,12 @@ class BashTool(Tool):
                 run_args = exec_command
 
         try:
-            result = run_process(
-                run_args, shell=use_shell, cwd=str(target_dir), env=env,
-                timeout=timeout_sec, cancel_event=current_cancel_event(),
-            )
+            with tempfile.TemporaryDirectory(prefix="ridge-bash-home-") as home:
+                env = safe_child_env({"MYCODEAGENT": "1"}, home=home)
+                result = run_process(
+                    run_args, shell=use_shell, cwd=str(target_dir), env=env,
+                    timeout=timeout_sec, cancel_event=current_cancel_event(),
+                )
             stdout = result.stdout
             stderr = result.stderr
             exit_code = result.returncode
