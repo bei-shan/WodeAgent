@@ -1149,13 +1149,14 @@ class CodeAgent(Agent):
         self._system_messages_logged = True
 
     def _get_system_messages_for_run(self) -> List[dict]:
-        if self._system_messages_override:
-            return [dict(m) for m in self._system_messages_override]
+        # Session snapshots are untrusted serialized data. Never restore their
+        # former system messages as current higher-priority instructions.
         return self.context_builder.get_system_messages()
 
     def _build_messages(self, history_messages: list[dict]) -> list[dict]:
-        system_messages = self._get_system_messages_for_run()
-        return list(system_messages) + list(history_messages)
+        # The context builder applies the same provenance boundary in the
+        # ordinary and post-compaction paths, without mutating saved history.
+        return self.context_builder.build_messages(history_messages)
 
     # ------------------------------------------------------------------
     # Session management (multi-conversation)
