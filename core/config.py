@@ -53,6 +53,7 @@ class Config(BaseModel):
     browser_allowed_origins: str = ""  # explicit comma-separated scheme://host:port
     browser_allow_loopback: bool = False  # explicit trusted local-development override
     sandbox_docker_image: str = "python:3.12-alpine"
+    sandbox_workspace_snapshot_enabled: bool = False  # explicit opt-in until snapshot/exchange acceptance
     sandbox_memory: str = "512m"
     sandbox_cpus: float = 1.0
     sandbox_pids_limit: int = 64
@@ -192,6 +193,7 @@ class Config(BaseModel):
             browser_allowed_origins=env_str("AGENT_BROWSER_ALLOWED_ORIGINS", ""),
             browser_allow_loopback=env_bool("AGENT_BROWSER_ALLOW_LOOPBACK", False),
             sandbox_docker_image=env_str("AGENT_SANDBOX_DOCKER_IMAGE", "python:3.12-alpine"),
+            sandbox_workspace_snapshot_enabled=env_bool("AGENT_SANDBOX_WORKSPACE_SNAPSHOT", False),
             sandbox_memory=env_str("AGENT_SANDBOX_MEMORY", "512m"),
             sandbox_cpus=env_float("AGENT_SANDBOX_CPUS", 1.0),
             sandbox_pids_limit=env_int("AGENT_SANDBOX_PIDS_LIMIT", 64),
