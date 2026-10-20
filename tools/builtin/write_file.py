@@ -359,6 +359,7 @@ class WriteTool(Tool):
                 bytes_written = commit_utf8(
                     abs_path, content,
                     expected_stat=None if is_create else current_stat,
+                    workspace_root=self._root,
                 )
 
                 applied = True
