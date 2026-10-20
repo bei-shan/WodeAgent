@@ -82,46 +82,71 @@ compare-and-swap against arbitrary writers needs a stronger storage/overlay
 transaction model. Out-of-workspace explicitly approved paths and Windows
 fallback still need equivalent handle-scoped protection.
 
-### 5. Attachment pipeline
+### 5. Attachment pipeline (images and documents)
 
 ```text
-ChatComposer selected files
-   -> POST /sessions/<id>/upload       (existing streamed 25 MiB cap,
-                                       O_NOFOLLOW + exclusive file creation)
-   -> POST /sessions/<id>/messages
-      { content, attachments: ["session-relative-file"] }
-   -> WorkspaceService.prepare_attachments()
-      (verify session, descriptor-pinned open, max 4 parts,
-       8 MiB combined, 4 MiB/image, 96 KiB/text)
-   -> AgentSession private one-turn media (memory only)
-   -> AgentLoop first model invocation
-      * magic-sniffed PNG / JPEG / GIF / WebP: image_url data part
-      * UTF-8 source/text files: text part
-      * PDF / Office / unknown binary: path-only reference
-   -> model (provider/model must support image input)
-   -> history, traces, session snapshot: text + filenames only
-   -> clear transient media on turn completion/error
+ChatComposer uploads file bytes
+  -> POST /sessions/<id>/upload
+     streamed 25 MiB cap; O_NOFOLLOW; exclusive create
+     -> opaque random attachment_ref scoped to session + file identity (2 h)
+  -> POST /sessions/<id>/messages
+     { content, attachments: ["opaque-attachment-ref"] }
+  -> WorkspaceService.prepare_attachments()
+     resolves ONLY issued upload credentials; refuses guessed paths,
+     other sessions, changed files and expired grants
+  -> bounded magic-sniffing and parsing (max 4 files, 8 MiB combined)
+     * PNG/JPEG/GIF/WebP: Pillow verify, <= 4 MiB, <= 16 megapixels
+       -> OpenAI-compatible image_url content block
+     * UTF-8 text/code: <= 96 KiB payload, 40K-character text part
+     * PDF: <= 3 MiB, <= 12 pages, pypdf bounded text derivative
+     * DOCX: <= 3 MiB, <= 2 MiB inflated word/document.xml text
+     * other binary: path-only reference, never fake text/vision
+  -> AgentLoop attaches multimodal parts to the newest user turn on
+     EVERY model step during that turn (including after tool calls)
+  -> session history/trace: text and file reference names, NO base64
+  -> discard ephemeral model parts on completion, exception or cancellation
 ```
 
-The client never controls an absolute path, a URL, arbitrary Base64 or MIME
-type for model injection. Attachment paths must resolve through the active
-session's fd-confined workspace, not an arbitrary host directory. The
-provider may reject image input if its model lacks multimodal support;
-we do not silently claim the pixels were processed.
+Attachments supplied via the API are **upload credentials**, not
+filesystem paths. Merely placing a file in the workspace does not grant a
+model attachment capability. Credentials are random, in-memory,
+session-scoped, limited to 128 per session and expire after two hours. The
+actual file is verified by inode/device, size, nanosecond mtime and ctime
+at message admission; uploads modified by a tool must be uploaded again.
+The implementation is intended for the **single-process local Web service**.
+Multi-worker/hosted deployments need a durable per-tenant attachment store,
+authorization-aware object keys and signed temporary fetch URLs; this
+in-memory ticket registry is not appropriate there.
 
-Raw PDF/Office and unknown media currently remain **path-only**. They are
-available inside the session workspace for an explicitly scoped parser/tool,
-but this PR does not add a privileged PDF/Office conversion worker.
-Production support should put PDF/Office parsing behind isolated,
-resource-capped conversion and return a bounded text/Markdown derivative.
-No archive should be extracted inside the API worker.
+Document text is explicitly labelled as **untrusted attachment data**, not
+instructions. Raw PDF/DOCX bytes are never sent as a fabricated image_url
+and cannot be interpreted merely by suffix. Scanned/image-only PDFs yield
+no text and require a separately authorized OCR/document conversion service.
+Unsupported binary files are not claimed as understood by the model.
+
+**Parsing security limitation:** Pillow, pypdf and ZIP/XML parsing still run
+in a local process on the API worker. Byte/page/pixel/XML caps reduce exposure
+but do NOT provide CPU or memory isolation for malicious documents. Hosted
+production must execute conversion in an isolated, resource-limited worker
+and scan/quarantine uploads before model use.
+
+Binary originals persist in the session's workspace even though media
+base64 is not put into chat history. Files need explicit retention/GC and
+storage-at-rest policies before hosted use. A model/provider without vision
+support may reject an image request; fallback must be surfaced rather than
+claiming successful interpretation.
 
 ### Verification
 
 - `test_bash_command_approval.py`: conservative classification, one-off
   broker per command, strict no-broker refusal and isolation-only switch.
-- `test_message_attachments.py`: magic-sniff, temporary vision/text blocks,
-  no persisted base64, cross-session references, malformed paths.
+- `test_message_attachments.py`: real image decoding, transient vision/text
+  parts, no persisted base64, upload tickets, cross-session denials, modified
+  upload refusal and malformed path handling.
+- `test_attachment_parsers_and_agent_loop.py`: DOCX text, ZIP bombs, encrypted
+  PDF rejection, forged image rejection and image context across tool steps.
+- `test_file_anchored_reads.py`: pinned file and parent directories with
+  symlink attacks, edit size bounds and POSIX native feature detection.
 - `test_file_commit_anchored.py`: root pinning and symlinked parent swap,
   mode preservation and exclusive create.
 - `tests/native/windows_job_smoke.py`: real Windows process tree ownership.
