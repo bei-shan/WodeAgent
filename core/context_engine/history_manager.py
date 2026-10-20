@@ -549,7 +549,7 @@ class HistoryManager:
         })
         return info if return_info else True
 
-    def should_compress(self, pending_input: str) -> bool:
+    def should_compress(self, pending_input: str, *, request_token_estimate: int | None = None) -> bool:
         if self._has_forks():
             messages = self._context_branch_messages()
             if len(messages) < 3:
@@ -557,7 +557,10 @@ class HistoryManager:
         elif len(self._messages) < 3:
             return False
         usage_estimated = self._last_usage_tokens + len(pending_input or "") // 3
-        estimated_total = max(self.estimate_context_tokens(pending_input), usage_estimated)
+        estimated_total = max(
+            self.estimate_context_tokens(pending_input), usage_estimated,
+            request_token_estimate if type(request_token_estimate) is int and request_token_estimate > 0 else 0,
+        )
         # Keep space for model output, tool returns and summarization.
         # Claude Code Best reserves output capacity; OpenCode keeps a
         # configurable headroom before its model context limit. Clamp the

@@ -39,7 +39,7 @@ class Host:
     def _console(self, text): raise AssertionError(text)
     def _get_openai_tools_for_current_mode(self): return [{"function": {"name": "Read"}}]
     def _collect_runtime_blocks(self, step): self.actions.append(("runtime", step))
-    def _maybe_compress_history(self, pending_input, trace, step):
+    def _maybe_compress_history(self, pending_input, trace, step, tools_schema):
         self.actions.append(("context", step))
     def _build_step_messages(self, trace, step):
         return ([{"role": "user", "content": "hi"}], [{"role": "user", "content": "hi"}])
@@ -92,7 +92,7 @@ class FakeContextHost:
         self.console_verbose = False
         self.config = SimpleNamespace(context_window=100, compression_threshold=0.8)
         self.history_manager = SimpleNamespace(
-            should_compress=lambda pending: compress,
+            should_compress=lambda pending, **kwargs: compress,
             estimate_context_tokens=lambda _: 91,
             get_total_usage_tokens=lambda: 20,
             get_message_count=lambda: 8 if compress else 3,
@@ -165,3 +165,23 @@ def test_mcp_tool_recovered_during_runtime_blocks_is_advertised_same_step():
     assert AgentLoop(host).run("input", False, Trace()) == "done"
     assert host.received_tools == ["Read", "mcp__recovered__lookup"]
     assert host.actions.index(("runtime", 1)) < host.actions.index(("schema", 2))
+
+
+def test_context_budget_accounts_for_dynamic_tool_schema():
+    from core.context_engine.token_budget import estimate_request_tokens
+    messages = [{"role": "system", "content": "Short prompt"}]
+    ordinary = estimate_request_tokens(messages, [])
+    with_tools = estimate_request_tokens(messages, [
+        {"type": "function", "function": {"name": "huge",
+          "description": "x" * 15000, "parameters": {"type": "object"}}}
+    ])
+    assert ordinary > 0 and with_tools > ordinary + 4000
+
+
+def test_loop_passes_current_tool_catalog_to_compaction_boundary():
+    class CaptureHost(Host):
+        def _maybe_compress_history(self, pending_input, trace, step, tools_schema):
+            assert tools_schema == [{"function": {"name": "Read"}}]
+            self.actions.append(("context", step))
+    host = CaptureHost([result("done")])
+    assert AgentLoop(host).run("input", False, Trace()) == "done"

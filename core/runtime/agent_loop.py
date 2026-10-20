@@ -25,7 +25,8 @@ class AgentLoopPort(Protocol):
 
     def _get_openai_tools_for_current_mode(self) -> list[dict]: ...
     def _collect_runtime_blocks(self, step: int) -> None: ...
-    def _maybe_compress_history(self, pending_input: str, trace_logger: Any, step: int) -> None: ...
+    def _maybe_compress_history(self, pending_input: str, trace_logger: Any, step: int,
+                                tools_schema: Any) -> None: ...
     def _build_step_messages(self, trace_logger: Any, step: int) -> tuple: ...
     def _invoke_llm_with_retry(self, messages: Any, base_messages: Any, tools_schema: Any,
                                tool_choice: Any, show_raw: bool, trace_logger: Any,
@@ -55,7 +56,7 @@ class AgentLoop:
             if host._interrupt_requested.is_set():
                 return "已停止生成（用户中断）"
             # Auto-retry pending MCP servers each step so tools appear
-            # MCP retry handled by MCPFeature.runtime_blocks()
+            # MCP retry is owned by the runtime MCP service.
 
             host.event_sink.emit(AgentEvent(EventType.STEP_STARTED, {
                 "step": step,
@@ -75,7 +76,7 @@ class AgentLoop:
             elif host.logger.isEnabledFor(logging.DEBUG):
                 host.logger.debug("Step %d/%d", step, host.max_steps)
 
-            host._maybe_compress_history(pending_input, trace_logger, step)
+            host._maybe_compress_history(pending_input, trace_logger, step, tools_schema)
 
             messages, base_messages = host._build_step_messages(trace_logger, step)
 

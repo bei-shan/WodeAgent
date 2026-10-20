@@ -696,9 +696,9 @@ class CodeAgent(Agent):
         if blocks and hasattr(self.context_builder, "set_runtime_system_blocks"):
             self.context_builder.set_runtime_system_blocks(blocks)
 
-    def _maybe_compress_history(self, pending_input: str, trace_logger, step: int) -> None:
+    def _maybe_compress_history(self, pending_input: str, trace_logger, step: int, tools_schema=None) -> None:
         from core.runtime.context_runtime import ContextRuntime
-        ContextRuntime(self).maybe_compress_history(pending_input, trace_logger, step)
+        ContextRuntime(self).maybe_compress_history(pending_input, trace_logger, step, tools_schema)
 
     def _build_step_messages(self, trace_logger, step: int):
         from core.runtime.context_runtime import ContextRuntime
