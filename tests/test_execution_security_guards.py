@@ -81,8 +81,8 @@ def test_mcp_stdio_never_inherits_agent_keys(monkeypatch):
     connection = AsyncMock()
     connection.__aenter__.side_effect = fake_connect
     session = AsyncMock()
-    with patch("tools.mcp.client.stdio_client", return_value=connection) as mock_stdio, \\
-         patch("tools.mcp.client.ClientSession", return_value=session):
+    with (patch("tools.mcp.client.stdio_client", return_value=connection) as mock_stdio,
+          patch("tools.mcp.client.ClientSession", return_value=session)):
         client = MCPClient(MCPClientConfig(
             transport="stdio", command="echo",
             env={"EXPLICIT_MCP_TOKEN": "approved"},
