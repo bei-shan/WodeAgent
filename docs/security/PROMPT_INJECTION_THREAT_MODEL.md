@@ -107,12 +107,14 @@ repository contents or tool results are untrusted.
   projected as untrusted data in the model request. The saved session itself
   is not mutated. This blocks a second role-promotion route beyond the former
   `system_messages` snapshot field.
-- `core/runtime/process_execution.py` drains stdout/stderr concurrently but
-  retains at most 51,200 bytes **per stream** while the process is running,
-  rather than collecting unbounded output and truncating afterwards. Overflow
-  reaches both host-Bash and Docker tool result envelopes. This addresses
-  capture-memory exhaustion, **not** CPU usage, IO rates, open files or all
-  descendants; Windows descendant termination still requires a Job Object.
+- `core/runtime/process_execution.py` drains stdout/stderr concurrently,
+  retaining at most 128 KiB **per stream** by default to fit base64-encoded,
+  64 KiB guest filesystem transfer responses. Host Bash explicitly requests a
+  tighter 50 KiB per-stream cap, and sandbox Bash separately presents at most
+  50 KiB of each stream to the model. Overflow flags propagate through result
+  envelopes. This addresses capture-memory exhaustion, **not** CPU usage,
+  IO rates, open files or all descendants; Windows descendant termination
+  still requires a Job Object.
 - The dedicated security workflow now includes stream-overflow, child
   cancellation and Bash behavior regressions alongside prompt-injection tests.
 
