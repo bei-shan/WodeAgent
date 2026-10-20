@@ -243,8 +243,13 @@ class WorkspaceService:
                 if total > MAX_TOTAL_BYTES:
                     raise PayloadTooLargeError("Message attachment budget exceeded")
                 data = stream.read(length + 1)
-                if len(data) != length:
-                    raise InvalidInputError("Attachment changed while being read")
+                final = os.fstat(stream.fileno())
+                final_identity = (
+                    final.st_dev, final.st_ino, final.st_size,
+                    final.st_mtime_ns, final.st_ctime_ns,
+                )
+                if len(data) != length or final_identity != expected_identity:
+                    raise ForbiddenError("Uploaded file changed during reading")
             try:
                 parts.append(make_attachment_part(path, data))
             except ValueError as exc:
