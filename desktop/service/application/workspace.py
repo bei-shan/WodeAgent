@@ -355,9 +355,45 @@ class WorkspaceService:
             except BaseException:
                 os.unlink(candidate, dir_fd=root_fd)
                 raise
-            live = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
-            identity = (live.st_dev, live.st_ino, live.st_size,
-                        live.st_mtime_ns, live.st_ctime_ns)
+            # Scan exactly the uploaded inode before publishing any ticket.
+            # A replaced filename or symlink must not inherit a successful
+            # scan from an earlier file.
+            from .attachment_scanner import scan_uploaded_fd, UploadRejected
+            initial = None
+            try:
+                scan_fd = os.open(
+                    candidate, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd,
+                )
+                try:
+                    initial = os.fstat(scan_fd)
+                    if not stat.S_ISREG(initial.st_mode):
+                        raise UploadRejected("Uploaded file is not regular")
+                    scan_uploaded_fd(scan_fd)
+                    after_scan = os.fstat(scan_fd)
+                finally:
+                    os.close(scan_fd)
+                live = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
+                identity = (live.st_dev, live.st_ino, live.st_size,
+                            live.st_mtime_ns, live.st_ctime_ns)
+                scanned = (initial.st_dev, initial.st_ino, initial.st_size,
+                           initial.st_mtime_ns, initial.st_ctime_ns)
+                after = (after_scan.st_dev, after_scan.st_ino, after_scan.st_size,
+                         after_scan.st_mtime_ns, after_scan.st_ctime_ns)
+                if not stat.S_ISREG(live.st_mode) or identity != scanned or after != scanned:
+                    raise UploadRejected("Upload changed during malware scan")
+            except (UploadRejected, OSError) as exc:
+                # A malicious rename after scanning must not trick cleanup
+                # into deleting an unrelated replacement at the same name.
+                try:
+                    current = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
+                    if initial is None or (
+                        current.st_dev == initial.st_dev
+                        and current.st_ino == initial.st_ino
+                    ):
+                        os.unlink(candidate, dir_fd=root_fd)
+                except OSError:
+                    pass
+                raise ForbiddenError("Upload failed malware scan or changed while scanning") from exc
             credential = secrets.token_urlsafe(32)
             try:
                 self._uploads.issue(
