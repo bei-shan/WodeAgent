@@ -1,0 +1,47 @@
+name: Prompt injection security regressions
+
+on:
+  pull_request:
+    paths:
+      - "agents/codeAgent.py"
+      - "core/context_engine/**"
+      - "core/skills/**"
+      - "tools/mcp/**"
+      - "tools/builtin/bash.py"
+      - "tests/test_context_builder.py"
+      - "tests/test_context_engineering.py"
+      - "tests/test_prompt_injection_boundaries.py"
+      - ".github/workflows/prompt-injection-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "agents/codeAgent.py"
+      - "core/context_engine/**"
+      - "core/skills/**"
+      - "tools/mcp/**"
+      - "tools/builtin/bash.py"
+      - "tests/test_prompt_injection_boundaries.py"
+      - ".github/workflows/prompt-injection-guard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m compileall -q agents core/context_engine tests/test_prompt_injection_boundaries.py
+      - run: |
+          python -m pytest -q \
+            tests/test_context_builder.py \
+            tests/test_context_engineering.py \
+            tests/test_prompt_injection_boundaries.py \
+            tests/test_tool_runtime_pipeline.py \
+            tests/test_permission_gate.py
