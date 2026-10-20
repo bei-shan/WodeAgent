@@ -232,6 +232,8 @@ class DockerCommandProvider:
                 exit_code=result.returncode,
                 timed_out=result.timed_out,
                 interrupted=result.interrupted,
+                truncated=(getattr(result, "stdout_truncated", False)
+                           or getattr(result, "stderr_truncated", False)),
             )
         except subprocess.TimeoutExpired as exc:
             self._force_remove(container_name)
