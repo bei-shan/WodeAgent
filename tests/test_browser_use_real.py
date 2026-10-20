@@ -48,6 +48,8 @@ def sites():
                 "<button id='send' onclick=\"document.getElementById('result').textContent="
                 "'submitted ' + document.getElementById('message').value\">Send</button>"
                 "<button id='setcookie' onclick=\"document.cookie='session_private=alpha; SameSite=Lax'\">Cookie</button>"
+                f"<a id='popup' href='{evil_url}/private' target='_blank'>untrusted popup</a>"
+                "<a id='download' href='/download'>download</a>"
                 "<div id='result'></div>"
                 f"<script>fetch('{evil_url}/collect').catch(()=>{{}})</script>"
                 "</body></html>"
@@ -110,3 +112,19 @@ def test_real_chromium_blocked_redirect_and_independent_cookies(sites):
     finally:
         first.close()
         second.close()
+
+
+def test_real_popup_cannot_open_second_unmanaged_tab(sites):
+    origin, evil_hits = sites
+    session = _browser(origin)
+    try:
+        session.call("navigate", {"url": origin + "/"})
+        try:
+            session.call("click", {"selector": "#popup"})
+        except Exception:
+            # Closing an unowned popup is allowed to abort the click itself.
+            pass
+        assert "/private" not in evil_hits, "popup escaped the origin fence"
+        assert "UNTRUSTED PAGE TEXT" in session.call("observe", {})["text"]
+    finally:
+        session.close()
