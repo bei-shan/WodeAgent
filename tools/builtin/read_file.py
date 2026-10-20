@@ -104,7 +104,7 @@ class ReadTool(Tool):
         if not isinstance(path, str) or not path or "\x00" in path:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
-                message="Parameter 'path' must be a non-empty path string.",
+                message="Parameter 'path' is required and must be a non-empty path string.",
                 params_input=params_input,
             )
         
