@@ -34,7 +34,7 @@ Vite 会显示浏览器访问地址，停止服务请使用 Ctrl+C。
 ## 启动 OpenTUI
 
 ```bash
-cd tui-v2 && bun install --frozen-lockfile && cd ..
+cd tui && bun install --frozen-lockfile && cd ..
 python -m ridgecode tui
 ```
 
@@ -49,7 +49,7 @@ python -m ridgecode eval --json
 python -m ridgecode soak --iterations 10 --json
 python -m pytest tests/ -q
 cd desktop/web && npm ci && npm run build && cd ../..
-cd tui-v2 && bun install --frozen-lockfile && bun run typecheck && bun test
+cd tui && bun install --frozen-lockfile && bun run typecheck && bun test
 ```
 
 `soak` 是**离线模拟模型**资源稳态测试；真实 30 分钟基准可用 `--duration-seconds 1800`，不能替代真实模型、分布式负载或多租户验收。

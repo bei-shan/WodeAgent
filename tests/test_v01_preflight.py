@@ -10,8 +10,8 @@ def _root(tmp_path):
     (tmp_path / "requirements.txt").write_text("fastapi>=0.110\n")
     (tmp_path / "desktop/web").mkdir(parents=True)
     (tmp_path / "desktop/web/package-lock.json").write_text("{}")
-    (tmp_path / "tui-v2").mkdir()
-    (tmp_path / "tui-v2/bun.lock").write_text("")
+    (tmp_path / "tui").mkdir()
+    (tmp_path / "tui/bun.lock").write_text("")
     return tmp_path
 
 
@@ -52,7 +52,7 @@ def test_web_and_tui_dependencies_are_scoped(tmp_path):
 
 def test_tui_missing_dependency_lockfile_and_old_bun_fail(tmp_path):
     root = _root(tmp_path)
-    (root / "tui-v2/bun.lock").unlink()
+    (root / "tui/bun.lock").unlink()
     checks = preflight.collect(
         "tui", root=root, python_version=(3, 12),
         has_package=lambda _: True, get_version=lambda name: (1, 3, 0),

@@ -39,7 +39,7 @@ skills/
   "name": "review-kit",
   "version": "0.1.0",
   "description": "Reviews source code",
-  "features": {
+  "components": {
     "skills": ["skills"],
     "hooks": {}
   }

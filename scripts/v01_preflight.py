@@ -80,7 +80,7 @@ def collect(
         bun = get_version("bun")
         checks.extend((
             Check("bun", bun is not None and bun >= (1, 4), "Bun 1.4+ required for OpenTUI"),
-            Check("tui-lockfile", any((root / "tui-v2" / name).is_file()
+            Check("tui-lockfile", any((root / "tui" / name).is_file()
                                      for name in ("bun.lock", "bun.lockb")),
                   "OpenTUI Bun dependency lockfile is present"),
         ))

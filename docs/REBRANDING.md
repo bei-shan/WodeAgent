@@ -6,7 +6,7 @@
 
 - 根目录 README、贡献规范以及主要 Web/TUI 标题采用新品牌。
 - Web npm 包标识调整为 `ridgecode-web`，TUI 私有包标识为 `@ridgecode/tui`。
-- TUI v2 新增 `RIDGECODE_SERVER` 环境变量入口。
+- OpenTUI 统一使用 `RIDGECODE_SERVER` 环境变量入口。
 - 删除根目录 `CLAUDE.md`：其内容与现状存在偏差，开发约定转移到 `CONTRIBUTING.md` 与现行设计/测试。
 - 源码中的框架类 `CodeAgent` 仍为有效的内部 API 名称，它不是对外品牌。
 

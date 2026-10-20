@@ -1,7 +1,7 @@
 """Explicit per-Agent runtime service ownership with dependency validation.
 
 Runtime services own long-lived resources (MCP connections, session storage,
-team managers, sandboxes). Middleware/Features must not own those resources.
+team managers, sandboxes). Middleware/Hooks must not own those resources.
 Graph registration is framework-owned; it is not a plugin capability API.
 """
 from __future__ import annotations

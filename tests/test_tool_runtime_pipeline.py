@@ -20,7 +20,7 @@ class FakeDispatcher:
         return '{"status":"success"}'
 
 
-class FakeFeature:
+class FakeInterceptor:
     def __init__(self, name, events, *, update=None, blocked=False):
         self.name = name
         self.events = events
@@ -38,16 +38,16 @@ class FakeFeature:
         return [f"post:{self.name}"]
 
 
-def test_feature_order_and_updated_parameters_and_messages():
+def test_interceptor_order_and_updated_parameters_and_messages():
     events, messages, times = [], [], {}
     features = [
-        FakeFeature("a", events, update={"value": 1}),
-        FakeFeature("b", events, update={"value": 2}),
+        FakeInterceptor("a", events, update={"value": 1}),
+        FakeInterceptor("b", events, update={"value": 2}),
     ]
     rt = ToolRuntime(FakeDispatcher(events), logging.getLogger("test"))
     result = rt.execute(
         "Read", {"path": "hello"},
-        agent=object(), features=iter(features),
+        agent=object(), interceptors=iter(features),
         emit_messages=messages.extend,
         record_timing=times.__setitem__,
     )
@@ -61,15 +61,15 @@ def test_feature_order_and_updated_parameters_and_messages():
     assert isinstance(times["Read"], int) and times["Read"] >= 0
 
 
-def test_blocked_feature_stops_tool_dispatch_and_preserves_existing_messages():
+def test_blocked_interceptor_stops_tool_dispatch_and_preserves_existing_messages():
     events, messages, times = [], [], {}
     rt = ToolRuntime(FakeDispatcher(events), logging.getLogger("test"))
     output = rt.execute(
         "Bash", "echo foo", agent=object(),
-        features=[
-            FakeFeature("one", events),
-            FakeFeature("policy", events, blocked=True),
-            FakeFeature("never", events),
+        interceptors=[
+            FakeInterceptor("one", events),
+            FakeInterceptor("policy", events, blocked=True),
+            FakeInterceptor("never", events),
         ],
         emit_messages=messages.extend,
         record_timing=times.__setitem__,
@@ -98,7 +98,7 @@ def test_dispatch_error_is_not_swallowed():
             raise RuntimeError("failed")
     rt = ToolRuntime(BrokenDispatcher(), logging.getLogger("test"))
     with pytest.raises(RuntimeError, match="failed"):
-        rt.execute("Read", {}, agent=object(), features=[],
+        rt.execute("Read", {}, agent=object(), interceptors=[],
                    emit_messages=lambda _: None, record_timing=lambda *_: None)
     assert events == ["dispatch"]
 
@@ -108,7 +108,7 @@ def test_codeagent_delegates_to_tool_runtime_without_full_engine():
     events = []
     agent.tool_registry = FakeDispatcher(events)
     agent.logger = logging.getLogger("test")
-    agent._tool_interceptors = [FakeFeature("one", events)]
+    agent._tool_interceptors = [FakeInterceptor("one", events)]
     agent._hook_system_messages = []
     result = agent._execute_tool("Read", {"path": "."})
     assert result == '{"status":"success"}'

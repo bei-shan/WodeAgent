@@ -6,6 +6,8 @@ blocks. ContextRuntime coordinates the two without importing CodeAgent.
 from __future__ import annotations
 
 import logging
+
+from core.context_engine.token_budget import estimate_request_tokens
 from typing import Any, Protocol
 
 
@@ -25,16 +27,37 @@ class ContextRuntime:
     def __init__(self, host: ContextRuntimePort):
         self.host = host
 
-    def maybe_compress_history(self, pending_input: str, trace_logger, step: int) -> None:
-        """检查并在需要时压缩历史。"""
+    def maybe_compress_history(self, pending_input: str, trace_logger, step: int, tools_schema=None) -> None:
+        """Compress before model invocation using the same prompt and tool catalog.
+
+        A byte-based estimate is conservative but not provider tokenizer truth.
+        Reported usage remains a lower bound when previous model calls exist.
+        """
         host = self.host
-        if not host.history_manager.should_compress(pending_input):
+        history = (host.history_manager.to_messages_branch()
+                   if hasattr(host.history_manager, "to_messages_branch")
+                   else host.history_manager.to_messages())
+        projected = host.context_builder.build_messages(history)
+        # The user turn is normally already appended. Include pending input if
+        # the host has not yet committed it to the durable history.
+        if pending_input and not any(
+            message.get("role") == "user" and message.get("content") == pending_input
+            for message in history[-2:]
+        ):
+            projected = projected + [{"role": "user", "content": pending_input}]
+        request_estimate = estimate_request_tokens(projected, tools_schema or [])
+        if not host.history_manager.should_compress(
+            pending_input, request_token_estimate=request_estimate,
+        ):
             return
 
-        estimated_tokens = host.history_manager.estimate_context_tokens(pending_input)
+        estimated_tokens = max(
+            host.history_manager.estimate_context_tokens(pending_input), request_estimate,
+        )
         threshold = int(host.config.context_window * host.config.compression_threshold)
         trace_logger.log_event("history_compression_triggered", {
             "estimated_tokens": estimated_tokens,
+            "full_request_estimated_tokens": request_estimate,
             "threshold": threshold,
             "total_usage_tokens": host.history_manager.get_total_usage_tokens(),
             "message_count": host.history_manager.get_message_count(),

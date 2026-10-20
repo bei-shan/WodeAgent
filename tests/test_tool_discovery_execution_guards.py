@@ -36,7 +36,7 @@ def _run(runtime, agent, policy, tool, params):
         before_tool=lambda name, args: policy.pre_tool_use(agent, name, args),
     )
     return json.loads(runtime.execute(
-        tool, params, agent=agent, features=[],
+        tool, params, agent=agent, interceptors=[],
         emit_messages=lambda _: None, record_timing=lambda *_: None,
     ))
 

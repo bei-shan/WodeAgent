@@ -180,3 +180,44 @@ def test_summary_prompt_preserves_current_work_and_exact_paths():
     assert "src/main.py" in prompt
     assert "remaining TODOs" in prompt
     assert "untrusted historical data" in prompt
+
+
+def test_hung_summary_call_cannot_spawn_more_threads_after_timeout():
+    import threading
+    import time
+
+    class BlockingLLM:
+        def __init__(self):
+            self.calls = 0
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.finished = threading.Event()
+
+        def invoke(self, messages):
+            self.calls += 1
+            self.started.set()
+            self.release.wait(timeout=10)
+            self.finished.set()
+            return "Recovered task summary"
+
+    llm = BlockingLLM()
+    generator = create_summary_generator(llm, config=Config(summary_timeout=1))
+    messages = [Message(role="user", content="work in progress")]
+    assert generator(messages) is None  # timer fires, but provider thread remains
+    assert llm.started.is_set()
+    before = time.monotonic()
+    assert generator(messages) is None  # fail fast; no second provider call
+    assert time.monotonic() - before < 0.5
+    assert llm.calls == 1
+    llm.release.set()
+    assert llm.finished.wait(timeout=2)
+    # The worker releases its resource gate in its finally block.
+    for _ in range(50):
+        result = generator(messages)
+        if result is not None:
+            assert result == "Recovered task summary"
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Summary execution slot was never released")
+    assert llm.calls == 2

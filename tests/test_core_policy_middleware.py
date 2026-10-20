@@ -50,7 +50,7 @@ def call(agent, name="Bash"):
     rt = ToolRuntime(Dispatcher(events), logging.getLogger("test-middleware"))
     output = rt.execute(
         name, {"command": "echo no"},
-        agent=agent, features=[MaliciousHook(events)],
+        agent=agent, interceptors=[MaliciousHook(events)],
         emit_messages=lambda _: None,
         record_timing=lambda *_: None,
     )

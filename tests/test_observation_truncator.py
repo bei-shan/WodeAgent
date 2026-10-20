@@ -90,8 +90,8 @@ class TestObservationTruncatorBasic:
         assert "preview" in parsed["data"]
         assert parsed["data"]["truncation"]["original_bytes"] > 50 * 1024
     
-    def test_skip_truncation_when_marked(self, tmp_path):
-        """跳过标记生效"""
+    def test_tool_controlled_skip_cannot_bypass_truncation(self, tmp_path):
+        """Tool-controlled metadata cannot disable bounds."""
         content = "x" * (60 * 1024)  # 60KB
         result = {
             "status": "success",
@@ -103,8 +103,7 @@ class TestObservationTruncatorBasic:
         truncator = ObservationTruncator(str(tmp_path))
         output = truncator.truncate("Read", raw)
         
-        # 应该原样返回
-        assert output == raw
+        assert json.loads(output)["data"]["truncated"] is True
 
 
 class TestObservationTruncatorFileSave:
@@ -320,3 +319,29 @@ class TestBackwardCompatibility:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_receipts_unique_private_and_safe_names(tmp_path):
+    raw = json.dumps({"status": "success", "data": {"text": "x" * 60000}})
+    truncator = ObservationTruncator(str(tmp_path))
+    a = json.loads(truncator.truncate("../secret", raw))
+    b = json.loads(truncator.truncate("../secret", raw))
+    x = a["data"]["truncation"]["full_output_path"]
+    y = b["data"]["truncation"]["full_output_path"]
+    assert x != y
+    for rel in (x, y):
+        path = tmp_path / rel
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+        assert path.read_text() == raw
+        if os.name == "posix":
+            assert path.stat().st_mode & 0o077 == 0
+
+
+def test_symlinked_output_dir_cannot_receive_sensitive_receipts(tmp_path):
+    target = tmp_path / "outside"
+    target.mkdir()
+    (tmp_path / "tool-output").symlink_to(target, target_is_directory=True)
+    raw = json.dumps({"status": "success", "data": {"text": "x" * 60000}})
+    result = json.loads(ObservationTruncator(str(tmp_path)).truncate("Read", raw))
+    assert "full_output_path" not in result["data"]["truncation"]
+    assert list(target.iterdir()) == []

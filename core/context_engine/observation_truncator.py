@@ -20,6 +20,8 @@
 
 import json
 import os
+import re
+import secrets
 import time
 import logging
 from datetime import datetime, timedelta
@@ -114,8 +116,11 @@ class ObservationTruncator:
         Args:
             project_root: 项目根目录，用于确定落盘路径
         """
-        self._project_root = Path(project_root) if project_root else Path.cwd()
-        self._output_dir = self._project_root / _get_output_dir()
+        self._project_root = (Path(project_root) if project_root else Path.cwd()).resolve()
+        relative = Path(_get_output_dir())
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise ValueError("Tool output directory must be relative to project root")
+        self._output_dir = self._project_root / relative
         
     def truncate(self, tool_name: str, raw_result: str) -> str:
         """
@@ -135,10 +140,7 @@ class ObservationTruncator:
         except json.JSONDecodeError:
             logger.warning("Failed to parse tool result as JSON; treating as plain text")
 
-        # 检查跳过标记
-        if parsed and self._should_skip(parsed):
-            return raw_result
-
+        # Tool result metadata is untrusted and cannot disable output bounds.
         # 使用可读文本进行尺寸判断（将 \\n 还原为真实换行）
         preview_source = self._normalize_text(raw_result)
         content_size = self._get_content_size(preview_source)
@@ -147,11 +149,6 @@ class ObservationTruncator:
 
         # 执行截断
         return self._do_truncate(tool_name, raw_result, preview_source, parsed, content_size)
-    
-    def _should_skip(self, result: Dict[str, Any]) -> bool:
-        """检查是否应跳过截断"""
-        context = result.get("context", {})
-        return context.get("truncation_skip", False)
     
     def _get_content_size(self, text: str) -> Dict[str, int]:
         """获取内容大小信息"""
@@ -308,31 +305,31 @@ class ObservationTruncator:
         return raw_result.replace("\\n", "\n")
     
     def _save_full_output(self, tool_name: str, content: str) -> Optional[Path]:
-        """
-        保存完整输出到文件
-        
-        Returns:
-            保存的文件路径，失败时返回 None
-        """
+        """Write private, unique output receipts; never trust a tool name as a path."""
         try:
-            # 确保输出目录存在
-            self._output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 生成文件名
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"tool_{timestamp}_{tool_name}.json"
+            # Reject already-symlinked output directories and ancestors.
+            # Hostile concurrent filesystem mutation still needs OS isolation.
+            current = self._project_root
+            for component in self._output_dir.relative_to(self._project_root).parts:
+                current = current / component
+                if current.is_symlink():
+                    raise ValueError("Symlinked tool output directory")
+                current.mkdir(exist_ok=True)
+            safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(tool_name))[:40] or "tool"
+            filename = f"tool_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}_{secrets.token_hex(8)}.json"
             filepath = self._output_dir / filename
-            
-            # 写入文件
-            filepath.write_text(content, encoding="utf-8")
-            
-            logger.debug("Saved full output to %s", filepath)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(filepath, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                output.write(content)
+            logger.debug("Stored private tool output receipt")
             return filepath
-            
-        except Exception as e:
-            logger.warning("Failed to save full output: %s", e)
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not persist tool output receipt: %s", type(exc).__name__)
             return None
-    
+
     def _build_hint(
         self,
         tool_name: str,
