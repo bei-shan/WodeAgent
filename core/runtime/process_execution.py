@@ -191,7 +191,15 @@ def run_process(
         # A grandchild can inherit pipes after its leader exits. Never wait
         # forever for a descendant that is outside our process group.
         for reader in readers:
-            reader.join(timeout=0.6)
+            reader.join(timeout=0.3)
+        if any(reader.is_alive() for reader in readers):
+            # The foreground shell may have exited, but an inherited stdout
+            # handle on a background grandchild is still writable. Terminate
+            # the owned process group, then give the pipe drains a final
+            # bounded opportunity to reach EOF. Never wait indefinitely.
+            _kill_tree(process)
+            for reader in readers:
+                reader.join(timeout=0.3)
 
     return ProcessOutcome(
         out.text(), err.text(), process.returncode,
