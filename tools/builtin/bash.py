@@ -86,6 +86,12 @@ class BashTool(Tool):
         
         # 是否允许网络工具（默认禁用）
         self._allow_network = os.environ.get("BASH_ALLOW_NETWORK", "false").lower() == "true"
+        # local_trusted preserves legacy behavior; strict deployments should
+        # set BASH_COMMAND_APPROVAL=ask or require a true isolated backend.
+        self._command_approval = os.environ.get("BASH_COMMAND_APPROVAL", "allow").strip().lower()
+        if self._command_approval not in {"allow", "ask", "deny"}:
+            raise ValueError("BASH_COMMAND_APPROVAL must be allow, ask or deny")
+        self._command_approval_broker = None
 
     def run(self, parameters: Dict[str, Any]) -> str:
         """
@@ -205,6 +211,34 @@ class BashTool(Tool):
                 message=cd_check_result,
                 params_input=params_input,
             )
+
+        # Approval is bound to the *final* command and directory at the
+        # execution boundary. Agent prompts and plugin hooks cannot grant it.
+        # Interactive sessions inject a trusted broker; standalone callers
+        # fail closed when confirmation is required.
+        if self._command_approval != "allow":
+            if self._command_approval == "deny":
+                return self.create_error_response(
+                    error_code=ErrorCode.ACCESS_DENIED,
+                    message="Host command execution is disabled by policy.",
+                    params_input=params_input,
+                )
+            broker = self._command_approval_broker
+            decision = "denied"
+            if callable(broker) and len(command) <= 4096:
+                try:
+                    decision = broker(
+                        f"Directory: {directory_resolved}\\nCommand: {command}",
+                        self.name, "execute-command",
+                    )
+                except Exception:
+                    decision = "denied"
+            if decision != "granted":
+                return self.create_error_response(
+                    error_code=ErrorCode.ACCESS_DENIED,
+                    message="Exact host command approval is required.",
+                    params_input=params_input,
+                )
 
         # =====================================================================
         # 执行命令
