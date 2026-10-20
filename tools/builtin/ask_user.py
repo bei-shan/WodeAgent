@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import sys
 from typing import Any, Dict, List
 
 from tools.base import Tool, ToolParameter, ErrorCode
@@ -10,6 +11,7 @@ from tools.base import Tool, ToolParameter, ErrorCode
 
 class AskUserTool(Tool):
     worker_parent_only = True
+    strict_input_contract = True
     """向用户提问并等待回答（仅主 Agent 允许交互）。"""
     usage_notes = 'AskUser: Ask the user questions when blocked on a decision. Use multiSelect for non-exclusive choices. Prefer asking 1-4 questions at once. Only available in main agent (not subagents).'
 
@@ -48,10 +50,32 @@ class AskUserTool(Tool):
             )
 
         questions = parameters.get("questions")
-        if not isinstance(questions, list) or not questions:
+        if not isinstance(questions, list) or not 1 <= len(questions) <= 4:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
-                message="questions 必须是非空列表。",
+                message="questions must contain 1 to 4 questions.",
+                params_input=parameters,
+                time_ms=0,
+            )
+
+        # Hosted/Web workers must not block a server thread on input().
+        # TUI adapters inject their own interactive input function.
+        if self._input_func is None and not sys.stdin.isatty():
+            return self.create_error_response(
+                error_code=ErrorCode.ASK_USER_UNAVAILABLE,
+                message="AskUser requires a connected interactive input adapter.",
+                params_input=parameters,
+                time_ms=0,
+            )
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("text"), str)
+            or not 1 <= len(item["text"].strip()) <= 1200
+            for item in questions
+        ):
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="Each question must be an object with non-empty text of at most 1200 chars.",
                 params_input=parameters,
                 time_ms=0,
             )
