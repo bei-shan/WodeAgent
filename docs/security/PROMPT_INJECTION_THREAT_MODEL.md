@@ -72,6 +72,9 @@ command-name filter. No amount of environment filtering turns host Bash into
 network isolation or an OS sandbox. A real isolated backend is required when
 repository contents or tool results are untrusted.
 
+- MCP trust flags and the `MCP_SERVERS` override must originate in the
+  operator's process environment; keys newly introduced by an automatically
+  loaded workspace `.env` never authorize MCP execution.
 - Repo-provided `mcp_servers.json`, `.mcp.json`, and `mcp.json` now
   require `MCP_TRUST_PROJECT_CONFIG=true` before any project server is loaded.
   A backend-set `MCP_SERVERS` JSON is the out-of-repository operator path.
