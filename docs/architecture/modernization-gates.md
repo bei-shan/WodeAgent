@@ -27,7 +27,7 @@ they do not justify reintroducing the removed `AgentFeature` extension ABI.
 | P0 | Tool output/artifact containment | Output names cannot escape directories, symlinked paths cannot redirect secret receipts, file mode is private, concurrent receipts do not collide; enforce per-session isolation |
 | P0 | Execution authority | Denied and stale tool calls have zero side effects; nested MCP/subagents cannot gain additional rights; cancellation invalidates approvals |
 | P1 | Context budget/compaction | Count full request (system, schemas, history, files and modality-dependent budget); preserve complete tool-call/result pairs; test multiple compactions and fork restore |
-| P1 | Reliable model cancellation | Bound timeout workers and request resources; prove provider cancellation does not leak running background threads |
+| P1 | Reliable model cancellation | Process-wide and per-generator capacity now bounds timed-out synchronous summary calls; test worker exit and permit recovery. Native provider cancellation, shutdown and process isolation remain **unverified** |
 | P1 | Durable working state | Preserve task objective, plan, touched files, test evidence, blockers, and subagent state independently of lossy summary text |
 | P1 | Browser/computer/file tools | Prove real end-to-end sandbox-scoped sessions, attachment and artifact authorization, platform-specific cancellation |
 | P2 | Memory/providers | Authenticated scopes, selection, revocation and retention; explicit opt-in, source provenance, quality tests |
@@ -38,7 +38,7 @@ they do not justify reintroducing the removed `AgentFeature` extension ABI.
 
 ```bash
 python -m pytest tests/test_repository_hygiene.py tests/test_runtime_v2_no_legacy.py tests/test_retired_tui_boundary.py -q
-python -m pytest tests/test_context_continuity.py tests/test_branch_compaction_isolation.py tests/test_observation_truncator.py -q
+python -m pytest tests/test_context_continuity.py tests/test_branch_compaction_isolation.py tests/test_observation_truncator.py tests/test_summary_compressor.py -q
 python -m pytest tests/test_tool_runtime_pipeline.py tests/test_tool_scheduler.py -q
 cd tui && bun install --frozen-lockfile && bun run typecheck && bun test
 ```
