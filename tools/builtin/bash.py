@@ -15,6 +15,7 @@ from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
 from core.env import load_env
 from core.runtime.cancellation import current_cancel_event
 from core.runtime.process_execution import run_process
+from core.runtime.command_approval import authorize_bash_command
 
 load_env()
 
@@ -215,6 +216,19 @@ class BashTool(Tool):
             return self.create_error_response(
                 error_code=ErrorCode.ACCESS_DENIED,
                 message=cd_check_result,
+                params_input=params_input,
+            )
+
+        # Command approval is scoped to the exact command, never a cached
+        # workspace path decision. The Web session injects the same broker
+        # used by PermissionGate; hosted isolation remains a separate guard.
+        gate = getattr(self, "_permission_gate", None)
+        broker = getattr(gate, "_broker", None) if gate is not None else None
+        strict_approval = os.environ.get("RIDGE_BASH_APPROVAL_MODE", "").lower() == "strict"
+        if not authorize_bash_command(command, broker, strict=strict_approval):
+            return self.create_error_response(
+                error_code=ErrorCode.ACCESS_DENIED,
+                message="Command approval denied or unavailable. No process was started.",
                 params_input=params_input,
             )
 
