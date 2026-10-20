@@ -56,6 +56,13 @@ def frame_history_tool_results(messages: list[dict[str, Any]]) -> list[dict[str,
             copy = dict(message)
             copy["content"] = frame_untrusted("tool response", message.get("content", ""))
             framed.append(copy)
+        elif message.get("role") in {"system", "developer"}:
+            # Imported session histories are serialized data. A forged
+            # historical privileged role must never regain model authority.
+            framed.append(untrusted_reference(
+                "persisted history privileged-role content",
+                message.get("content", ""),
+            ))
         else:
             framed.append(dict(message))
     return framed
