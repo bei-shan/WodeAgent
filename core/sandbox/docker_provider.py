@@ -18,6 +18,7 @@ from typing import Callable
 
 from core.runtime.process_execution import run_process
 from core.sandbox.contracts import CommandResult, SandboxUnavailable
+from core.sandbox.workspace_secrets import assert_no_mounted_credentials
 from core.sandbox.docker_lifecycle import (DockerLeaseManager, SandboxLeaseError,
     installation_key_path, shared_lease_manager)
 
@@ -41,6 +42,7 @@ class DockerCommandProvider:
         self.workspace = Path(workspace).resolve(strict=True)
         if not self.workspace.is_dir():
             raise SandboxUnavailable("Sandbox workspace is not a directory")
+        assert_no_mounted_credentials(self.workspace)
         # Docker --mount uses comma-separated key/value syntax. Reject hosts
         # whose path would confuse the daemon mount parser.
         if any(c in str(self.workspace) for c in (",", "\n", "\r", "\x00")):
@@ -89,6 +91,9 @@ class DockerCommandProvider:
             ) from exc
 
     def command_argv(self, command: str, directory: str = ".", *, timeout_seconds: float = 120) -> tuple[list[str], str]:
+        # Re-evaluate immediately before creating the bind mount. This
+        # reduces stale discoveries but cannot close host-side TOCTOU races.
+        assert_no_mounted_credentials(self.workspace)
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Command must be a non-empty string")
         if "\x00" in command:
