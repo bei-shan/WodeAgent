@@ -345,3 +345,40 @@ def test_symlinked_output_dir_cannot_receive_sensitive_receipts(tmp_path):
     result = json.loads(ObservationTruncator(str(tmp_path)).truncate("Read", raw))
     assert "full_output_path" not in result["data"]["truncation"]
     assert list(target.iterdir()) == []
+
+
+
+def test_large_untrusted_metadata_cannot_bypass_total_output_budget(tmp_path):
+    raw = json.dumps({
+        "status": "error",
+        "data": {"content": "🌍" * 30000},
+        "stats": {"tokens": 123, "hidden": "a" * 100000},
+        "context": {"truncation_skip": True, "hidden": "b" * 100000},
+        "error": {"code": "E" * 10000, "message": "c" * 100000},
+    }, ensure_ascii=False)
+    with patch.dict(os.environ, {"TOOL_OUTPUT_MAX_BYTES": "1024"}):
+        response = ObservationTruncator(str(tmp_path)).truncate("Read", raw)
+    assert len(response.encode("utf-8")) <= 1024
+    parsed = json.loads(response)
+    assert parsed["status"] == "error"
+    assert parsed["data"]["truncated"] is True
+    assert parsed["stats"]["tokens"] == 123
+    assert "hidden" not in parsed["stats"]
+    assert "hidden" not in parsed["context"]
+    assert "truncation_skip" not in parsed["context"]
+    assert len(parsed["error"]["code"]) <= 64
+    assert len(parsed["error"]["message"]) <= 160
+    saved = tmp_path / parsed["data"]["truncation"]["full_output_path"]
+    assert saved.read_text(encoding="utf-8") == raw
+
+
+def test_unicode_truncation_respects_complete_json_byte_budget(tmp_path):
+    raw = json.dumps({"status": "success", "data": {"text": "界🌍" * 25000}}, ensure_ascii=False)
+    with patch.dict(os.environ, {"TOOL_OUTPUT_MAX_BYTES": "900"}):
+        response = ObservationTruncator(str(tmp_path)).truncate("Bash", raw)
+    assert len(response.encode("utf-8")) <= 900
+    parsed = json.loads(response)
+    assert parsed["status"] == "partial"
+    assert parsed["data"]["truncated"] is True
+    preview = parsed["data"]["preview"]
+    assert parsed["data"]["truncation"]["kept_bytes"] == len(preview.encode("utf-8"))
