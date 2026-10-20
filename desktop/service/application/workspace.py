@@ -282,26 +282,43 @@ class WorkspaceService:
         removed. Caller should schedule this periodically for idle servers.
         """
         removed = 0
-        expired = self._uploads.expire(now=now)
-        for grant in expired:
+        pending = 0
+        candidates = self._uploads.expired_candidates(now=now)
+        for digest, grant in candidates:
             if grant.tenant_id != self._tenant_id:
                 continue
+            acknowledged = False
             try:
                 with self._existing_upload_root_fd(grant.session_id) as parent_fd:
-                    latest = os.stat(
-                        grant.filename, dir_fd=parent_fd, follow_symlinks=False,
-                    )
-                    identity = (
-                        latest.st_dev, latest.st_ino, latest.st_size,
-                        latest.st_mtime_ns, latest.st_ctime_ns,
-                    )
-                    if stat.S_ISREG(latest.st_mode) and identity == grant.identity:
-                        os.unlink(grant.filename, dir_fd=parent_fd)
-                        removed += 1
-            except (OSError, NotFoundError, ForbiddenError):
-                # A deleted, replaced or inaccessible file is no longer ours.
-                continue
-        return {"expired_grants": len(expired), "files_removed": removed}
+                    try:
+                        latest = os.stat(
+                            grant.filename, dir_fd=parent_fd, follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        acknowledged = True  # already deleted by user/another GC
+                    else:
+                        identity = (
+                            latest.st_dev, latest.st_ino, latest.st_size,
+                            latest.st_mtime_ns, latest.st_ctime_ns,
+                        )
+                        if stat.S_ISREG(latest.st_mode) and identity == grant.identity:
+                            os.unlink(grant.filename, dir_fd=parent_fd)
+                            removed += 1
+                        # File was replaced by the user or is no longer a
+                        # regular file: never delete their replacement.
+                        acknowledged = True
+            except (FileNotFoundError, NotFoundError):
+                acknowledged = True
+            except (OSError, ForbiddenError):
+                # Keep the expired DB row to retry after transient IO or
+                # permission failures rather than leaking files forever.
+                pending += 1
+            if acknowledged:
+                self._uploads.acknowledge_expired(digest, now=now)
+        return {
+            "expired_grants": len(candidates), "files_removed": removed,
+            "retry_pending": pending,
+        }
 
     def revoke_session_uploads(self, sid: str) -> None:
         self._uploads.revoke_session(self._tenant_id, sid)
