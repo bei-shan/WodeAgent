@@ -543,7 +543,7 @@ class MultiEditTool(Tool):
                 # original mode, and reject in-place changes since stat.
                 bytes_written = commit_utf8(
                     abs_path, new_content,
-                    expected_stat=None if False else current_stat,
+                    expected_stat=current_stat,
                 )
 
                 applied = True
