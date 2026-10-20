@@ -128,7 +128,17 @@ def open_regular_workspace_file(
             yield f
         return
     if not _ANCHOR_SUPPORTED:
-        raise ConcurrentFileChange("Secure workspace reads unavailable on this host")
+        if os.name != "nt":
+            raise ConcurrentFileChange("Secure workspace reads unavailable on this host")
+        # Windows native tooling is trusted-local only. Root containment is
+        # checked here but reparse-point races require a native handle-based
+        # CreateFileW adapter before untrusted multi-tenant use.
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root.resolve(strict=True))
+        with open(resolved, "r" if text else "rb",
+                  **({"encoding": "utf-8", "errors": errors} if text else {})) as source:
+            yield source
+        return
     with _anchored_parent(root, path) as (parent_fd, filename):
         fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
         try:
