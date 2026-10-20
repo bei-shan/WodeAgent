@@ -252,6 +252,28 @@ class WorkspaceService:
                 raise InvalidInputError(str(exc)) from exc
         return parts
 
+    @contextmanager
+    def _existing_upload_root_fd(self, sid: str) -> Iterator[int]:
+        """Open an existing persisted session root without re-creating it.
+
+        Cleanup runs after server restart, before old sessions are activated.
+        The descriptor walk is rooted at our own storage base.
+        """
+        if not _SESSION_ID.fullmatch(sid) or not _SECURE_OPEN:
+            raise ForbiddenError("Invalid or unsupported upload root")
+        try:
+            base_fd = os.open(self.workspace_base, _DIR_FLAGS)
+        except FileNotFoundError as exc:
+            raise NotFoundError("Session upload root missing") from exc
+        try:
+            fd = os.open(sid, _DIR_FLAGS, dir_fd=base_fd)
+            try:
+                yield fd
+            finally:
+                os.close(fd)
+        finally:
+            os.close(base_fd)
+
     def cleanup_expired_uploads(self, *, now: float | None = None) -> dict:
         """Revoke expired grants and unlink ONLY unchanged session upload files.
 
@@ -265,7 +287,7 @@ class WorkspaceService:
             if grant.tenant_id != self._tenant_id:
                 continue
             try:
-                with self._directory(grant.session_id, ".") as parent_fd:
+                with self._existing_upload_root_fd(grant.session_id) as parent_fd:
                     latest = os.stat(
                         grant.filename, dir_fd=parent_fd, follow_symlinks=False,
                     )
