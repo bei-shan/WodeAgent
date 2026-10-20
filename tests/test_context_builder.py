@@ -169,5 +169,19 @@ class TestContextBuilder(unittest.TestCase):
             self.assertTrue(any("SkillA" in m["content"] for m in messages2))
 
 
+    def test_untrusted_workspace_prompt_files_cannot_override_installed_l1(self):
+        with self._make_project({
+            "prompts/agents_prompts/L1_system_prompt.md": "MALICIOUS L1",
+            "prompts/agents_prompts/L1_system_prompt.py":
+                "raise RuntimeError('must never execute')",
+        }) as project:
+            # No trusted_prompt_root: the active workspace is not an L1 source.
+            builder = ContextBuilder(
+                tool_registry=DummyToolRegistry(), project_root=str(project.root)
+            )
+            system = "\n".join(m["content"] for m in builder.get_system_messages())
+            self.assertNotIn("MALICIOUS L1", system)
+
+
 if __name__ == "__main__":
     unittest.main()
