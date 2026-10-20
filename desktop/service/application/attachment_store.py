@@ -140,6 +140,42 @@ class AttachmentGrantStore:
             tuple(int(v) for v in row[3:8]), row[8], row[9],
         )
 
+    def expired_candidates(
+        self, *, now: float | None = None,
+    ) -> list[tuple[str, AttachmentGrant]]:
+        """List expired grants without revoking the cleanup retry record.
+
+        A failed filesystem unlink must not silently lose the only durable
+        reference to an orphaned upload. Multiple GC workers may see the same
+        candidate; deletion is identity checked by WorkspaceService.
+        """
+        current = time.time() if now is None else now
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT token_hash, tenant_id, session_id, filename, device,
+                          inode, byte_size, mtime_ns, ctime_ns, issued_at,
+                          expires_at
+                   FROM attachment_grants WHERE expires_at<=?""",
+                (current,),
+            ).fetchall()
+        return [
+            (row[0], AttachmentGrant(
+                row[1], row[2], row[3], tuple(int(v) for v in row[4:9]),
+                row[9], row[10],
+            )) for row in rows
+        ]
+
+    def acknowledge_expired(
+        self, token_hash: str, *, now: float | None = None,
+    ) -> None:
+        """Remove only already-expired grants, never reactivate or move them."""
+        current = time.time() if now is None else now
+        with self._connect() as db:
+            db.execute(
+                "DELETE FROM attachment_grants WHERE token_hash=? AND expires_at<=?",
+                (token_hash, current),
+            )
+
     def expire(self, *, now: float | None = None) -> list[AttachmentGrant]:
         """Atomically revoke expired tickets, returning safe unlink candidates."""
         current = time.time() if now is None else now
