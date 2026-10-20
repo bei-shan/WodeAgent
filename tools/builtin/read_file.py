@@ -21,6 +21,12 @@ class ReadTool(Tool):
     
     # limit 的硬上限（单次最多读取 2000 行）
     MAX_LIMIT = 2000
+
+    # Memory and response limits are independent of line pagination. A file
+    # containing one giant line must never become a giant model observation.
+    MAX_LINE_CHARS = 4096
+    MAX_CONTENT_CHARS = 131072
+    MAX_FILE_BYTES = 64 * 1024 * 1024
     
     # 默认 limit（默认读取 500 行）
     DEFAULT_LIMIT = 500
@@ -103,7 +109,7 @@ class ReadTool(Tool):
             )
         
         # start_line 校验：必须是正整数
-        if not isinstance(start_line, int) or start_line < 1:
+        if type(start_line) is not int or start_line < 1:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message="start_line must be a positive integer (>= 1).",
@@ -111,7 +117,7 @@ class ReadTool(Tool):
             )
         
         # limit 校验：必须在 1 到 MAX_LIMIT 之间
-        if not isinstance(limit, int) or limit < 1 or limit > self.MAX_LIMIT:
+        if type(limit) is not int or limit < 1 or limit > self.MAX_LIMIT:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message=f"limit must be an integer between 1 and {self.MAX_LIMIT}.",
@@ -210,6 +216,16 @@ class ReadTool(Tool):
             # 获取文件状态（大小和修改时间）
             file_stat = target.stat()
             file_size = file_stat.st_size
+            if file_size > self.MAX_FILE_BYTES:
+                return self.create_error_response(
+                    error_code=ErrorCode.INVALID_PARAM,
+                    message=(
+                        f"File exceeds {self.MAX_FILE_BYTES} bytes; "
+                        "use Grep or a smaller generated file."
+                    ),
+                    params_input=params_input,
+                    path_resolved=rel_path,
+                )
             file_mtime_ns = file_stat.st_mtime_ns
             file_mtime_ms = file_mtime_ns // 1_000_000  # 转换为毫秒（乐观锁所需）
             
@@ -246,7 +262,7 @@ class ReadTool(Tool):
         
         try:
             # 读取文件内容，支持分页和编码回退
-            content, total_lines, encoding_used, fallback_used = self._read_file_content(
+            content, total_lines, encoding_used, fallback_used, content_clipped = self._read_file_content(
                 target, start_line, limit
             )
         except Exception as e:
@@ -298,6 +314,7 @@ class ReadTool(Tool):
         # 构建标准化响应
         return self._format_response(
             content=content,
+            content_clipped=content_clipped,
             rel_path=rel_path,
             start_line=start_line,
             limit=limit,
@@ -334,72 +351,73 @@ class ReadTool(Tool):
             return False
 
     def _read_file_content(
-        self, 
-        path: Path, 
-        start_line: int, 
-        limit: int
-    ) -> Tuple[str, int, str, bool]:
+        self,
+        path: Path,
+        start_line: int,
+        limit: int,
+    ) -> Tuple[str, int, str, bool, bool]:
+        """Read line fragments, not the entire file (bounded memory).
+
+        `readline(size)` caps even newline-free files. The iterator must
+        still scan to EOF to preserve total_lines and legacy pagination
+        semantics, but only the requested window is kept in memory.
         """
-        读取文件内容并添加行号
-        
-        Args:
-            path: 文件路径
-            start_line: 起始行号 (1-based)
-            limit: 最大行数
-        
-        Returns:
-            (formatted_content, total_lines, encoding_used, fallback_used)
-            - formatted_content: 格式化后的内容（带行号）
-            - total_lines: 文件总行数
-            - encoding_used: 使用的编码
-            - fallback_used: 是否使用了编码回退
-        """
-        encoding_used = "utf-8"
-        fallback_used = False
-        
-        # 尝试 UTF-8 严格模式
+        def scan(errors: str) -> tuple[str, int, bool]:
+            rendered: list[str] = []
+            captured_chars = 0
+            partial = ""
+            line_has_data = False
+            count = 0
+            clipped = False
+            with open(path, "r", encoding="utf-8", errors=errors) as file:
+                while True:
+                    fragment = file.readline(8192)
+                    if not fragment:
+                        break
+                    line_has_data = True
+                    selected = start_line <= count + 1 < start_line + limit
+                    if selected:
+                        remaining = min(
+                            self.MAX_LINE_CHARS - len(partial),
+                            self.MAX_CONTENT_CHARS - captured_chars
+                            - len(partial) - 16,
+                        )
+                        if remaining > 0:
+                            partial += fragment[:remaining]
+                        if len(fragment) > max(remaining, 0):
+                            clipped = True
+                    if fragment.endswith("\n"):
+                        count += 1
+                        if selected:
+                            display = f"{count:4d} | {partial.rstrip(chr(10) + chr(13))}\n"
+                            if captured_chars + len(display) <= self.MAX_CONTENT_CHARS:
+                                rendered.append(display)
+                                captured_chars += len(display)
+                            else:
+                                clipped = True
+                        partial = ""
+                        line_has_data = False
+            if line_has_data:
+                count += 1
+                if start_line <= count < start_line + limit:
+                    display = f"{count:4d} | {partial.rstrip(chr(10) + chr(13))}\n"
+                    if captured_chars + len(display) <= self.MAX_CONTENT_CHARS:
+                        rendered.append(display)
+                    else:
+                        clipped = True
+            return "".join(rendered), count, clipped
+
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                all_lines = f.readlines()
+            content, total_lines, clipped = scan("strict")
+            return content, total_lines, "utf-8", False, clipped
         except UnicodeDecodeError:
-            # UTF-8 解码失败，回退到 UTF-8 + errors="replace"
-            # 这样可以继续读取，但部分字符会被替换为 �
-            fallback_used = True
-            encoding_used = "utf-8 (replace)"
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                all_lines = f.readlines()
-        
-        total_lines = len(all_lines)
-        
-        # 空文件处理
-        if total_lines == 0:
-            return "", 0, encoding_used, fallback_used
-        
-        # 提取目标行（支持分页）
-        start_idx = start_line - 1  # 转换为 0-based
-        end_idx = min(start_idx + limit, total_lines)
-        
-        # 如果 start_line 超出范围，返回空内容（后续会检测并报错）
-        if start_idx >= total_lines:
-            return "", total_lines, encoding_used, fallback_used
-        
-        # 提取指定范围的行
-        selected_lines = all_lines[start_idx:end_idx]
-        
-        # 格式化输出："%4d | %s\n"（行号占 4 位，右对齐）
-        formatted_parts = []
-        for i, line in enumerate(selected_lines, start=start_line):
-            # 移除行尾的换行符，统一添加
-            line_content = line.rstrip("\n\r")
-            formatted_parts.append(f"{i:4d} | {line_content}\n")
-        
-        content = "".join(formatted_parts)
-        
-        return content, total_lines, encoding_used, fallback_used
+            content, total_lines, clipped = scan("replace")
+            return content, total_lines, "utf-8 (replace)", True, clipped
 
     def _format_response(
         self,
         content: str,
+        content_clipped: bool,
         rel_path: str,
         start_line: int,
         limit: int,
@@ -448,7 +466,8 @@ class ReadTool(Tool):
             end_line = start_line + lines_read - 1 if lines_read > 0 else 0
         
         # 判断是否截断（还有剩余行未读取）
-        truncated = (start_line + lines_read - 1) < total_lines if lines_read > 0 else False
+        more_lines = (start_line + lines_read - 1) < total_lines if lines_read > 0 else False
+        truncated = more_lines or content_clipped
         
         # 判断状态：截断或编码回退都标记为 partial
         is_partial = truncated or fallback_used
@@ -478,12 +497,18 @@ class ReadTool(Tool):
         lines.append(f"(Took {time_ms}ms)")
         
         # 如果截断，提示剩余行数
-        if truncated:
+        if more_lines:
             next_start = end_line + 1
             remaining = total_lines - end_line
             lines.append(f"[Truncated: Showing {lines_read} of {total_lines} lines. "
                         f"Use start_line={next_start} to continue ({remaining} lines remaining).]")
         
+        if content_clipped:
+            lines.append(
+                f"[Content capped at {self.MAX_LINE_CHARS} chars/line and "
+                f"{self.MAX_CONTENT_CHARS} chars/call. Use Grep or narrow the file.]"
+            )
+
         # 如果编码回退，提示可能的字符损坏
         if fallback_used:
             lines.append("[Warning: Encoding issues detected. Some characters may be corrupted (using replacement).]")
