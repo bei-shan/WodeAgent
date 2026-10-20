@@ -31,7 +31,7 @@ class HookService:
         agent._hook_session_context: list[str] = []
 
     def post_start(self, agent: "CodeAgent") -> None:
-        """Run SessionStart hooks after all features are initialised."""
+        """Run SessionStart hooks after runtime services are initialized."""
         if agent._hook_manager.has_any_hooks:
             result = agent._hook_manager.run_session_start()
             agent._hook_system_messages.extend(result.system_messages)

@@ -1,8 +1,8 @@
 """Core policy middleware implementations; not plugins or resource owners.
 
-These policies are created by the framework before user-contributed feature
-hooks. A plugin cannot override their names or short-circuit their denial.
-Legacy Feature classes are compatibility adapters.
+These policies are created by the framework before optional hook
+interceptors. A plugin cannot override their names or short-circuit their denial.
+No AgentFeature compatibility adapters are registered.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ class DelegateModeMiddleware:
     """Restricts available tools to team-management only in delegate mode."""
 
     name = "delegate_mode"
-    order = 40
 
     DELEGATION_ALLOWED_TOOLS = {
         "TeamCreate", "SendMessage", "TeamStatus", "TeamDelete", "TeamCleanup",
@@ -51,14 +50,13 @@ class BudgetMiddleware:
     Budget is parsed from user input (e.g. ``+500k``) and consumed
     each LLM call.  Status is injected into runtime blocks.
 
-    When ``config.budget_enforce`` is True, this feature additionally
+    When ``config.budget_enforce`` is True, this policy additionally
     blocks tool execution once ``is_exceeded()`` returns True. Default
     is ``False`` — tracking is purely informational unless the user
     opts in.
     """
 
     name = "budget"
-    order = 55
 
     def start(self, agent: "CodeAgent") -> None:
         from core.budget_tracker import BudgetTracker
@@ -119,7 +117,6 @@ class PlanModeMiddleware:
     """
 
     name = "plan_mode"
-    order = 60
 
     PLAN_MODE_TOOLS = {
         "Read", "Grep", "Glob", "LS", "TodoWrite",

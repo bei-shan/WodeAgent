@@ -13,7 +13,7 @@ def code_bundle(name="fingerprint-test"):
     return bundle(name, manifest={
         "name": name,
         "version": "1.0.0",
-        "features": {
+        "components": {
             "skills": ["skills"],
             "hooks": {"PreToolUse": [
                 {"matcher": "Bash", "hooks": [

@@ -62,7 +62,7 @@ class AgentLoop:
                 "max_steps": host.max_steps,
             }, step=step))
 
-            # Runtime features may register tools (e.g. recovered MCP servers)
+            # Runtime services may register tools (e.g. recovered MCP servers)
             # or change mode. Refresh the model-visible catalog afterwards so
             # its declarations match the runtime context for this step.
             host._collect_runtime_blocks(step)

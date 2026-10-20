@@ -60,7 +60,7 @@ class CodeAgent(Agent):
     - ReAct 每一步同步写入 assistant/tool 消息到 history
     - 支持压缩触发和 Summary 生成
     """
-    # Tool allowlists — class-level fallbacks, overridden by Features at runtime.
+    # Tool allowlists — class-level fallbacks, overridden by mandatory policies at runtime.
     DELEGATION_ALLOWED_TOOLS: set[str] = set()
     PLAN_MODE_TOOLS = {
         "Read", "Grep", "Glob", "LS", "TodoWrite",
@@ -193,7 +193,7 @@ class CodeAgent(Agent):
             raise
 
     def _init_core(self) -> None:
-        """Initialise core infrastructure that features depend on."""
+        """Initialise core infrastructure that services depend on."""
         # Each Agent owns its circuit-breaker policy.
         self.tool_registry.configure(self.config)
 
@@ -278,7 +278,7 @@ class CodeAgent(Agent):
         """Bind mandatory modes, then optionally enable a bounded tool catalog.
 
         This is a context/UX optimization, never hosted authorization: the
-        existing plan/delegate feature hooks and sandbox gate remain mandatory.
+        existing plan/delegate hook interceptors and sandbox gate remain mandatory.
         """
         def shared_mode_allows(name: str) -> bool:
             return not self._in_plan_mode or name in self.PLAN_MODE_TOOLS
@@ -977,7 +977,7 @@ class CodeAgent(Agent):
             prepared = {}
             prepare_errors = {}
             if use_stages and not interrupted:
-                # All feature pre-hooks and policy decisions run on the owner
+                # All hook pre-callbacks and policy decisions run on the owner
                 # thread, before the worker pool starts any I/O.
                 for item in batch.calls:
                     if item["parse_error"]:
@@ -985,7 +985,7 @@ class CodeAgent(Agent):
                     try:
                         prepared[item["index"]] = staged_runtime.prepare(
                             item["name"], item["input"], agent=self,
-                            features=getattr(self, "_tool_interceptors", ()),
+                            interceptors=getattr(self, "_tool_interceptors", ()),
                             emit_messages=self._hook_system_messages.extend,
                         )
                     except Exception as exc:
@@ -1316,7 +1316,7 @@ class CodeAgent(Agent):
         return TeamRuntimeView.format(events, runtime_state, max_lines)
 
     def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
-        """Execute one tool via the decoupled feature-aware runtime port."""
+        """Execute one tool via the decoupled interceptor-aware runtime port."""
         from core.runtime.tool_runtime import ToolRuntime
         from core.runtime.cancellation import scoped_tool_cancellation
         if not hasattr(self, "_last_tool_timing"):
@@ -1326,7 +1326,7 @@ class CodeAgent(Agent):
                 tool_name,
                 tool_input,
                 agent=self,
-                features=getattr(self, "_tool_interceptors", ()),
+                interceptors=getattr(self, "_tool_interceptors", ()),
                 emit_messages=self._hook_system_messages.extend,
                 record_timing=lambda name, ms: self._last_tool_timing.__setitem__(name, ms),
             )

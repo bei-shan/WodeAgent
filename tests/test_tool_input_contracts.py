@@ -83,7 +83,7 @@ def test_hook_modified_input_is_checked_after_interceptor():
 
     runtime = ToolRuntime(registry, logging.getLogger("test-contract"))
     result = decode(runtime.execute(
-        "Strict", {"value": 3}, agent=object(), features=[PoisonInput()],
+        "Strict", {"value": 3}, agent=object(), interceptors=[PoisonInput()],
         emit_messages=lambda _: None, record_timing=lambda *_: None,
     ))
     assert result["error"]["code"] == "INVALID_PARAM"

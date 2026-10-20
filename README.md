@@ -115,7 +115,7 @@ Web 服务为正在执行的 Agent 回合设置进程内的并发上限：
 
 插件管理现在支持本地 ZIP 的 **SHA-256 校验、版本锁定、显式更新和上一版回滚**；更新或回滚会自动禁用插件并撤销代码信任。校验和不能替代发布者签名，当前不会自动下载远程插件。详见 [插件升级与回退说明](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
 
-插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。旧 `custom_features` 声明会直接拒绝。启用命令 Hook 必须同时有逐插件的内容指纹信任和服务端 `RIDGE_ALLOW_TRUSTED_HOOKS=1`；命令 Hook 在受信任的本地宿主执行，**不是沙箱**，不在托管 Worker 内加载。旧 `RIDGE_ALLOW_PLUGIN_CODE` 已失效。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
+插件清单使用 `components` 字段声明 Skills / Hooks / 输出样式，不再支持旧 `features` 字段。插件包根目录使用 `plugin.json`（也兼容 `.claude-plugin/plugin.json`），并可包含 `skills/<name>/SKILL.md`。安装后默认**禁用**；启用只加载声明式 Skills。旧 `custom_features` 声明会直接拒绝。启用命令 Hook 必须同时有逐插件的内容指纹信任和服务端 `RIDGE_ALLOW_TRUSTED_HOOKS=1`；命令 Hook 在受信任的本地宿主执行，**不是沙箱**，不在托管 Worker 内加载。旧 `RIDGE_ALLOW_PLUGIN_CODE` 已失效。详见 [插件与 Skills 生命周期](docs/design/2026-10-14-plugin-skills-lifecycle.md)。
 
 ## 可选 Langfuse / OpenTelemetry 追踪
 
