@@ -145,8 +145,13 @@ def test_prompt_usage_notes_are_hidden_until_promotion(tmp_path):
     assert "PRIVATE MCP USAGE TEXT" not in first
     registry.execute_tool("ToolSearch", {"query": "lookup"})
     registry.activate_discovered_tools()
-    second = ctx.get_system_messages()[0]["content"]
-    assert "PRIVATE MCP USAGE TEXT" in second
+    second_system = ctx.get_system_messages()[0]["content"]
+    assert "PRIVATE MCP USAGE TEXT" not in second_system
+    second_refs = ctx.get_reference_messages()
+    assert any(
+        ref["role"] == "user" and "PRIVATE MCP USAGE TEXT" in ref["content"]
+        for ref in second_refs
+    )
 
 
 def test_agent_setup_uses_same_mode_guard_for_discovery_and_direct_execution():
