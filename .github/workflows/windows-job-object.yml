@@ -17,4 +17,4 @@ jobs:
           python-version: '3.12'
       - name: Windows Job Object timeout kills descendants
         shell: pwsh
-        run: python tests/native/windows_job_smoke.py
+        run: python -m tests.native.windows_job_smoke
