@@ -24,7 +24,7 @@ class ReadTool(Tool):
 
     # Memory and response limits are independent of line pagination. A file
     # containing one giant line must never become a giant model observation.
-    MAX_LINE_CHARS = 4096
+    MAX_LINE_CHARS = 16384
     MAX_CONTENT_CHARS = 131072
     MAX_FILE_BYTES = 64 * 1024 * 1024
     
