@@ -8,6 +8,11 @@ import pytest
 from core.sandbox.docker_provider import DockerCommandProvider
 from core.sandbox.contracts import SandboxUnavailable
 
+pytestmark = pytest.mark.skipif(
+    os.environ.get('AGENT_DOCKER_INTEGRATION') != '1',
+    reason='requires a real Docker daemon with the image preloaded',
+)
+
 
 def test_real_docker_snapshot_is_private_and_export_requires_approval(tmp_path):
     root = tmp_path / "project"
