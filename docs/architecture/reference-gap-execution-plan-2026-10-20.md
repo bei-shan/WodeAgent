@@ -36,7 +36,7 @@
 - [x] 增加 Windows Job Object（`KILL_ON_JOB_CLOSE`），创建/配置/分配失败拒绝启动或拒绝未受控执行。
 - [x] 正常退出、取消和超时均关闭 Job Object，不允许仍继承 Job 的子进程留存；保留 POSIX 行为。
 - [x] 新增 Windows 实机 CI，验证父进程、孙进程取消、超时、正常结束后的回收，以及 Job Object 不可用时 fail closed。
-- [x] CI 验收完成：Windows Job Object 真机 4 passed / 0 skipped，Windows 有界输出 4 passed；PR #128 [Windows Job Object 测试日志](https://github.com/bei-shan/WodeAgent/actions/runs/39389593469/job/118521881518) 与 [PR 检查页](https://github.com/bei-shan/WodeAgent/pull/128/checks)；主干 Squash 提交 [48292b7](https://github.com/bei-shan/WodeAgent/commit/48292b73792d66487493b8a56e517c08d05f1364) 的 15 项 CI 全绿。
+- [x] CI 验收完成：Windows Job Object 真机 4 passed / 0 skipped，Windows 有界输出 4 passed；PR #128 [Windows Job Object 测试日志](https://github.com/bei-shan/WodeAgent/actions/runs/39390900502/job/118521881518) 与 [PR 检查页](https://github.com/bei-shan/WodeAgent/pull/128/checks)；主干 Squash 提交 [48292b7](https://github.com/bei-shan/WodeAgent/commit/48292b73792d66487493b8a56e517c08d05f1364) 的 15 项 CI 全绿。
 - [ ] **后续加强**：消除 Popen 后分配 Job 的窗口，采用经 Windows 版本验收的原子进程创建到 Job（STARTUPINFOEX Job List）方案；校验 nested Job、子进程 breakaway、杀进程失败和句柄泄漏。当前 Job 不是进程或网络沙箱。
 
 **验收**：Windows runner 真机执行，无跳过，子进程无法在取消/超时/正常结束后留下标记文件；Linux 完整回归/真实服务 CI 维持全绿。
