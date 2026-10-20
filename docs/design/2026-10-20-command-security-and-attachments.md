@@ -87,8 +87,9 @@ fallback still need equivalent handle-scoped protection.
 ```text
 ChatComposer selects files
   -> POST /sessions/<id>/upload
-     25 MiB upload stream -> O_NOFOLLOW / exclusive file in session root
+     25 MiB upload stream -> private upload-quarantine/SESSION staging
      optional clamd Unix socket INSTREAM scan (mandatory deployment gate)
+     -> only on clean verdict: exclusive hardlink into session workspace
      -> SQLite SHA-256(upload_ticket) + file identity / tenant / session
      -> opaque ticket returned to the browser, 2-hour TTL
   -> POST /sessions/<id>/messages
@@ -115,7 +116,9 @@ Other session/tenant lookups are rejected, and upload state can be recovered
 after local API restart. Records expire after 2 hours. Startup and an hourly
 task revoke expired grants and unlink unchanged files using anchored session
 directory handles. If cleanup gets a transient OS failure, the record remains
-for retry; user-replaced files are not unlinked.
+for retry; user-replaced files are not unlinked. Interrupted/unpublished staging
+files older than two hours are also garbage-collected by anchored quarantine
+directory handles.
 
 **Local-only scope:** This is *not* a distributed object store. The hosted
 metadata-only API intentionally exposes no Agent tools or upload routes.
@@ -132,9 +135,13 @@ times out, reports `FOUND` or returns a protocol error. Uploaded file
 identity is rechecked after scanning. This is a configurable local antivirus
 gate, not a complete quarantine solution, and real ClamAV virus-definition
 management and service lifecycle need independent operational acceptance.
-An untrusted Agent running simultaneously in the same local workspace may
-see a not-yet-scanned filename; a hosted system must use separate pre-scan
-quarantine storage.
+The upload is now written first to `data_dir/upload-quarantine/<session>`,
+**outside the Agent-visible session workspace**. Only after successful
+scanner verdict and descriptor identity validation is the file published by
+exclusive hard-link, and the staging name is removed. Failed, oversized or
+interrupted uploads never enter the session workspace. The quarantine is
+still server-local storage under the operator's filesystem permissions; a
+hosted product must use a separate worker/object-storage security domain.
 
 **Document execution modes.**
 
@@ -189,6 +196,9 @@ Windows handle-scoped file safety still needs parity with POSIX.
   unlink with user-replacement preservation.
 - `test_attachment_scanner.py`: real fake-Unix-socket clamd INSTREAM frame
   exchange, clean and FOUND verdicts, missing scanner fail-closed behavior.
+- `test_attachment_quarantine.py`: proof that unscanned bytes cannot be read
+  from the Agent workspace, failed scans and huge files leave no uploaded
+  artifacts and interrupted staging files are garbage-collected.
 - `test_document_container_policy.py`: Docker argv hardening, no mounts or
   network, strict fail closed on timeout and missing Docker.
 - `test_document_container_smoke.py` and the standalone
