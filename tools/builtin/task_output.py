@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional  # noqa: F811
 
-from core.background_task import BackgroundTaskRunner
+from core.background_task import BackgroundTaskRunner, valid_task_id
 from ..base import ErrorCode, Tool, ToolParameter
 
 
@@ -50,10 +50,10 @@ class TaskOutputTool(Tool):
         start_time = time.monotonic()
         params_input = dict(parameters)
         task_id = parameters.get("task_id")
-        if not isinstance(task_id, str) or not task_id.strip():
+        if not valid_task_id(task_id):
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
-                message="Parameter 'task_id' is required.",
+                message="Parameter 'task_id' must be a safe opaque identifier.",
                 params_input=params_input,
             )
 
