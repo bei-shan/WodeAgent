@@ -48,7 +48,8 @@ class TestContextBuilder(unittest.TestCase):
             messages = builder.build_messages(history)
             self.assertEqual(messages[0]["role"], "system")
             self.assertEqual(messages[1]["role"], "system")
-            self.assertEqual(messages[2]["role"], "user")
+            self.assertEqual(messages[2]["role"], "user")  # CODE_LAW is data
+            self.assertEqual(messages[3], history[0])
 
     def test_system_prompt_override(self):
         """Override replaces L1, {tools} gets usage_notes from registered tools."""
@@ -64,7 +65,7 @@ class TestContextBuilder(unittest.TestCase):
             )
             messages = builder.get_system_messages()
             self.assertIn("OVERRIDE", messages[0]["content"])
-            self.assertIn("LS:", messages[0]["content"])
+            self.assertIn("LS:", "\n".join(m["content"] for m in messages))
 
     def test_code_law_lowercase_name(self):
         structure = {
@@ -73,9 +74,10 @@ class TestContextBuilder(unittest.TestCase):
         }
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
-            messages = builder.get_system_messages()
-            self.assertEqual(len(messages), 2)
-            self.assertIn("lowercase rule", messages[1]["content"])
+            messages = builder.build_messages([])
+            refs = [m for m in messages if "lowercase rule" in m["content"]]
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0]["role"], "user")
 
     def test_code_law_cache_refresh(self):
         """CODE_LAW uses mtime cache — changes detected on file modification."""
@@ -85,13 +87,13 @@ class TestContextBuilder(unittest.TestCase):
         }
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
-            messages1 = builder.get_system_messages()
-            self.assertIn("Rule A", messages1[1]["content"])
+            messages1 = builder.build_messages([])
+            self.assertTrue(any("Rule A" in m["content"] for m in messages1))
             time.sleep(0.01)
             project.path("CODE_LAW.md").write_text("Rule B", encoding="utf-8")
             # Late Binding: mtime changed → auto-detected, no manual invalidation needed
-            messages2 = builder.get_system_messages()
-            self.assertIn("Rule B", messages2[1]["content"])
+            messages2 = builder.build_messages([])
+            self.assertTrue(any("Rule B" in m["content"] for m in messages2))
 
     def test_tool_prompts_from_usage_notes(self):
         """Tool prompts come from Tool.usage_notes, not from prompt files."""
@@ -108,7 +110,7 @@ class TestContextBuilder(unittest.TestCase):
             ]
             builder = ContextBuilder(tool_registry=registry, project_root=str(project.root))
             messages = builder.get_system_messages()
-            content = messages[0]["content"]
+            content = "\n".join(m["content"] for m in messages)
             self.assertIn("Read:", content)
             self.assertIn("Bash:", content)
 
@@ -119,22 +121,21 @@ class TestContextBuilder(unittest.TestCase):
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
             messages = builder.get_system_messages()
-            self.assertIn("L1", messages[0]["content"])
+            self.assertTrue(any(m["role"] == "system" for m in messages))
             self.assertNotIn("Available Tools", messages[0]["content"])
 
     def test_mcp_tools_prompt_injection(self):
-        """MCP tools get their own system message in Late Binding mode."""
+        """MCP tool descriptions stay as lower-priority reference data."""
         structure = {
             "prompts/agents_prompts/L1_system_prompt.py": "system_prompt = 'L1'",
         }
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
             builder.set_mcp_tools_prompt("MCP tool list")
-            messages = builder.get_system_messages()
-            # MCP tools as separate system message
+            messages = builder.build_messages([])
             mcp_msgs = [m for m in messages if "MCP tool list" in m.get("content", "")]
             self.assertEqual(len(mcp_msgs), 1)
-            self.assertIn("MCP tool list", mcp_msgs[0]["content"])
+            self.assertEqual(mcp_msgs[0]["role"], "user")
 
     def test_skills_prompt_injection(self):
         structure = {
@@ -144,8 +145,8 @@ class TestContextBuilder(unittest.TestCase):
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
             builder.set_skills_prompt("SkillA, SkillB")
-            messages = builder.get_system_messages()
-            self.assertIn("SkillA, SkillB", messages[0]["content"])
+            messages = builder.build_messages([])
+            self.assertTrue(any(m["role"] == "user" and "SkillA, SkillB" in m["content"] for m in messages))
 
     def test_cache_invalidated_on_set_skills_prompt(self):
         structure = {
@@ -154,11 +155,11 @@ class TestContextBuilder(unittest.TestCase):
         }
         with self._make_project(structure) as project:
             builder = ContextBuilder(tool_registry=DummyToolRegistry(), project_root=str(project.root))
-            messages1 = builder.get_system_messages()
-            self.assertNotIn("SkillA", messages1[0]["content"])
+            messages1 = builder.build_messages([])
+            self.assertFalse(any("SkillA" in m["content"] for m in messages1))
             builder.set_skills_prompt("SkillA")
-            messages2 = builder.get_system_messages()
-            self.assertIn("SkillA", messages2[0]["content"])
+            messages2 = builder.build_messages([])
+            self.assertTrue(any("SkillA" in m["content"] for m in messages2))
 
 
 if __name__ == "__main__":
