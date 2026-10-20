@@ -82,59 +82,93 @@ compare-and-swap against arbitrary writers needs a stronger storage/overlay
 transaction model. Out-of-workspace explicitly approved paths and Windows
 fallback still need equivalent handle-scoped protection.
 
-### 5. Attachment pipeline (images and documents)
+### 5. Local Web attachment pipeline (images and documents)
 
 ```text
-ChatComposer uploads file bytes
+ChatComposer selects files
   -> POST /sessions/<id>/upload
-     streamed 25 MiB cap; O_NOFOLLOW; exclusive create
-     -> opaque random attachment_ref scoped to session + file identity (2 h)
+     25 MiB upload stream -> O_NOFOLLOW / exclusive file in session root
+     optional clamd Unix socket INSTREAM scan (mandatory deployment gate)
+     -> SQLite SHA-256(upload_ticket) + file identity / tenant / session
+     -> opaque ticket returned to the browser, 2-hour TTL
   -> POST /sessions/<id>/messages
-     { content, attachments: ["opaque-attachment-ref"] }
+     { content, attachments: ["opaque-upload-ticket"] }
   -> WorkspaceService.prepare_attachments()
-     resolves ONLY issued upload credentials; refuses guessed paths,
-     other sessions, changed files and expired grants
-  -> bounded magic-sniffing and parsing (max 4 files, 8 MiB combined)
-     * PNG/JPEG/GIF/WebP: Pillow verify, <= 4 MiB, <= 16 megapixels
-       -> OpenAI-compatible image_url content block
-     * UTF-8 text/code: <= 96 KiB payload, 40K-character text part
-     * PDF: <= 3 MiB, <= 12 pages, pypdf bounded text derivative
-     * DOCX: <= 3 MiB, <= 2 MiB inflated word/document.xml text
-     * other binary: path-only reference, never fake text/vision
-  -> AgentLoop attaches multimodal parts to the newest user turn on
-     EVERY model step during that turn (including after tool calls)
-  -> session history/trace: text and file reference names, NO base64
-  -> discard ephemeral model parts on completion, exception or cancellation
+     SQLite credential/session/tenant lookup -> descriptor-pinned file
+     -> unchanged inode/device/size/nanosecond mtime/ctime verification
+  -> bounded input processing (4 files, 8 MiB combined)
+     * PNG/JPEG/GIF/WebP: verify <=4 MiB, <=16 megapixels -> image_url
+     * UTF-8 text/code: <=96 KiB -> bounded untrusted text
+     * PDF/DOCX: <=3 MiB -> Docker converter (production mode)
+     * unknown binaries: path-only, never fabricated image/text
+  -> AgentLoop includes ephemeral media in every step of this one turn
+  -> persistent Agent history: filenames and user text only, never base64
+  -> discard ephemeral model blocks at turn completion/failure
 ```
 
-Attachments supplied via the API are **upload credentials**, not
-filesystem paths. Merely placing a file in the workspace does not grant a
-model attachment capability. Credentials are random, in-memory,
-session-scoped, limited to 128 per session and expire after two hours. The
-actual file is verified by inode/device, size, nanosecond mtime and ctime
-at message admission; uploads modified by a tool must be uploaded again.
-The implementation is intended for the **single-process local Web service**.
-Multi-worker/hosted deployments need a durable per-tenant attachment store,
-authorization-aware object keys and signed temporary fetch URLs; this
-in-memory ticket registry is not appropriate there.
+**Local authorization durability.** Upload grants are SHA-256 token hashes
+in SQLite (`desktop/service/application/attachment_store.py`), bounded to
+the local tenant marker, session, filename, device/inode, size and ns-level
+mtime/ctime. SQLite `BEGIN IMMEDIATE` transactionally enforces a maximum
+128 active files and 100 MiB per session, 1 GiB across the local store.
+Other session/tenant lookups are rejected, and upload state can be recovered
+after local API restart. Records expire after 2 hours. Startup and an hourly
+task revoke expired grants and unlink unchanged files using anchored session
+directory handles. If cleanup gets a transient OS failure, the record remains
+for retry; user-replaced files are not unlinked.
 
-Document text is explicitly labelled as **untrusted attachment data**, not
-instructions. Raw PDF/DOCX bytes are never sent as a fabricated image_url
-and cannot be interpreted merely by suffix. Scanned/image-only PDFs yield
-no text and require a separately authorized OCR/document conversion service.
-Unsupported binary files are not claimed as understood by the model.
+**Local-only scope:** This is *not* a distributed object store. The hosted
+metadata-only API intentionally exposes no Agent tools or upload routes.
+Shared cloud storage, per-principal object ACLs, durable GC leases, encryption
+at rest, tenant billing/quotas and worker ownership are still required for an
+actual hosted multi-tenant attachment product. The SQLite `local` tenant is
+not a substitute for OIDC/RLS authorization.
 
-**Parsing security limitation:** Pillow, pypdf and ZIP/XML parsing still run
-in a local process on the API worker. Byte/page/pixel/XML caps reduce exposure
-but do NOT provide CPU or memory isolation for malicious documents. Hosted
-production must execute conversion in an isolated, resource-limited worker
-and scan/quarantine uploads before model use.
+**Malware scanning.** The optional clamd Unix-socket INSTREAM integration
+scans the already-open file descriptor before publishing an upload token.
+`RIDGE_ATTACHMENT_SCAN_REQUIRED=1` rejects all uploads if
+`RIDGE_CLAMD_UNIX_SOCKET` is not configured or clamd is unavailable,
+times out, reports `FOUND` or returns a protocol error. Uploaded file
+identity is rechecked after scanning. This is a configurable local antivirus
+gate, not a complete quarantine solution, and real ClamAV virus-definition
+management and service lifecycle need independent operational acceptance.
+An untrusted Agent running simultaneously in the same local workspace may
+see a not-yet-scanned filename; a hosted system must use separate pre-scan
+quarantine storage.
 
-Binary originals persist in the session's workspace even though media
-base64 is not put into chat history. Files need explicit retention/GC and
-storage-at-rest policies before hosted use. A model/provider without vision
-support may reject an image request; fallback must be surfaced rather than
-claiming successful interpretation.
+**Document execution modes.**
+
+- `RIDGE_DOCUMENT_CONVERTER_MODE=local` (default): deadline-limited
+  separate Python process with Linux CPU/address-space limits. Allowed
+  only for explicitly trusted local desktop use.
+- `RIDGE_DOCUMENT_CONVERTER_MODE=docker`: prebuild with
+  `docker build -f deploy/document-converter/Dockerfile -t ridge-document-converter:local .`.
+  Docker runs with `--pull=never --network=none --read-only`,
+  no host mounts or API secrets, `--cap-drop=ALL`,
+  `no-new-privileges`, non-root UID, CPU, memory/PID/tmpfs
+  caps and an 8-second parent deadline. The container is force-reaped
+  when needed. There is **no local parser fallback** if Docker fails.
+- `RIDGE_DOCUMENT_REQUIRE_SANDBOX=1` (or hosted deployment mode):
+  fail closed if Docker mode is not selected. The image name can be
+  set using `RIDGE_DOCUMENT_IMAGE`; the required image must already exist.
+
+Typed document contents are marked as untrusted attachment data. A PDF
+containing scanned images without a text layer yields no extracted text;
+it is not equivalent to OCR. The Docker converter handles PDF/DOCX text
+only; other documents remain references. Model/provider capabilities must
+support image_url parts or reject them honestly.
+
+### Production release boundary
+
+The command approval classifier is a conservative gate, not a general
+shell AST proof; host Bash must be disabled for untrusted deployments.
+A Docker daemon socket is privileged: move this document conversion into a
+dedicated worker/daemon or remote execution service for hosted deployment,
+not a public-facing multi-tenant API with unrestricted Docker access.
+Do not confuse Job Object process ownership with OS permission isolation.
+File edits use directory locks and metadata CAS for cooperating writers,
+not atomic compare-and-swap against arbitrary external programs. Native
+Windows handle-scoped file safety still needs parity with POSIX.
 
 ### Verification
 
@@ -150,15 +184,25 @@ claiming successful interpretation.
 - `test_file_commit_anchored.py`: root pinning and symlinked parent swap,
   mode preservation and exclusive create.
 - `tests/native/windows_job_smoke.py`: real Windows process tree ownership.
+- `test_attachment_store_durability.py`: hashed tickets across instances,
+  tenant/session scopes, concurrent SQLite quota admission, restart and TTL
+  unlink with user-replacement preservation.
+- `test_attachment_scanner.py`: real fake-Unix-socket clamd INSTREAM frame
+  exchange, clean and FOUND verdicts, missing scanner fail-closed behavior.
+- `test_document_container_policy.py`: Docker argv hardening, no mounts or
+  network, strict fail closed on timeout and missing Docker.
+- `test_document_container_smoke.py` and the standalone
+  `document-converter-isolation.yml` workflow: real image build and Docker
+  PDF/DOCX + malformed input tests.
 - Repository full Python, API, Web E2E, Docker and MCP smoke.
 
 ### Open release gates
 
-Command approval is not a shell AST parser and cannot prove a command safe.
-Sandbox enforcement and tenant-scoped resources are the actual boundary.
-Windows Job Object does not sandbox privileges. File commits still lack
-non-cooperating-writer CAS. Uploaded files should eventually have durable
-content-addressed metadata, scan/quarantine policy, per-tenant quotas,
-automatic GC, provider-feature discovery and optional document conversion.
+The local SQLite grant database and hourly TTL sweeper do not implement
+hosted multi-tenant object storage with real OIDC scope enforcement,
+encryption-at-rest, multi-host GC leases, key rotation, storage quotas,
+malware quarantine and deletion SLA. Fail-closed clamd support is not a
+verified production ClamAV service. Real cloud deployment and hostile-tenant
+stress/soak remain blockers; do not equate local regression success with them.
 
 Do not merge until these security tradeoffs are explicitly accepted.
