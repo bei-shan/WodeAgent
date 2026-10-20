@@ -108,9 +108,9 @@ Ridge Code 的工具执行分为受信任本地主机执行和 Docker/BoxLite/E2
 - Windows 本机命令由 Job Object 负责整棵进程树的超时与取消清理，并有独立 Windows CI；此能力不隔离文件权限或网络。
 - 工作区 Write/Edit/MultiEdit 在支持的 POSIX 系统中使用目录文件描述符锚定、协作式锁及原子发布，防止符号链接父目录切换越界。
 
-Web 端上传图片/文档后收到会话绑定的随机附件凭证（不是文件路径权限）；消息只提交凭证，服务端核对上传记录、文件身份和大小，拒绝跨会话或被修改的文件。PNG/JPEG/GIF/WebP 必须通过图片解码和像素上限验证，再作为视觉消息传入当前轮次的**每次模型调用**；UTF-8 文本、PDF、DOCX 可按上限提取为模型文本内容，其他二进制保持路径引用。图片字节和原始文档不会写入会话历史；模型不支持视觉输入时会拒绝或报错。PDF/DOCX 当前为受限本地解析，**尚非隔离式恶意文件转换**。
+Web 端上传图片/文档后收到会话绑定的随机附件凭证（不是文件路径权限）；消息只提交凭证，服务端核对上传记录、文件身份和大小，拒绝跨会话或被修改的文件。PNG/JPEG/GIF/WebP 必须通过图片解码和像素上限验证，再作为视觉消息传入当前轮次的**每次模型调用**；UTF-8 文本、PDF、DOCX 可按上限提取为模型文本内容，其他二进制保持路径引用。图片字节和原始文档不会写入会话历史；模型不支持视觉输入时会拒绝或报错。PDF/DOCX 支持独立 Docker 转换：先执行 `docker build -f deploy/document-converter/Dockerfile -t ridge-document-converter:local .`，再设置 `RIDGE_DOCUMENT_CONVERTER_MODE=docker` 与 `RIDGE_DOCUMENT_REQUIRE_SANDBOX=1`，转换容器无网络、无工作区挂载、非 root 且有 CPU/内存/PID/超时限制；容器不可用会拒绝，**不会回退宿主机**。
 
-单个上传限制 25 MiB，单次消息最多 4 个附件、总共 8 MiB，图片最多 4 MiB / 1600 万像素，文本最多 96 KiB，PDF/DOCX 文档解析上限 3 MiB；上传凭证两小时过期。完整设计和生产边界见 [命令安全和附件处理](docs/design/2026-10-20-command-security-and-attachments.md)。
+单个上传限制 25 MiB，单次消息最多 4 个附件、总共 8 MiB，图片最多 4 MiB / 1600 万像素，文本最多 96 KiB，PDF/DOCX 文档解析上限 3 MiB；上传凭证两小时过期。随机凭证的哈希和会话/文件身份信息保存在本地 SQLite，可跨进程恢复；每会话最多 128 份有效上传、100 MiB 有效占用，整库上限 1 GiB。服务启动和每小时执行过期清理，临时失败会重试。可使用 `RIDGE_ATTACHMENT_SCAN_REQUIRED=1` 和 `RIDGE_CLAMD_UNIX_SOCKET=/run/clamav/clamd.ctl` 强制在签发凭证前通过 ClamAV 扫描，扫描服务不可用即拒绝。完整设计和生产边界见 [命令安全和附件处理](docs/design/2026-10-20-command-security-and-attachments.md)。
 
 ## MCP SDK 与连接稳定性
 
