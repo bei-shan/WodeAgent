@@ -16,7 +16,14 @@ from desktop.service.application.errors import InvalidInputError, ForbiddenError
 from tests.test_web_service import FakeAgent
 
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"FAKE_PNG_CONTENT"
+def _png_bytes() -> bytes:
+    from PIL import Image
+    stream = BytesIO()
+    Image.new("RGB", (2, 2), (0, 100, 200)).save(stream, format="PNG")
+    return stream.getvalue()
+
+
+PNG = _png_bytes()
 
 
 def test_transient_vision_input_not_mutated_into_saved_messages():
@@ -37,7 +44,12 @@ def test_transient_vision_input_not_mutated_into_saved_messages():
 def test_media_sniff_ignores_misleading_extension_and_rejects_large_input():
     assert make_attachment_part("fake.txt", PNG)["kind"] == "image"
     assert make_attachment_part("README.md", b"Hello")["kind"] == "text"
-    assert make_attachment_part("report.pdf", b"%PDF-1.7")["content"] is None
+    from pypdf import PdfWriter
+    pdf = PdfWriter()
+    pdf.add_blank_page(width=72, height=72)
+    stream = BytesIO()
+    pdf.write(stream)
+    assert make_attachment_part("report.pdf", stream.getvalue())["content"] is None
     with pytest.raises(ValueError, match="4 MiB"):
         make_attachment_part("huge.png", PNG + b"z" * (4 * 1024 * 1024))
 
