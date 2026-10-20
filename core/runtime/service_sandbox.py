@@ -20,6 +20,7 @@ class SandboxService:
                     memory=agent.config.sandbox_memory,
                     cpus=agent.config.sandbox_cpus,
                     pids_limit=agent.config.sandbox_pids_limit,
+                    snapshot_workspace=agent.config.sandbox_workspace_snapshot_enabled,
                 )
             elif agent._sandbox_mode == "boxlite":
                 from core.sandbox.boxlite_provider import BoxliteCommandProvider
