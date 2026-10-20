@@ -3,7 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { ModelInfo } from '../api'
 import { Icons, Svg } from './icons'
 
-type UploadedFile = { name: string; path: string }
+type UploadedFile = { name: string; path: string; attachment_ref: string }
 
 interface ChatComposerProps {
   input: string
