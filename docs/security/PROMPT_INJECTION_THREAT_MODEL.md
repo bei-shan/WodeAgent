@@ -46,6 +46,32 @@ not a proof that the model will reject every attack.
 5. Add adversarial tests for delimiter breakout, role promotion, snapshot
    poisoning, unexpected Python execution and history mutation.
 
+## Execution-layer follow-up (2026-10-20)
+
+- `core/runtime/subprocess_environment.py` defines a conservative ambient
+  environment allowlist. Local Bash gets a temporary HOME, so `OPENAI_API_KEY`,
+  AWS tokens, `GITHUB_TOKEN`, dynamic loader hooks, `PYTHONPATH`, `NODE_OPTIONS`,
+  injected Git config variables, and authenticated proxy variables are not
+  automatically inherited. MCP stdio always receives a similarly stripped
+  environment; a server's **explicit** trusted `env` config is treated as a
+  deliberate credential grant, never as permission inferred from model output.
+- Docker and BoxLite re-scan bind-mounted workspace trees for recognizable
+  credential files/directories at creation and before command execution.
+  They reject full RW mounts containing `.env`, `.ssh`, `.aws`, `.npmrc`,
+  private keys and similar names; public `.env.example` templates are allowed.
+  An extremely large or unreadable tree is denied. This is a narrow preflight,
+  not a secure copy or race-free filesystem boundary. Exclude secrets from a
+  separately prepared sandbox workspace **before** running the Agent.
+- `AGENT_REQUIRE_ISOLATED_EXECUTION=true` makes an attempt to start an Agent
+  with `local_trusted` fail before tool wiring. Set `AGENT_SANDBOX_MODE=docker`,
+  `boxlite`, or `e2b` with an approved backend. No host-mode fallback occurs.
+
+**Production note:** Unrestricted host Python/build tools can still use direct
+sockets and read user-accessible files; `BASH_ALLOW_NETWORK=false` is only a
+command-name filter. No amount of environment filtering turns host Bash into
+network isolation or an OS sandbox. A real isolated backend is required when
+repository contents or tool results are untrusted.
+
 ## Remaining risks / mandatory production gates
 
 - **Host command execution:** `tools/builtin/bash.py` uses shell parsing
