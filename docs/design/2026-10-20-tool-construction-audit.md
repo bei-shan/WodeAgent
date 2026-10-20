@@ -59,11 +59,15 @@ permission gates and inherit hosted authority where present.
 | **P1 remaining** | Shell permission classification | `Bash._check_command_safety` is a regex/word heuristic, not a full shell grammar. It can be bypassed through interpreters, scripts and unexpected syntax, and may reject harmless text | Replace the role of regex-as-boundary with actual platform confinement and structured AST policy/approval; refuse uncertain commands when they require elevated authority |
 | **P1 remaining** | Native Windows process tree | Current Windows fallback uses `taskkill /T /F`, not a Job Object | Introduce Job Object lifetime ownership, terminal process-group cancellation and Windows CI |
 | **P1 remaining** | Long-running commands | One blocking Bash invocation (up to timeout), no persistent task/session or progressive output tool | Add scoped process sessions, TaskOutput/Stop wiring, TTL and explicit UI stream; ensure no orphaned tasks |
-| **P1 remaining** | File operations | Read metadata and mtime+size optimistic checks exist; Write/Edit use temporary replacement, but race windows and symlink traversal remain; comparison by mtime+size is not content-hash CAS | Use fd-relative root policy, atomic replace with expected content hash, explicit file locks and concurrency tests |
+| **P1 partly fixed** | File operations | Write/Edit/MultiEdit now use the same collision-free temporary commit, preserve original POSIX modes, compare ns-level inode/ctime/mtime/size immediately before publication; *new file creation is exclusive* | Still need fd-relative root policy, strong across-process file locking/content-hash CAS, symlink/parent-directory race hardening |
 | **P1 remaining** | Secrets in traces | Common `context.params_input` includes original tool args; exceptions may include data in error messages; stdout can include tokens | Central context-sensitive tool-param redaction plus bounded, access-controlled full logs; keep developer audit artifacts out of model prompts |
 | **P2** | Schema ecosystem | `ToolParameter` + strict input registry, plus MCP schema validation; no unified enum/range/side-effect metadata on every tool | Move toward one typed `ToolDefinition` contract including capability, effect class, timeout and result policy |
 | **P2** | Bootstrap registration | Builtins are imported/instantiated dynamically by filesystem scan; teams have special registration | Explicit feature/capability manifests, deterministic catalog order, optional deps preflight, startup diagnostics |
-| **P2** | Search/read APIs | Dedicated `Read/Grep/Glob/LS`, 2s Grep deadline, bounded result/page options | Make result caps consistent, support `rg` missing fallback tests and binary/encoding handling |
+| **P1 fixed here** | Grep resource/exfil | `rg` subprocess output was unbounded; fallback followed symlinked external files, and match lines were arbitrarily large | Bounded pipe capture, safe relative match paths, skip external symlinks, cap line text and signal partial results |
+| **P1 fixed here** | Background task file paths | An opaque `task_id` was interpolated into output/progress paths without any character restrictions | Validate task IDs before file operations in both TaskOutput and BackgroundTaskRunner (including launch/save/get/progress) |
+| **P2 fixed here** | Skill and background results | `Skill.list` did not agree with mandatory `name` schema; loads and TaskOutput events/results were potentially huge | Optional name for list with action-aware validation, bounded Skill args/load and TaskOutput result/events |
+| **P2 fixed here** | Glob/LS input and symlink semantics | Boolean-as-int limit/offset and nonstring params slipped through; Glob presented outside symlink names as files | Strict type checks; constrain ignore patterns; omit out-of-workspace file symlinks from Glob |
+| **P2** | Search/read APIs | Dedicated `Read/Grep/Glob/LS` and bounded outputs are now better aligned | Finish streamed LS directory pagination, regex complexity/CPU cap and richer binary/encoding reporting |
 | **P2** | MCP | Registry and MCP adapter exist with separate schema and protocol tests | Preserve adapter ownership and cancellation; standardize tool result errors and controlled resource cleanup |
 
 ## Design directions
@@ -98,16 +102,32 @@ permission gates and inherit hosted authority where present.
   visible and preserve original observed-byte statistics.
 - `tools/builtin/read_file.py`: bounded line-fragment scanning, output caps,
   truthful paging, encoding fallback and large-file preflight.
-- `tests/test_bash_output_bounds.py` and `tests/test_read_output_bounds.py`:
-  stdout/stderr flooding, timeout, cancel, stdin, large file, giant lines,
-  returned-data bounds and invalid tool arguments.
+- `core/runtime/file_commit.py`: atomic same-directory temp file writes,
+  exclusive no-clobber creation, precise precommit identity check, preserve
+  executable/mode bits; shared by Write/Edit/MultiEdit.
+- `tools/builtin/search_code.py`: bounded ripgrep stdout and fallback
+  file scans, reject escaped symlinks, safely cap match text and indicate
+  incomplete results instead of hiding truncation.
+- `tools/builtin/search_files_by_name.py` / `list_files.py`:
+  reject malformed and boolean-as-int parameters, keep Glob results inside
+  workspace.
+- `tools/builtin/skill.py`: align `list` action with optional name schema;
+  validate action and args, bound skill loads.
+- `tools/builtin/task_output.py` / `core/background_task.py`:
+  cap task output and events, validate task ids **before** any result/progress
+  filesystem path is built.
+- New dedicated regression suites:
+  `test_bash_output_bounds.py`, `test_read_output_bounds.py`,
+  `test_file_commit_tools.py`, `test_grep_resource_safety.py`,
+  `test_glob_input_safety.py`, `test_ls_input_safety.py`,
+  `test_skill_tool_contracts.py`, `test_task_output_bounded.py` and
+  `test_task_id_path_security.py`.
 - All existing tool and sandbox policy tests continue to apply.
 
 ## Acceptance
 
 CI must pass full Python regression, API smoke, Docker sandbox smoke, MCP
-compatibility, Web UI and browser E2E. Changes in this PR are intentionally
-limited to process/output safety and Bash contract corrections, **not** a
+compatibility, Web UI and browser E2E. Changes in this PR are a focused tool-wide correctness and resource-safety pass, **not** a
 claim that an untrusted shell command is safe on the local host.
 
 The separate draft PR #116 adds BrowserUse/ComputerUse; it is not included
