@@ -81,3 +81,35 @@ def test_attached_images_survive_intermediate_tool_steps_without_history_mutatio
     host._invoke_llm_with_retry = invoke
     assert AgentLoop(host).run("describe", False, Trace()) == "done"
     assert seen == [2, 2]
+
+
+def test_document_worker_timeout_is_rejected(monkeypatch):
+    import subprocess
+    from core.runtime.attachment_context import _isolated_document_text
+
+    def stall(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 8)
+
+    monkeypatch.setattr(subprocess, "run", stall)
+    with pytest.raises(ValueError, match="timed out"):
+        _isolated_document_text(".pdf", b"%PDF-1.4")
+
+
+def test_document_worker_failure_does_not_expose_stderr(monkeypatch):
+    import subprocess
+    from core.runtime.attachment_context import _isolated_document_text
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 4, b"", b"private"))
+    with pytest.raises(ValueError, match="rejected or failed"):
+        _isolated_document_text(".docx", b"PK")
+
+
+def test_document_worker_rejects_oversize_before_launch(monkeypatch):
+    import subprocess
+    from core.runtime.attachment_context import _isolated_document_text
+    called = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: called.append(True))
+    with pytest.raises(ValueError, match="3 MiB"):
+        _isolated_document_text(".pdf", b"x" * (3 * 1024 * 1024 + 1))
+    assert not called
