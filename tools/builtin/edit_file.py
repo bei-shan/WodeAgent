@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..base import Tool, ToolParameter, ToolStatus, ErrorCode
-from core.runtime.file_commit import commit_utf8, ConcurrentFileChange
+from core.runtime.file_commit import commit_utf8, ConcurrentFileChange, open_regular_workspace_file, read_workspace_bytes
 
 
 class EditTool(Tool):
@@ -303,7 +303,7 @@ class EditTool(Tool):
         
         try:
             # 以二进制模式读取，保留原始换行符
-            raw_content = abs_path.read_bytes()
+            raw_content = read_workspace_bytes(abs_path, self._root)
             original_size = len(raw_content)
             
             # 尝试 UTF-8 解码
@@ -493,7 +493,7 @@ class EditTool(Tool):
             True 如果是二进制文件，False 如果是文本文件
         """
         try:
-            with open(path, "rb") as f:
+            with open_regular_workspace_file(path, self._root) as f:
                 chunk = f.read(self.BINARY_CHECK_SIZE)
                 return b"\x00" in chunk
         except Exception:
