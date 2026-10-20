@@ -93,19 +93,33 @@ class ListFilesTool(Tool):
         ignore = parameters.get("ignore") or []  # 避免可变默认值问题
 
         # 参数校验
-        if not isinstance(offset, int) or offset < 0:
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="path must be a non-empty directory string.",
+                params_input=params_input,
+            )
+        if type(include_hidden) is not bool:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="include_hidden must be a boolean.",
+                params_input=params_input,
+            )
+        if type(offset) is not int or offset < 0:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message="offset must be a non-negative integer.",
                 params_input=params_input,
             )
-        if not isinstance(limit, int) or limit < 1 or limit > 200:
+        if type(limit) is not int or limit < 1 or limit > 200:
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message="limit must be an integer between 1 and 200.",
                 params_input=params_input,
             )
-        if not isinstance(ignore, list):
+        if (not isinstance(ignore, list) or len(ignore) > 100
+                or any(not isinstance(item, str) or len(item) > 256
+                       for item in ignore)):
             return self.create_error_response(
                 error_code=ErrorCode.INVALID_PARAM,
                 message="ignore must be a list of glob patterns.",
