@@ -31,11 +31,11 @@ not a proof that the model will reject every attack.
 
 ## Direct fixes in this change
 
-1. Loading `L1_system_prompt.py` no longer uses `runpy.run_path`. Parse
-   a single static string assignment with `ast.literal_eval`; reject
-   arbitrary executable Python, interpolations, extra statements, and
-   oversized files. Resolve it from the installed application, not the
-   current project workspace.
+1. Load bundled `L1_system_prompt.md` as bounded static text, rather
+   than executing an arbitrary `L1_system_prompt.py` with `runpy.run_path`.
+   Resolve the Markdown file from the installed application; a trusted
+   bootstrap/test fixture may supply an explicit root. Never load L1
+   from the active repository merely because it contains a prompt file.
 2. Remove CODE_LAW, MCP descriptions, Skill metadata and hook/runtime text
    from `system` messages. Present them as provenance-labelled, escaped,
    bounded reference text in `user` messages before conversation history.
