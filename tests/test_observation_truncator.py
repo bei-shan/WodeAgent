@@ -382,3 +382,66 @@ def test_unicode_truncation_respects_complete_json_byte_budget(tmp_path):
     assert parsed["data"]["truncated"] is True
     preview = parsed["data"]["preview"]
     assert parsed["data"]["truncation"]["kept_bytes"] == len(preview.encode("utf-8"))
+
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptors required")
+def test_receipt_write_cannot_escape_on_symlink_swap_between_check_and_open(tmp_path):
+    raw = json.dumps({"status": "success", "data": {"text": "x" * 60000}})
+    target = tmp_path / "outside"
+    target.mkdir()
+    visible = tmp_path / "tool-output"
+    visible.mkdir()
+    renamed = tmp_path / "previous-receipts"
+    original_open = os.open
+    swapped = False
+
+    def swap_once(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and isinstance(path, str) and path.startswith("tool_") and "dir_fd" in kwargs:
+            swapped = True
+            visible.rename(renamed)
+            visible.symlink_to(target, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    with patch("core.context_engine.observation_truncator.os.open", side_effect=swap_once):
+        result = json.loads(ObservationTruncator(str(tmp_path)).truncate("Read", raw))
+
+    assert swapped
+    assert "full_output_path" not in result["data"]["truncation"]
+    assert list(target.iterdir()) == []
+    previous = list(renamed.glob("tool_*.json"))
+    assert len(previous) == 1
+    assert previous[0].read_text(encoding="utf-8") == raw
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptors required")
+def test_receipt_cleanup_refuses_symlink_and_nonregular_files(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    old_receipt = outside / "tool_20200101_000000_Read_abcdef0123456789.json"
+    old_receipt.write_text("sensitive", encoding="utf-8")
+    os.utime(old_receipt, (1, 1))
+    (tmp_path / "tool-output").symlink_to(outside, target_is_directory=True)
+    ObservationTruncator(str(tmp_path))._cleanup_expired_files()
+    assert old_receipt.read_text(encoding="utf-8") == "sensitive"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptors required")
+def test_receipt_cleanup_deletes_only_expired_regular_receipts(tmp_path):
+    folder = tmp_path / "tool-output"
+    folder.mkdir()
+    old_receipt = folder / "tool_20200101_000000_Bash_abcdef0123456789.json"
+    old_receipt.write_text("old", encoding="utf-8")
+    os.utime(old_receipt, (1, 1))
+    unrelated = folder / "other.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+    malicious = folder / "tool_20200101_000000_Read_abcdef0123456789.json"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    malicious.symlink_to(outside)
+    ObservationTruncator(str(tmp_path))._cleanup_expired_files()
+    assert not old_receipt.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+    assert malicious.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "outside"
