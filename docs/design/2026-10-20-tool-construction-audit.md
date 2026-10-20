@@ -55,7 +55,7 @@ permission gates and inherit hosted authority where present.
 | Priority | Area | Current state | Decision |
 | --- | --- | --- | --- |
 | **P0 fixed here** | Bash output RAM | Former `communicate()` buffered arbitrary stdout/stderr and Bash returned full unbounded `data`, despite a `truncated` flag | Drain pipes into bounded buffers, count total bytes, cap returned lines, enforce limits *before* serialization |
-| **P0 configuration requirement** | Local Bash authority | Workspace cwd and blacklists do **not** isolate files, processes or networking; arbitrary Python/scripts can access host capabilities | Document as trusted host execution only; require Docker/BoxLite/E2B/VM isolation for untrusted cloud agents; do not claim regex filters make this a sandbox |
+| **P0 fixed here** | Read memory | Former `Read._read_file_content` used `readlines()` (entire file) despite a 2000-line page limit; one giant line could dominate memory and tool context | Scan fixed-size line fragments, cap long lines and total returned content, correctly report displayed lines/pagination, reject files over 64 MiB |\n| **P0 configuration requirement** | Local Bash authority | Workspace cwd and blacklists do **not** isolate files, processes or networking; arbitrary Python/scripts can access host capabilities | Document as trusted host execution only; require Docker/BoxLite/E2B/VM isolation for untrusted cloud agents; do not claim regex filters make this a sandbox |
 | **P1 remaining** | Shell permission classification | `Bash._check_command_safety` is a regex/word heuristic, not a full shell grammar. It can be bypassed through interpreters, scripts and unexpected syntax, and may reject harmless text | Replace the role of regex-as-boundary with actual platform confinement and structured AST policy/approval; refuse uncertain commands when they require elevated authority |
 | **P1 remaining** | Native Windows process tree | Current Windows fallback uses `taskkill /T /F`, not a Job Object | Introduce Job Object lifetime ownership, terminal process-group cancellation and Windows CI |
 | **P1 remaining** | Long-running commands | One blocking Bash invocation (up to timeout), no persistent task/session or progressive output tool | Add scoped process sessions, TaskOutput/Stop wiring, TTL and explicit UI stream; ensure no orphaned tasks |
@@ -96,8 +96,11 @@ permission gates and inherit hosted authority where present.
 - `tools/builtin/bash.py`: inject the hard output limit, also cap returned
   lines and command size, reject invalid path/timeout input, make truncation
   visible and preserve original observed-byte statistics.
-- `tests/test_bash_output_bounds.py`: large stdout/stderr flood, timeout,
-  cancel, stdin, returned-data bounds, invalid inputs.
+- `tools/builtin/read_file.py`: bounded line-fragment scanning, output caps,
+  truthful paging, encoding fallback and large-file preflight.
+- `tests/test_bash_output_bounds.py` and `tests/test_read_output_bounds.py`:
+  stdout/stderr flooding, timeout, cancel, stdin, large file, giant lines,
+  returned-data bounds and invalid tool arguments.
 - All existing tool and sandbox policy tests continue to apply.
 
 ## Acceptance
