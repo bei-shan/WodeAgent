@@ -185,6 +185,47 @@ class WorkspaceService:
                 raise InvalidInputError("Path is a directory, not a file")
             return parts[-1], os.fdopen(fd, "rb")
 
+    def prepare_attachments(self, sid: str, paths: list[str]) -> list[dict]:
+        """Bind references to readable files in *this* session, not host paths.
+
+        No arbitrary URL, base64 or client-supplied MIME is trusted. Media bytes
+        remain transient in server memory and never enter persisted history.
+        """
+        from core.runtime.attachment_context import (
+            MAX_ATTACHMENTS, MAX_TOTAL_BYTES, make_attachment_part,
+        )
+
+        if not isinstance(paths, list) or len(paths) > MAX_ATTACHMENTS:
+            raise InvalidInputError("At most four attachments per message")
+        if len(paths) != len(set(paths)) or any(
+            not isinstance(path, str) or not path or len(path) > 240
+            for path in paths
+        ):
+            raise InvalidInputError("Invalid or repeated attachment reference")
+        parts = []
+        total = 0
+        for path in paths:
+            # _parts and _open_file enforce descriptor-based per-session root
+            # confinement, including O_NOFOLLOW for symlinks.
+            components = self._parts(path)
+            if not components:
+                raise InvalidInputError("Invalid attachment path")
+            with self._open_file(sid, path) as (_, stream):
+                length = os.fstat(stream.fileno()).st_size
+                if length > MAX_UPLOAD_BYTES:
+                    raise PayloadTooLargeError("Attachment exceeds upload limit")
+                total += length
+                if total > MAX_TOTAL_BYTES:
+                    raise PayloadTooLargeError("Message attachment budget exceeded")
+                data = stream.read(length + 1)
+                if len(data) != length:
+                    raise InvalidInputError("Attachment changed while being read")
+            try:
+                parts.append(make_attachment_part(path, data))
+            except ValueError as exc:
+                raise InvalidInputError(str(exc)) from exc
+        return parts
+
     def upload(self, sid: str, filename: str, source: BinaryIO) -> dict:
         name = Path((filename or "upload").replace("\\", "/")).name
         if not name or name in {".", ".."} or "\x00" in name or len(name.encode("utf-8")) > 240:
