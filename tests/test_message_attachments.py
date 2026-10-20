@@ -125,3 +125,36 @@ def test_attachment_cross_session_and_traversal_denied(web):
         f"/api/sessions/{sid_b}/messages",
         json={"content": "", "attachments": []},
     ).status_code == 400
+
+
+def test_attachment_rejects_file_mutation_after_upload(web):
+    app, client = web
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    uploaded = client.post(
+        f"/api/sessions/{sid}/upload",
+        files={"file": ("notes.txt", b"safe", "text/plain")},
+    ).json()
+    # Direct workspace mutation by an Agent/tool must invalidate the ticket.
+    workspace = app.state.workspace_service.workspace_base / sid
+    (workspace / uploaded["path"]).write_text("changed by tool")
+    result = client.post(
+        f"/api/sessions/{sid}/messages",
+        json={"content": "summarize", "attachments": [uploaded["attachment_ref"]]},
+    )
+    assert result.status_code == 403
+
+
+def test_attachment_ticket_is_unique_and_does_not_publish_host_path(web):
+    _, client = web
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    first = client.post(
+        f"/api/sessions/{sid}/upload",
+        files={"file": ("a.txt", b"hello", "text/plain")},
+    ).json()
+    second = client.post(
+        f"/api/sessions/{sid}/upload",
+        files={"file": ("a.txt", b"hello", "text/plain")},
+    ).json()
+    assert first["attachment_ref"] != second["attachment_ref"]
+    assert "/" not in first["attachment_ref"]
+    assert first["path"] != second["path"]
