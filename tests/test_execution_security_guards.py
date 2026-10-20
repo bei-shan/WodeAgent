@@ -137,6 +137,29 @@ def test_nested_credentials_and_public_templates(tmp_path):
 
 
 
+def test_plugin_command_hook_does_not_inherit_agent_credentials(tmp_path, monkeypatch):
+    from core.hook_system import HookManager, Hook
+
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-leak")
+    captured = []
+
+    def fake_run(*args, **kwargs):
+        captured.append(kwargs["env"])
+        return subprocess.CompletedProcess(args, 0, '{"decision":"allow"}', "")
+
+    monkeypatch.setattr("core.hook_system.subprocess.run", fake_run)
+    manager = HookManager(project_root=str(tmp_path))
+    manager._execute_single_hook(
+        Hook(type="command", command="echo approved"),
+        {"hook_event_name": "PreToolUse"},
+    )
+    assert len(captured) == 1
+    assert "OPENAI_API_KEY" not in captured[0]
+    assert "GITHUB_TOKEN" not in captured[0]
+    assert captured[0]["MYCODE_PROJECT_DIR"] == str(tmp_path)
+
+
 def test_project_mcp_config_requires_explicit_operator_trust(tmp_path, monkeypatch):
     import json
     from tools.mcp.config import load_mcp_servers
