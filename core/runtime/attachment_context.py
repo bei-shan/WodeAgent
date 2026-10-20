@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import PurePosixPath
 from typing import Any
@@ -142,6 +145,30 @@ def _extract_docx(payload: bytes) -> str:
         raise ValueError("Invalid or unsupported DOCX") from exc
 
 
+def _isolated_document_text(suffix: str, payload: bytes) -> str:
+    """Run untrusted document conversion outside the API interpreter.
+
+    This is a timeout and process separation boundary, NOT a full sandbox:
+    hosted deployments must provide OS-level network/filesystem isolation.
+    """
+    if len(payload) > MAX_DOCUMENT_BYTES:
+        raise ValueError("Document exceeds 3 MiB extraction cap")
+    env = {"PYTHONPATH": os.pathsep.join(sys.path), "PYTHONDONTWRITEBYTECODE": "1"}
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "core.runtime.document_worker", suffix],
+            input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=8, env=env, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("Document conversion timed out") from exc
+    if completed.returncode != 0:
+        raise ValueError("Document conversion rejected or failed")
+    if len(completed.stdout) > MAX_DOCUMENT_CHARS * 4:
+        raise ValueError("Document conversion output exceeded limit")
+    return completed.stdout.decode("utf-8", errors="replace")[:MAX_DOCUMENT_CHARS]
+
+
 def make_attachment_part(name: str, payload: bytes) -> dict[str, Any]:
     name = _safe_name(name)
     if not isinstance(payload, bytes):
@@ -171,11 +198,11 @@ def make_attachment_part(name: str, payload: bytes) -> dict[str, Any]:
         return {"path": name, "kind": "text",
                 "mime_type": "text/plain", "content": _text_block(name, decoded)}
     if suffix == ".pdf":
-        extracted = _extract_pdf(payload)
+        extracted = _isolated_document_text(suffix, payload)
         return {"path": name, "kind": "document", "mime_type": "application/pdf",
                 "content": _text_block(name, extracted) if extracted.strip() else None}
     if suffix == ".docx":
-        extracted = _extract_docx(payload)
+        extracted = _isolated_document_text(suffix, payload)
         return {"path": name, "kind": "document",
                 "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "content": _text_block(name, extracted) if extracted.strip() else None}
