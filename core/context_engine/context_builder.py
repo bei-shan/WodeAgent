@@ -8,7 +8,7 @@ CODE_LAW mtime, L1 file mtime) that never need manual invalidation.
 Messages 格式：
 [
   {"role": "system", "content": "L1 系统提示 + 工具 usage_notes"},
-  {"role": "system", "content": "L2: CODE_LAW.md（如有）"},
+  {"role": "user", "content": "untrusted CODE_LAW/MCP/Skills reference data"},
   {"role": "user", "content": "...问题..."},
   {"role": "assistant", "content": "...", "tool_calls": [...]},
   {"role": "tool", "tool_call_id": "...", "content": "{截断后JSON}"},
@@ -20,8 +20,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-import runpy
+import ast
 from typing import List, Optional, Dict, Any
+
+from core.context_engine.untrusted_content import (
+    TRUST_BOUNDARY_RULES, frame_history_tool_results, untrusted_reference,
+)
 
 
 @dataclass
@@ -69,12 +73,27 @@ class ContextBuilder:
         """
         messages: List[Dict[str, Any]] = []
         messages.extend(self._build_system_messages())
-        messages.extend(history_messages)
+        messages.extend(self.get_reference_messages())
+        messages.extend(frame_history_tool_results(history_messages))
         return messages
 
     def get_system_messages(self) -> List[Dict[str, Any]]:
         """获取 system messages（供日志/快照使用）。"""
         return self._build_system_messages()
+
+    def get_reference_messages(self) -> List[Dict[str, Any]]:
+        """Project and extension data has no system-message authority."""
+        refs: List[Dict[str, Any]] = []
+        if self._mcp_tools_prompt:
+            refs.append(untrusted_reference("MCP tool descriptions", self._mcp_tools_prompt))
+        if self._skills_prompt:
+            refs.append(untrusted_reference("Skill metadata", self._skills_prompt))
+        code_law = self._load_code_law()
+        if code_law:
+            refs.append(untrusted_reference("workspace CODE_LAW", code_law))
+        for block in self._runtime_system_blocks:
+            refs.append(untrusted_reference("runtime or hook context", block))
+        return refs
 
     def set_mcp_tools_prompt(self, prompt: str) -> None:
         """更新 MCP 工具提示（无需清缓存 — Late Binding 自动感知）。"""
@@ -107,19 +126,9 @@ class ContextBuilder:
         if l1:
             messages.append({"role": "system", "content": l1})
 
-        # MCP tools prompt (live — MCPFeature updates this)
-        if self._mcp_tools_prompt:
-            messages.append({"role": "system", "content": self._mcp_tools_prompt})
-
-        # L2: CODE_LAW (mtime-cached)
-        code_law = self._load_code_law()
-        if code_law:
-            messages.append({"role": "system",
-                             "content": f"# Project Rules (CODE_LAW)\n{code_law}"})
-
-        # Runtime blocks (plan mode, team status, hook messages, etc.)
-        for block in self._runtime_system_blocks:
-            messages.append({"role": "system", "content": block})
+        # Only trusted application text can be system-level. All external
+        # reference material is injected by get_reference_messages() as data.
+        messages.append({"role": "system", "content": TRUST_BOUNDARY_RULES})
 
         return messages
 
@@ -145,10 +154,6 @@ class ContextBuilder:
             notes = getattr(tool, "usage_notes", "")
             if notes and notes.strip():
                 usage_lines.append(notes.strip())
-
-        # Skills prompt (live)
-        if self._skills_prompt:
-            usage_lines.append(self._skills_prompt.strip())
 
         # Disabled tools (live — circuit breaker state)
         disabled = self._get_disabled_tools()
@@ -179,7 +184,9 @@ class ContextBuilder:
         if self.system_prompt_override:
             return self.system_prompt_override
 
-        l1_path = Path(self.project_root) / "prompts" / "agents_prompts" / "L1_system_prompt.py"
+        # Never execute, or load system instructions from, an arbitrary
+        # workspace path. Resolve the bundled prompt next to the application.
+        l1_path = Path(__file__).resolve().parents[2] / "prompts" / "agents_prompts" / "L1_system_prompt.py"
         if not l1_path.exists():
             return ""
 
@@ -192,9 +199,24 @@ class ContextBuilder:
         if self._cached_l1_mtime == mtime and self._cached_l1_text:
             return self._cached_l1_text
 
-        data = runpy.run_path(str(l1_path))
-        prompt = data.get("system_prompt", "")
-        if not isinstance(prompt, str):
+        # The prompt file is static data, not Python to be executed.
+        # Reject imports, calls, interpolations and extra statements.
+        try:
+            source = l1_path.read_text(encoding="utf-8")
+            if len(source) > 200_000:
+                return ""
+            tree = ast.parse(source, filename=str(l1_path))
+            if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
+                return ""
+            assignment = tree.body[0]
+            if (len(assignment.targets) != 1
+                    or not isinstance(assignment.targets[0], ast.Name)
+                    or assignment.targets[0].id != "system_prompt"):
+                return ""
+            prompt = ast.literal_eval(assignment.value)
+            if not isinstance(prompt, str):
+                return ""
+        except (OSError, SyntaxError, ValueError, TypeError, MemoryError):
             return ""
 
         self._cached_l1_mtime = mtime
