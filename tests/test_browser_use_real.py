@@ -46,7 +46,7 @@ def sites():
                 f"<p id='cookie'>cookie: {cookie}</p>"
                 "<input id='message'/>"
                 "<button id='send' onclick=\"document.getElementById('result').textContent="
-                "'submitted ' + document.getElementById('message').value\\">Send</button>"
+                "'submitted ' + document.getElementById('message').value\">Send</button>"
                 "<button id='setcookie' onclick=\"document.cookie='session_private=alpha; SameSite=Lax'\">Cookie</button>"
                 "<div id='result'></div>"
                 f"<script>fetch('{evil_url}/collect').catch(()=>{{}})</script>"
