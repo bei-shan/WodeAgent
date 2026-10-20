@@ -17,6 +17,7 @@ from threading import Event
 from typing import Callable
 
 from core.runtime.process_execution import run_process
+from core.runtime.subprocess_environment import safe_child_env
 from core.sandbox.contracts import CommandResult, SandboxUnavailable
 from core.sandbox.workspace_secrets import assert_no_mounted_credentials
 from core.sandbox.docker_lifecycle import (DockerLeaseManager, SandboxLeaseError,
@@ -234,7 +235,7 @@ class DockerCommandProvider:
                 )
 
             result = run_process(
-                argv, shell=False, cwd=str(self.workspace), env=os.environ.copy(),
+                argv, shell=False, cwd=str(self.workspace), env=safe_child_env(),
                 timeout=timeout_seconds, cancel_event=cancel_event,
                 **({"stdin_data": stdin_data} if stdin_data is not None else {}),
             )
