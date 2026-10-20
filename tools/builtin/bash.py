@@ -102,6 +102,16 @@ class BashTool(Tool):
         """
         start_time = time.monotonic()
         params_input = dict(parameters)
+        # Production fail-closed switch: never silently substitute host Bash
+        # when a container/VM sandbox was required by deployment policy.
+        if os.environ.get("RIDGE_BASH_REQUIRE_SANDBOX", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }:
+            return self.create_error_response(
+                error_code=ErrorCode.ACCESS_DENIED,
+                message="Host Bash disabled: an isolated sandbox backend is required.",
+                params_input=params_input,
+            )
         
         # 提取参数
         command = parameters.get("command")
