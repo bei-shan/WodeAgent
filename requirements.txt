@@ -9,3 +9,6 @@ uvicorn>=0.29.0
 pytest>=7.0.0
 python-multipart>=0.0.9
 jsonschema>=4.20,<5.0
+# Media attachments: validate decoded image dimensions and extract bounded PDF text
+Pillow>=11,<13
+pypdf>=6,<7
