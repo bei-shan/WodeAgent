@@ -36,6 +36,7 @@ class WorkspaceService:
     def __init__(self, controller: SessionController, data_dir: str | Path):
         self.controller = controller
         self.workspace_base = Path(data_dir) / "sessions"
+        self.quarantine_base = Path(data_dir) / "upload-quarantine"
         # Durable hashed credentials survive local API restarts and are
         # safe across multiple workers sharing the same local data directory.
         # Hosted deployments must use a tenant-aware object store instead.
@@ -274,6 +275,65 @@ class WorkspaceService:
         finally:
             os.close(base_fd)
 
+    @contextmanager
+    def _quarantine_directory_fd(self, sid: str) -> Iterator[int]:
+        """Stage untrusted uploads outside the Agent-visible session root."""
+        self._validate_session(sid)
+        if not _SECURE_OPEN:
+            raise ForbiddenError("Secure upload quarantine unavailable")
+        self.quarantine_base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent_fd = os.open(self.quarantine_base, _DIR_FLAGS)
+        try:
+            try:
+                os.mkdir(sid, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            child = os.open(sid, _DIR_FLAGS, dir_fd=parent_fd)
+            try:
+                yield child
+            finally:
+                os.close(child)
+        finally:
+            os.close(parent_fd)
+
+    def cleanup_orphan_quarantine(self, *, now: float | None = None) -> int:
+        """Remove old uncommitted upload stages without following symlinks."""
+        import re as _re
+        import time as _time
+        current = _time.time() if now is None else now
+        if not _SECURE_OPEN:
+            return 0
+        try:
+            root_fd = os.open(self.quarantine_base, _DIR_FLAGS)
+        except FileNotFoundError:
+            return 0
+        removed = 0
+        try:
+            for sid in os.listdir(root_fd):
+                if not _SESSION_ID.fullmatch(sid):
+                    continue
+                try:
+                    dir_fd = os.open(sid, _DIR_FLAGS, dir_fd=root_fd)
+                except OSError:
+                    continue
+                try:
+                    for name in os.listdir(dir_fd):
+                        if not _re.fullmatch(r"\\.ridge-incoming-[0-9a-f]{24}", name):
+                            continue
+                        try:
+                            info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+                            if (stat.S_ISREG(info.st_mode)
+                                    and current - info.st_mtime >= 7200):
+                                os.unlink(name, dir_fd=dir_fd)
+                                removed += 1
+                        except OSError:
+                            continue
+                finally:
+                    os.close(dir_fd)
+        finally:
+            os.close(root_fd)
+        return removed
+
     def cleanup_expired_uploads(self, *, now: float | None = None) -> dict:
         """Revoke expired grants and unlink ONLY unchanged session upload files.
 
@@ -318,31 +378,36 @@ class WorkspaceService:
         return {
             "expired_grants": len(candidates), "files_removed": removed,
             "retry_pending": pending,
+            "quarantine_files_removed": self.cleanup_orphan_quarantine(now=now),
         }
 
     def revoke_session_uploads(self, sid: str) -> None:
         self._uploads.revoke_session(self._tenant_id, sid)
 
     def upload(self, sid: str, filename: str, source: BinaryIO) -> dict:
+        """Stage privately, scan the immutable fd, THEN publish to workspace.
+
+        The Agent's /workspace mount never sees a file which has not passed
+        the configured scanner. No paths/bytes supplied by the client are
+        passed to a host command interpreter.
+        """
+        from .attachment_scanner import scan_uploaded_fd, UploadRejected
+
         name = Path((filename or "upload").replace("\\", "/")).name
-        if not name or name in {".", ".."} or "\x00" in name or len(name.encode("utf-8")) > 240:
+        if (not name or name in {".", ".."} or "\x00" in name
+                or len(name.encode("utf-8")) > 240):
             raise InvalidInputError("Invalid upload filename")
         stem, suffix = Path(name).stem, Path(name).suffix
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-        with self._root_fd(sid) as root_fd:
-            for index in range(1000):
-                candidate = name if index == 0 else f"{stem}_{index}{suffix}"
-                try:
-                    fd = os.open(candidate, flags, 0o600, dir_fd=root_fd)
-                    break
-                except FileExistsError:
-                    continue
-                except PermissionError as exc:
-                    raise ForbiddenError("Permission denied") from exc
-            else:
-                raise InvalidInputError("Too many duplicate upload filenames")
-            size = 0
+        stage_name = ".ridge-incoming-" + secrets.token_hex(12)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW
+        with (self._root_fd(sid) as root_fd,
+              self._quarantine_directory_fd(sid) as quarantine_fd):
+            published: str | None = None
+            published_inode: tuple[int, int] | None = None
+            committed = False
             try:
+                fd = os.open(stage_name, flags, 0o600, dir_fd=quarantine_fd)
+                size = 0
                 with os.fdopen(fd, "wb") as stream:
                     while True:
                         chunk = source.read(_CHUNK_SIZE)
@@ -352,60 +417,77 @@ class WorkspaceService:
                         if size > MAX_UPLOAD_BYTES:
                             raise PayloadTooLargeError("Upload exceeds 25 MiB limit")
                         stream.write(chunk)
-            except BaseException:
-                os.unlink(candidate, dir_fd=root_fd)
-                raise
-            # Scan exactly the uploaded inode before publishing any ticket.
-            # A replaced filename or symlink must not inherit a successful
-            # scan from an earlier file.
-            from .attachment_scanner import scan_uploaded_fd, UploadRejected
-            initial = None
-            try:
+                    stream.flush()
+                    os.fsync(stream.fileno())
+
                 scan_fd = os.open(
-                    candidate, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd,
+                    stage_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=quarantine_fd,
                 )
                 try:
                     initial = os.fstat(scan_fd)
                     if not stat.S_ISREG(initial.st_mode):
-                        raise UploadRejected("Uploaded file is not regular")
+                        raise UploadRejected("Staged upload is not a regular file")
                     scan_uploaded_fd(scan_fd)
-                    after_scan = os.fstat(scan_fd)
+                    verified = os.fstat(scan_fd)
+                    if (initial.st_dev, initial.st_ino, initial.st_size,
+                            initial.st_mtime_ns, initial.st_ctime_ns) != (
+                            verified.st_dev, verified.st_ino, verified.st_size,
+                            verified.st_mtime_ns, verified.st_ctime_ns):
+                        raise UploadRejected("Upload changed during scan")
                 finally:
                     os.close(scan_fd)
-                live = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
+
+                # A hard link performs exclusive publication without any
+                # rename-overwrite race, only after antivirus succeeds.
+                for index in range(1000):
+                    candidate = name if index == 0 else f"{stem}_{index}{suffix}"
+                    try:
+                        os.link(
+                            stage_name, candidate, src_dir_fd=quarantine_fd,
+                            dst_dir_fd=root_fd, follow_symlinks=False,
+                        )
+                        published = candidate
+                        published_inode = (initial.st_dev, initial.st_ino)
+                        break
+                    except FileExistsError:
+                        continue
+                else:
+                    raise InvalidInputError("Too many duplicate upload filenames")
+                # Removing the staging hardlink changes inode ctime; record
+                # the final post-publish ctime, not the pre-scan timestamp.
+                os.unlink(stage_name, dir_fd=quarantine_fd)
+                live = os.stat(published, dir_fd=root_fd, follow_symlinks=False)
+                if (not stat.S_ISREG(live.st_mode)
+                        or (live.st_dev, live.st_ino) != published_inode
+                        or live.st_size != size
+                        or live.st_mtime_ns != initial.st_mtime_ns):
+                    raise UploadRejected("Published file changed during admission")
                 identity = (live.st_dev, live.st_ino, live.st_size,
                             live.st_mtime_ns, live.st_ctime_ns)
-                scanned = (initial.st_dev, initial.st_ino, initial.st_size,
-                           initial.st_mtime_ns, initial.st_ctime_ns)
-                after = (after_scan.st_dev, after_scan.st_ino, after_scan.st_size,
-                         after_scan.st_mtime_ns, after_scan.st_ctime_ns)
-                if not stat.S_ISREG(live.st_mode) or identity != scanned or after != scanned:
-                    raise UploadRejected("Upload changed during malware scan")
-            except (UploadRejected, OSError) as exc:
-                # A malicious rename after scanning must not trick cleanup
-                # into deleting an unrelated replacement at the same name.
-                try:
-                    current = os.stat(candidate, dir_fd=root_fd, follow_symlinks=False)
-                    if initial is None or (
-                        current.st_dev == initial.st_dev
-                        and current.st_ino == initial.st_ino
-                    ):
-                        os.unlink(candidate, dir_fd=root_fd)
-                except OSError:
-                    pass
-                raise ForbiddenError("Upload failed malware scan or changed while scanning") from exc
-            credential = secrets.token_urlsafe(32)
-            try:
+                credential = secrets.token_urlsafe(32)
                 self._uploads.issue(
-                    credential, self._tenant_id, sid, candidate, identity,
+                    credential, self._tenant_id, sid, published, identity,
                 )
+                committed = True
+                return {
+                    "path": published, "name": name, "size": size,
+                    "attachment_ref": credential,
+                }
             except AttachmentQuotaExceeded as exc:
-                os.unlink(candidate, dir_fd=root_fd)
                 raise PayloadTooLargeError("Attachment quota exceeded") from exc
-            except BaseException:
-                os.unlink(candidate, dir_fd=root_fd)
-                raise
-            return {
-                "path": candidate, "name": name, "size": size,
-                "attachment_ref": credential,
-            }
+            except UploadRejected as exc:
+                raise ForbiddenError("Upload did not pass required scan") from exc
+            finally:
+                try:
+                    os.unlink(stage_name, dir_fd=quarantine_fd)
+                except FileNotFoundError:
+                    pass
+                if not committed and published is not None:
+                    try:
+                        info = os.stat(
+                            published, dir_fd=root_fd, follow_symlinks=False,
+                        )
+                        if (info.st_dev, info.st_ino) == published_inode:
+                            os.unlink(published, dir_fd=root_fd)
+                    except FileNotFoundError:
+                        pass
