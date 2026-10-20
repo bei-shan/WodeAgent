@@ -131,7 +131,7 @@ class ToolRuntime:
         if call.blocked_output is not None:
             return output
         record_timing(call.name, int((time.monotonic() - call.started) * 1000))
-        for feature in call.interceptors:
+        for interceptor in call.interceptors:
             messages = interceptor.post_tool_use(agent, call.name, call.parameters, output)
             if messages:
                 emit_messages(messages)
