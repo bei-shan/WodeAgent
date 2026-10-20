@@ -269,7 +269,13 @@ function AppCore() {
     let sid: string
     try { sid = await ensureSession() }
     catch (error: any) { alert('创建会话失败：' + error.message); e.target.value = ''; return }
-    for (const file of Array.from(files).slice(0, 4)) {
+    const slots = Math.max(0, 4 - uploadedFiles.length)
+    if (!slots) {
+      alert('每条消息最多附加 4 个文件')
+      e.target.value = ''
+      return
+    }
+    for (const file of Array.from(files).slice(0, slots)) {
       if (file.size > 25 * 1024 * 1024) {
         alert(`文件 ${file.name} 超过 25 MiB 上传限制`)
         continue
@@ -280,7 +286,7 @@ function AppCore() {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/upload`, { method: 'POST', body: form })
         if (!res.ok) throw new Error('HTTP ' + res.status)
         const data = await res.json()
-        setUploadedFiles(prev => [...prev, { name: data.name, path: data.path }])
+        setUploadedFiles(prev => prev.length >= 4 ? prev : [...prev, { name: data.name, path: data.path }])
       } catch (error: any) { alert('上传失败：' + error.message) }
     }
     e.target.value = ''
