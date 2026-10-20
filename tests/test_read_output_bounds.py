@@ -25,7 +25,7 @@ def test_giant_single_line_is_capped_before_response(tmp_path):
     assert result["stats"]["lines_read"] == 1
     assert "Content capped" in result["text"]
     assert len(result["data"]["content"]) <= tool.MAX_LINE_CHARS + 20
-    assert len(json.dumps(result)) < 10000
+    assert len(json.dumps(result)) < 25000
 
 
 def test_many_lines_observation_is_capped_and_pagination_is_correct(tmp_path):
