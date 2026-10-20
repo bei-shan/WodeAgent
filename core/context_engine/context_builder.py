@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-import ast
 from typing import List, Optional, Dict, Any
 
 from core.context_engine.untrusted_content import (
@@ -40,6 +39,7 @@ class ContextBuilder:
     tool_registry: "ToolRegistry"  # noqa: F821
     project_root: str
     system_prompt_override: Optional[str] = None
+    trusted_prompt_root: Optional[str] = None  # trusted framework/tests only
     mcp_tools_prompt: Optional[str] = None
     skills_prompt: Optional[str] = None
 
@@ -172,46 +172,31 @@ class ContextBuilder:
     # ══════════════════════════════════════════════════════════════
 
     def _load_l1_text(self) -> str:
-        """Load L1 system prompt text (mtime-cached)."""
+        """Read the installed Markdown L1 prompt as data, never execute Python.
+
+        Only trusted framework/bootstrap code may supply trusted_prompt_root,
+        which is useful for fixture-based tests. Workspace-controlled prompt
+        files have no authority unless deliberately installed by the operator.
+        """
         if self.system_prompt_override:
             return self.system_prompt_override
 
-        # Never execute, or load system instructions from, an arbitrary
-        # workspace path. Resolve the bundled prompt next to the application.
-        l1_path = Path(__file__).resolve().parents[2] / "prompts" / "agents_prompts" / "L1_system_prompt.py"
-        if not l1_path.exists():
-            return ""
-
+        root = (Path(self.trusted_prompt_root).resolve()
+                if self.trusted_prompt_root is not None
+                else Path(__file__).resolve().parents[2])
+        l1_path = root / "prompts" / "agents_prompts" / "L1_system_prompt.md"
         try:
-            mtime = l1_path.stat().st_mtime
-        except OSError:
+            st = l1_path.stat()
+            if st.st_size > 200_000 or not l1_path.is_file():
+                return ""
+            if self._cached_l1_mtime == st.st_mtime_ns and self._cached_l1_text:
+                return self._cached_l1_text
+            prompt = l1_path.read_text(encoding="utf-8")
+            if len(prompt) > 200_000:
+                return ""
+        except (OSError, UnicodeError):
             return ""
-
-        # mtime cache hit
-        if self._cached_l1_mtime == mtime and self._cached_l1_text:
-            return self._cached_l1_text
-
-        # The prompt file is static data, not Python to be executed.
-        # Reject imports, calls, interpolations and extra statements.
-        try:
-            source = l1_path.read_text(encoding="utf-8")
-            if len(source) > 200_000:
-                return ""
-            tree = ast.parse(source, filename=str(l1_path))
-            if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
-                return ""
-            assignment = tree.body[0]
-            if (len(assignment.targets) != 1
-                    or not isinstance(assignment.targets[0], ast.Name)
-                    or assignment.targets[0].id != "system_prompt"):
-                return ""
-            prompt = ast.literal_eval(assignment.value)
-            if not isinstance(prompt, str):
-                return ""
-        except (OSError, SyntaxError, ValueError, TypeError, MemoryError):
-            return ""
-
-        self._cached_l1_mtime = mtime
+        self._cached_l1_mtime = st.st_mtime_ns
         self._cached_l1_text = prompt
         return prompt
 
