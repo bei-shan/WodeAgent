@@ -24,7 +24,7 @@ they do not justify reintroducing the removed `AgentFeature` extension ABI.
 | Priority | Topic | Verification required |
 | --- | --- | --- |
 | P0 | Prompt and repository injection | Untrusted repository instructions never execute Python during prompt assembly, escalate priority, or bypass tool approval; run adversarial fixtures |
-| P0 | Tool output/artifact containment | Output names cannot escape directories, symlinked paths cannot redirect secret receipts, file mode is private, concurrent receipts do not collide; enforce per-session isolation |
+| P0 | Tool output/artifact containment | Whole-response output is byte-bounded; POSIX receipt writes and cleanup use directory handles to reduce symlink races. **Remaining gate:** per-session artifact ownership, isolated workers, Windows ACL/race controls and external attack acceptance |
 | P0 | Execution authority | Denied and stale tool calls have zero side effects; nested MCP/subagents cannot gain additional rights; cancellation invalidates approvals |
 | P1 | Context budget/compaction | Count full request (system, schemas, history, files and modality-dependent budget); preserve complete tool-call/result pairs; test multiple compactions and fork restore |
 | P1 | Reliable model cancellation | Process-wide and per-generator capacity now bounds timed-out synchronous summary calls; test worker exit and permit recovery. Native provider cancellation, shutdown and process isolation remain **unverified** |
