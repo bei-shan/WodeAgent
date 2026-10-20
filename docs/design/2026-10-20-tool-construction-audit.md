@@ -65,6 +65,7 @@ permission gates and inherit hosted authority where present.
 | **P2** | Bootstrap registration | Builtins are imported/instantiated dynamically by filesystem scan; teams have special registration | Explicit feature/capability manifests, deterministic catalog order, optional deps preflight, startup diagnostics |
 | **P1 fixed here** | Grep resource/exfil | `rg` subprocess output was unbounded; fallback followed symlinked external files, and match lines were arbitrarily large | Bounded pipe capture, safe relative match paths, skip external symlinks, cap line text and signal partial results |
 | **P1 fixed here** | Background task file paths | An opaque `task_id` was interpolated into output/progress paths without any character restrictions | Validate task IDs before file operations in both TaskOutput and BackgroundTaskRunner (including launch/save/get/progress) |
+| **P1 fixed here** | AskUser unattended Web/hosted execution | Without an injected input adapter the tool fell back to `input()`, risking indefinite server/worker blocking | Fail closed without an interactive terminal or registered adapter; cap and validate question payloads |
 | **P2 fixed here** | Skill and background results | `Skill.list` did not agree with mandatory `name` schema; loads and TaskOutput events/results were potentially huge | Optional name for list with action-aware validation, bounded Skill args/load and TaskOutput result/events |
 | **P2 fixed here** | Glob/LS input and symlink semantics | Boolean-as-int limit/offset and nonstring params slipped through; Glob presented outside symlink names as files | Strict type checks; constrain ignore patterns; omit out-of-workspace file symlinks from Glob |
 | **P2** | Search/read APIs | Dedicated `Read/Grep/Glob/LS` and bounded outputs are now better aligned | Finish streamed LS directory pagination, regex complexity/CPU cap and richer binary/encoding reporting |
@@ -111,6 +112,8 @@ permission gates and inherit hosted authority where present.
 - `tools/builtin/search_files_by_name.py` / `list_files.py`:
   reject malformed and boolean-as-int parameters, keep Glob results inside
   workspace.
+- `tools/builtin/ask_user.py`: refuse unattended blocking `input()` in
+  headless workers; bound the number and length of prompts.
 - `tools/builtin/skill.py`: align `list` action with optional name schema;
   validate action and args, bound skill loads.
 - `tools/builtin/task_output.py` / `core/background_task.py`:
@@ -120,7 +123,8 @@ permission gates and inherit hosted authority where present.
   `test_bash_output_bounds.py`, `test_read_output_bounds.py`,
   `test_file_commit_tools.py`, `test_grep_resource_safety.py`,
   `test_glob_input_safety.py`, `test_ls_input_safety.py`,
-  `test_skill_tool_contracts.py`, `test_task_output_bounded.py` and
+  `test_skill_tool_contracts.py`, `test_ask_user_unattended.py`,
+  `test_task_output_bounded.py` and
   `test_task_id_path_security.py`.
 - All existing tool and sandbox policy tests continue to apply.
 
