@@ -153,6 +153,18 @@ def _isolated_document_text(suffix: str, payload: bytes) -> str:
     """
     if len(payload) > MAX_DOCUMENT_BYTES:
         raise ValueError("Document exceeds 3 MiB extraction cap")
+    mode = os.getenv("RIDGE_DOCUMENT_CONVERTER_MODE", "local").strip().lower()
+    required = (
+        os.getenv("RIDGE_DOCUMENT_REQUIRE_SANDBOX", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+        or os.getenv("RIDGE_DEPLOYMENT_MODE", "local").lower() == "hosted"
+    )
+    if mode == "docker":
+        from core.runtime.document_container import convert_document_container
+        return convert_document_container(suffix, payload)
+    if mode != "local" or required:
+        raise ValueError("Isolated document converter required; host parsing forbidden")
+    # Trusted local desktop compatibility. Not a security sandbox.
     env = {"PYTHONPATH": os.pathsep.join(sys.path), "PYTHONDONTWRITEBYTECODE": "1"}
     try:
         completed = subprocess.run(
