@@ -25,6 +25,10 @@ on:
         type: boolean
         default: false
         description: "I approve E2B cloud usage and its charges in isolated staging"
+      run_boxlite:
+        type: boolean
+        default: false
+        description: "Run REAL BoxLite micro-VM tests on a dedicated approved KVM runner"
       run_staging:
         type: boolean
         default: false
@@ -138,6 +142,35 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  boxlite:
+    name: Opt-in BoxLite real KVM/HVF acceptance
+    # Never execute arbitrary pull-request code on self-hosted VM hosts.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_boxlite == true && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, ridge-boxlite-kvm]
+    environment: staging-acceptance
+    timeout-minutes: 20
+    env:
+      RIDGE_BOXLITE_HARDWARE_APPROVED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt boxlite
+      - name: Verify explicitly provisioned hardware before running real VM
+        run: |
+          test -r /dev/kvm
+          python -c "from boxlite import SimpleBox"
+      - name: Real BoxLite isolation, cancellation and guest file tests
+        run: python scripts/release_acceptance.py --scope boxlite
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ridge-acceptance-boxlite
+          path: acceptance-evidence/boxlite.json
+          if-no-files-found: warn
+          retention-days: 30
+
   staging:
     name: Opt-in two-principal staging metadata
     if: github.event_name == 'workflow_dispatch' && inputs.run_staging == true
@@ -185,7 +218,7 @@ jobs:
   report:
     name: Evidence manifest (NEVER production GO)
     if: always()
-    needs: [component, docker, redis, e2b, staging, soak]
+    needs: [component, docker, redis, e2b, boxlite, staging, soak]
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

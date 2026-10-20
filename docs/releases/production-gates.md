@@ -35,6 +35,41 @@ production controls have been validated.
 | OPS-01 | Deployment and security operations | TLS everywhere, secret rotation, supply chain scan + pinned artifacts, alert routing, runbooks, cost limits, incident response and rollback drills | Missing |
 | APPROVAL | Final human acceptance | Security/ops reviewer, staging run manifest, release SHA, Go/No-Go signoff | Pending |
 
+## Always-on real integration checks (PR and main)
+
+The unfiltered `.github/workflows/real-integration-gates.yml` runs on **every
+pull request**, on pushes to `main`, and by manual dispatch. Unlike the broad
+dependency-light regression suite, these four jobs **must actually execute
+their tests**:
+
+- **PostgreSQL 16**: ephemeral isolated DB, RLS migrations, unprivileged runtime
+  account and dedicated migration/admin principal. Covers real private-session
+  and durable turn-queue tests.
+- **Redis 7**: real multi-client admission and real E2B Redis reservation/
+  execution fencing. Does **not** provision or bill an E2B VM.
+- **Docker**: pre-pulled `python:3.12-alpine` and real daemon to verify guest
+  isolation, cancellation, reaping and binary/symlink file handling.
+- **OpenTelemetry**: optional observability dependencies with an actual SDK
+  and in-memory trace exporter. No live telemetry keys are needed.
+
+`scripts/ci_integration_gate.py` runs pytest with `-ra` and parses fresh
+JUnit XML: **zero collected tests, any skipped test, any failure, or missing
+evidence all fail the job**. The broad regression job uses `pytest -ra` to
+explain intended environment-dependent skips; those skips are never reused as
+proof of real integration.
+
+**Additional optional hardware/cloud evidence is not silently passed:**
+`release-acceptance.yml` exposes opt-in E2B with explicit billing approval,
+and opt-in BoxLite on a pre-approved, isolated, self-hosted KVM runner labelled
+`ridge-boxlite-kvm` (main branch only). Both require the protected
+`staging-acceptance` environment and generate separate acceptance evidence.
+Without the runner, credentials, approval, or actual execution, their release
+gates remain **BLOCKED**. This is *not* a production GO decision.
+
+Repository administrators should configure the four always-on integration
+job names as required status checks in branch protection/rulesets; merely
+defining CI jobs does not enforce merge protection.
+
 ## Current deterministic CI evidence
 
 - `.github/workflows/web-mvp.yml`: local Web API, frontend, browser e2e,
