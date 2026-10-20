@@ -232,6 +232,28 @@ def test_project_mcp_config_requires_explicit_operator_trust(tmp_path, monkeypat
     monkeypatch.setenv("MCP_SERVERS", '{"mcpServers":{"trusted":{"url":"https://example.com/mcp"}}}')
     assert list(load_mcp_servers(str(tmp_path))) == ["trusted"]
 
+
+
+def test_repository_dotenv_cannot_grant_mcp_execution_trust(tmp_path, monkeypatch):
+    import json
+    import core.env as environment
+    from tools.mcp.config import load_mcp_servers
+
+    (tmp_path / ".mcp.json").write_text(json.dumps({
+        "mcpServers": {"untrusted": {"command": "python"}}
+    }), encoding="utf-8")
+    # Simulate keys introduced by find_dotenv/load_dotenv rather than
+    # explicitly supplied by the process owner.
+    monkeypatch.setattr(environment, "_DOTENV_INJECTED", {
+        "MCP_TRUST_PROJECT_CONFIG", "MCP_SERVERS",
+    })
+    monkeypatch.setenv("MCP_TRUST_PROJECT_CONFIG", "true")
+    monkeypatch.setenv(
+        "MCP_SERVERS", '{"mcpServers":{"injected":{"command":"python"}}}',
+    )
+    assert load_mcp_servers(str(tmp_path)) == {}
+
+
 def test_strict_isolation_policy_denies_host_agent(tmp_path):
     from agents.codeAgent import CodeAgent
     from tools.registry import ToolRegistry
