@@ -50,3 +50,11 @@ def test_anchored_text_stream_preserves_utf8_and_newlines(tmp_path):
     (root / "x.txt").write_bytes("你好\r\nbye\n".encode())
     with open_regular_workspace_file(root / "x.txt", root, text=True) as src:
         assert src.read() == "你好\nbye\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX descriptor anchoring")
+def test_posix_fd_features_are_detected_even_when_replace_not_listed():
+    # os.replace has src_dir_fd/dst_dir_fd but CPython 3.12's capability
+    # registry lists os.rename instead of os.replace.
+    from core.runtime.file_commit import _ANCHOR_SUPPORTED
+    assert _ANCHOR_SUPPORTED is True
