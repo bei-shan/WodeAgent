@@ -138,6 +138,20 @@ def run_process(
         stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
         bufsize=0, **opts,
     )
+    # A Windows shell may spawn children which outlive the shell itself.
+    # Bind immediately and fail closed if the host refuses Job assignment.
+    job = None
+    if os.name == "nt":
+        try:
+            from core.runtime.windows_job import WindowsProcessJob
+            job = WindowsProcessJob(int(process._handle))
+        except BaseException:
+            _kill_tree(process)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                _kill_tree(process)
+            raise
     assert process.stdout is not None and process.stderr is not None
     out = _BoundedCapture(max_output_bytes)
     err = _BoundedCapture(max_output_bytes)
@@ -179,7 +193,10 @@ def run_process(
         raise
     finally:
         if timed_out or interrupted:
-            _kill_tree(process)
+            if job is not None:
+                job.terminate()
+            else:
+                _kill_tree(process)
         if process.poll() is None:
             # A process can have exited between checks; never leave a child
             # running if the wait loop itself raised.
@@ -200,6 +217,10 @@ def run_process(
             _kill_tree(process)
             for reader in readers:
                 reader.join(timeout=0.3)
+        if job is not None:
+            # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE reaps descendants even
+            # after the root command has already exited.
+            job.close()
 
     return ProcessOutcome(
         out.text(), err.text(), process.returncode,
