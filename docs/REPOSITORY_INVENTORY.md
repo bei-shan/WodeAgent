@@ -33,7 +33,7 @@
 | `core/skills/`、`skills/` | 保留 | 内置 Skill 和相关素材，删除会改变用户能力 |
 | `tools/` | 保留 | 内置工具、注册表、MCP 生命周期及权限机制 |
 | `desktop/service/`、`desktop/web/` | 保留 | 本地/托管元数据 API 与 React UI |
-| `tui-v2/` | 保留 | 唯一维护的交互式终端客户端 |
+| `tui/` | 保留 | 唯一维护的交互式终端客户端 |
 | `db/migrations/`、`core/persistence/` | 保留 | 已部署的数据定义不能在源码整理时直接删除 |
 | `tests/`、`.github/workflows/` | 保留 | 当前回归、租户隔离、资源稳态和发布证据依赖 |
 | `requirements*.txt`、锁文件 | 保留 | 各运行模式的可复现依赖 |

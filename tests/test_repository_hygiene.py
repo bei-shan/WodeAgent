@@ -41,7 +41,7 @@ def test_runtime_state_files_never_show_up_as_untracked_changes():
 
 
 def test_tui_entrypoint_never_resurrects_old_environment_aliases():
-    main = (ROOT / "tui-v2/src/index.tsx").read_text(encoding="utf-8")
+    main = (ROOT / "tui/src/index.tsx").read_text(encoding="utf-8")
     assert "RIDGECODE_SERVER" in main
     assert "RIDGECODE_AUTH_TOKEN" in main
     assert "WODEAGENT_SERVER" not in main
