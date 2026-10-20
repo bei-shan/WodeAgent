@@ -1,0 +1,100 @@
+# Prompt-injection threat model and rollout (2026-10-20)
+
+## Scope
+
+Ridge Code is a coding agent with access to shell commands, project files,
+Skills, MCP tools, hooks, and session history. A hostile repository, tool
+result, MCP server, Skill, website, or restored session may carry instructions
+that attempt to impersonate the user, application, or system. The model must
+not decide its own authority based on what untrusted text says.
+
+**Do not equate prompt framing with a security sandbox.** The core tool
+permission checker, real process isolation, network egress policy, and
+credential boundaries must deny unsafe actions independently of model output.
+
+## Trust levels
+
+| Source | Model presentation | Enforcement owner |
+| --- | --- | --- |
+| Bundled L1 prompt / application policy | System, trusted application code | Application install integrity |
+| Actual user request | User | Authenticated session |
+| CODE_LAW / repo docs / Skill descriptions | Escaped user-role reference data | Registry and tool-level permissions |
+| MCP metadata / hook context | Escaped user-role reference data | MCP tool validation and hook trust policy |
+| Tool results / web text | Escaped tool-role data | Tool registry and sandbox |
+| Persisted conversation snapshot | History only; former system messages ignored | Session loader and authenticated binding |
+
+All externally controlled text is *data*, even if it contains words like
+"system", "developer", "security policy", or claims that the user authorized
+a destructive or network operation. Framing includes provenance and escaped
+tags to avoid a simple closing-tag breakout. This is guidance for the model,
+not a proof that the model will reject every attack.
+
+## Direct fixes in this change
+
+1. Loading `L1_system_prompt.py` no longer uses `runpy.run_path`. Parse
+   a single static string assignment with `ast.literal_eval`; reject
+   arbitrary executable Python, interpolations, extra statements, and
+   oversized files. Resolve it from the installed application, not the
+   current project workspace.
+2. Remove CODE_LAW, MCP descriptions, Skill metadata and hook/runtime text
+   from `system` messages. Present them as provenance-labelled, escaped,
+   bounded reference text in `user` messages before conversation history.
+3. Frame the current model projection of `tool` messages without changing
+   the stored history or tool-call IDs.
+4. Ignore serialized `system_messages` on restored sessions rather than
+   turning disk content into fresh system instructions.
+5. Add adversarial tests for delimiter breakout, role promotion, snapshot
+   poisoning, unexpected Python execution and history mutation.
+
+## Remaining risks / mandatory production gates
+
+- **Host command execution:** `tools/builtin/bash.py` uses shell parsing
+  and command-name blocklists. Parsers cannot reliably constrain subprocesses
+  started by Python, build scripts, package managers, or indirect tooling.
+  A command can also read accessible files or access the network without
+  invoking curl/wget. Untrusted repositories must run inside a locked-down
+  Docker/VM/OS sandbox with read-only sensitive mounts, no inherited secrets,
+  explicit network egress policy, user namespaces and resource quotas.
+- **Action authorization:** review Bash, file writes, external destinations,
+  MCP, browser/computer use and plugin hooks before side effects. Implement
+  deny/ask/allow as an operation-scoped, server-enforced, immutable decision.
+  Revalidate immediately before execution and prevent TOCTOU grants and
+  subprocess bypass; logs and model compliance are not authorization.
+- **MCP schema and tool descriptions:** their text may appear in separate
+  provider-side tool metadata, so the model can still be influenced. Tool
+  allowlists, endpoint trust and runtime approval remain required.
+- **Skill supply chain:** check contents of SKILL.md and bundled resources
+  for override instructions, malicious scripts, symlinks, secrets, zip-bombs,
+  path escapes, dangerous binaries and network destinations before enabling.
+  A plugin hash alone is not a publisher signature.
+- **Data egress:** prevent reads of token/key files and cloud metadata, strip
+  secrets from child environments, and restrict DNS/HTTP and other outbound
+  protocols in the sandbox. Trace redaction does not stop a running process.
+- **Persistent poisoning:** validate imported sessions, compaction summaries,
+  memory, generated team output, browser content and documents as untrusted
+  sources on all model-entry paths. The framing implemented here covers the
+  normal context-builder tool-message path, not every downstream consumer.
+- **Evaluation:** run automated adversarial tests with real models, files,
+  MCP servers and sandbox workloads. CI unit tests are not an end-to-end
+  adversarial robustness guarantee.
+
+## Verification
+
+```bash
+python -m pytest tests/test_context_builder.py tests/test_prompt_injection_boundaries.py -q
+python -m pytest tests/test_tool_runtime_pipeline.py tests/test_permission_gate.py -q
+python -m ridgecode doctor --target core
+```
+
+Recommended additional live exercises: malicious CODE_LAW and Skill headers,
+MCP result claiming system authority, web-page tool-output injection, encoded
+role delimiter, a poisoned serialized session, attempted `.env` exfiltration,
+a build script spawning a new child process, and cross-workspace file writes.
+
+## References (design inspiration, not claims of identical security guarantees)
+
+- [OWASP LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html)
+- [DeerFlow prompt sanitization and SkillScan updates](https://github.com/bytedance/deer-flow/discussions/5832)
+- [Claude Code Best: sandbox as second defence layer](https://github.com/claude-code-best/claude-code/blob/main/docs/safety/sandbox.mdx)
+- [OpenCode permission model](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/permissions.mdx)
+- [OpenCode security threat model: permissions are not a sandbox](https://github.com/anomalyco/opencode/blob/dev/SECURITY.md)
