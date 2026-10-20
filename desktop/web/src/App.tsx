@@ -214,7 +214,7 @@ function AppCore() {
 
   // ── Send ────────────────────────────────────────────────────────
   const sendMessage = async () => {
-    if (!input.trim() || sending) return
+    if ((!input.trim() && uploadedFiles.length === 0) || sending) return
     // Auto-create session if none active
     let sid = activeSidRef.current
     if (!sid) {
@@ -227,17 +227,17 @@ function AppCore() {
         connectSession(sid, true)
       } catch (e: any) { alert('创建会话失败：' + e.message); return }
     }
-    // Append @file references for uploaded files
-    let content = input.trim()
-    if (uploadedFiles.length > 0) {
-      const refs = uploadedFiles.map(f => `@${f.path}`).join(' ')
-      content = content ? `${content}\n${refs}` : refs
-      setUploadedFiles([])
-    }
+    // Send structured refs separately: never force binary paths into a
+    // prompt string where they could be forged by user input.
+    const content = input.trim()
+    const attachments = uploadedFiles.map(f => f.path)
     setInput(''); setSending(true); setSubagentStatus('')
     setMessages(prev => [...prev, { id: uid(), role: 'user', content }])
     const aid = uid(); setMessages(prev => [...prev, { id: aid, role: 'assistant', content: '', streaming: true }])
-    try { await api.sessions.send(sid, content) } catch (e: any) {
+    try {
+      await api.sessions.send(sid, content, attachments)
+      setUploadedFiles([])
+    } catch (e: any) {
       setMessages(prev => prev.map(m => m.id === aid ? { ...m, content: `${e.message}`, streaming: false } : m)); setSending(false)
     }
   }
@@ -269,7 +269,11 @@ function AppCore() {
     let sid: string
     try { sid = await ensureSession() }
     catch (error: any) { alert('创建会话失败：' + error.message); e.target.value = ''; return }
-    for (const file of Array.from(files)) {
+    for (const file of Array.from(files).slice(0, 4)) {
+      if (file.size > 25 * 1024 * 1024) {
+        alert(`文件 ${file.name} 超过 25 MiB 上传限制`)
+        continue
+      }
       const form = new FormData()
       form.append('file', file)
       try {
