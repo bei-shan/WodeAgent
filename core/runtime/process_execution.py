@@ -133,7 +133,7 @@ def run_process(
     if os.name == "nt":
         # No child code may run before the Job Object owns it.
         opts["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_SUSPENDED
+            subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004  # CREATE_SUSPENDED
         )
     process = subprocess.Popen(
         args, shell=shell, cwd=cwd, env=env,
