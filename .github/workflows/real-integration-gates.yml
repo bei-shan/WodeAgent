@@ -1,0 +1,120 @@
+# All PRs must exercise these REAL disposable services, not only offline mocks.
+# The gate runner rejects any skip, empty collection, failure, or malformed JUnit.
+name: Real integration gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-integrations-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-real:
+    name: PostgreSQL RLS and durable queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci_only_admin
+          POSTGRES_DB: ridge_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ridge_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      PGPASSWORD: ci_only_admin
+      RIDGE_TEST_POSTGRES_DSN: postgresql://ridge_app:ci_only_runtime@127.0.0.1:5432/ridge_ci
+      RIDGE_TEST_POSTGRES_ADMIN_DSN: postgresql://postgres:ci_only_admin@127.0.0.1:5432/ridge_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install hosted dependencies
+        run: python -m pip install -r requirements.txt -r requirements-hosted.txt
+      - name: Provision disposable RLS database and least-privileged runtime role
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          for migration in db/migrations/0001_tenant_private_sessions.sql db/migrations/0002_private_turn_jobs.sql db/migrations/0003_private_project_memberships.sql; do
+            psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE ridge_app LOGIN PASSWORD 'ci_only_runtime' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT"
+          psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "GRANT USAGE ON SCHEMA ridge TO ridge_app"
+          psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ridge.private_sessions TO ridge_app"
+          psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ridge.private_turn_jobs TO ridge_app"
+          psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "GRANT SELECT ON ridge.private_project_memberships TO ridge_app"
+      - name: Run real Postgres integration (no skips)
+        run: python scripts/ci_integration_gate.py tests/test_postgres_private_sessions.py tests/test_postgres_turn_queue.py
+
+  redis-real:
+    name: Redis quota and E2B fencing
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=6
+    env:
+      RIDGE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      E2B_REDIS_URL: redis://127.0.0.1:6379/0
+      AGENT_E2B_REDIS_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt "redis>=5,<7"
+      - name: Run real Redis quota and fencing integration (no skips)
+        run: python scripts/ci_integration_gate.py tests/test_redis_turn_admission.py tests/test_sandbox_e2b_redis.py
+
+  docker-real:
+    name: Docker containment and guest file isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AGENT_DOCKER_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Preload approved guest image on trusted CI runner
+        run: |
+          docker info
+          docker pull python:3.12-alpine
+      - name: Run real Docker integration (no skips)
+        run: python scripts/ci_integration_gate.py tests/test_sandbox_docker_integration.py
+
+  opentelemetry-real:
+    name: Real OTel SDK in-memory exporter
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt -r requirements-observability.txt
+      - run: python -m pip check
+      - name: Run SDK tracing and secret-redaction tests (no skips)
+        run: python scripts/ci_integration_gate.py tests/test_optional_telemetry.py
