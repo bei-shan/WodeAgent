@@ -28,6 +28,11 @@ def sites():
     evil.daemon_threads = True
     evil_url = f"http://127.0.0.1:{evil.server_port}"
     class Allowed(BaseHTTPRequestHandler):
+        def do_POST(self):
+            evil_hits.append("unauthorized-write:" + self.path)
+            self.send_response(204)
+            self.end_headers()
+
         def do_GET(self):
             if self.path == "/redirect":
                 self.send_response(302)
@@ -52,6 +57,7 @@ def sites():
                 "<a id='download' href='/download'>download</a>"
                 "<div id='result'></div>"
                 f"<script>fetch('{evil_url}/collect').catch(()=>{{}})</script>"
+                "<script>fetch('/write', {method:'POST', body:'unapproved'}).catch(()=>{})</script>"
                 "</body></html>"
             ).encode()
             self.send_response(200)
@@ -91,7 +97,7 @@ def test_real_chromium_navigation_fill_click_and_subresource_denial(sites):
         result = session.call("click", {"selector": "#send"})
         assert "submitted hello" in result["text"]
         assert "submitted hello" in session.call("observe", {})["text"]
-        assert evil_hits == [], "browser subrequest crossed the origin allowlist"
+        assert evil_hits == [], "browser read/navigation caused unauthorized cross-origin or POST request"
     finally:
         session.close()
 
