@@ -7,6 +7,7 @@ import pytest
 
 from core.plugin_loader import PluginCatalog, PluginLoader
 from tests.test_plugin_lifecycle import bundle
+from tests.plugin_approval_fixture import provision_plugin_approval_key
 
 
 def code_bundle(name="fingerprint-test"):
@@ -29,6 +30,7 @@ def code_bundle(name="fingerprint-test"):
 
 def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle())
     catalog.set_enabled("fingerprint-test", True)
@@ -56,6 +58,7 @@ def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monke
 
 def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("asset-review"))
     catalog.set_enabled("asset-review", True)
@@ -78,6 +81,7 @@ def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkey
 
 def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("legacy-review"))
     catalog.set_enabled("legacy-review", True)
@@ -93,6 +97,7 @@ def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
 
 def test_symlinked_file_after_consent_invalidates_executable_trust(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("link-review"))
     catalog.set_enabled("link-review", True)
