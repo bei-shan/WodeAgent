@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from desktop.service.hosted_app import create_hosted_app
@@ -29,7 +30,11 @@ def _as_client(http):
 def test_staging_acceptance_contract_with_real_hosted_routes():
     store = TestPrivateStore()
     store.production_probe = lambda: True
-    app = create_hosted_app(verifier=TestVerifier(), store=store)
+    # This is an OFFLINE transport/identity contract test; the real
+    # PostgreSQL workflow separately asserts event_security_probe() against
+    # forced RLS and the least-privileged runtime role.
+    fake_outbox = SimpleNamespace(event_security_probe=lambda: True)
+    app = create_hosted_app(verifier=TestVerifier(), store=store, turn_events=fake_outbox)
     with TestClient(app) as client:
         result = run_acceptance(_as_client(client), "alice", "bob")
     assert result == [
