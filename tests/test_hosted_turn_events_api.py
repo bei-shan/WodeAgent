@@ -80,3 +80,15 @@ def test_metadata_only_test_store_fails_closed_without_outbox():
     with TestClient(app) as client:
         sid = client.post("/api/v2/sessions", headers=headers("alice"), json={}).json()["id"]
         assert client.get(f"/api/v2/sessions/{sid}/events", headers=headers("alice")).status_code == 503
+
+
+def test_hosted_readiness_checks_outbox_rls_as_well_as_sessions():
+    store, events, client = _fixture()
+    store.production_probe = lambda: True
+    events.event_security_probe = lambda: False
+    with client:
+        assert client.get("/api/health/ready").status_code == 503
+        events.event_security_probe = lambda: True
+        assert client.get("/api/health/ready").status_code == 200
+        store.production_probe = lambda: False
+        assert client.get("/api/health/ready").status_code == 503
