@@ -271,12 +271,12 @@ def create_hosted_app(
             after = resumed
         events = await _owned_event_page(sid, identity, after, limit)
         frames = [
-            f"id: {event['id']}\\nevent: turn-state\\ndata: "
-            + json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\\n\\n"
+            f"id: {event['id']}\nevent: turn-state\ndata: "
+            + json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n\n"
             for event in events
         ]
         if not frames:
-            frames = [": no-new-events\\n\\n"]
+            frames = [": no-new-events\n\n"]
         return StreamingResponse(
             iter(frames), media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
