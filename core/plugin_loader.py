@@ -233,6 +233,50 @@ class PluginCatalog:
             digest.update(b"\\0")
         return digest.hexdigest()
 
+    def _operator_approval_key(self) -> bytes | None:
+        """Load a private *operator-owned* key outside mutable project content.
+
+        No project env/.env knob can provide this key. All host command Hook
+        approvals are unsigned/invalid until an operator explicitly provisions
+        ~/.config/ridgecode/plugin-approval.key with 32 random bytes and
+        0600 permission. Windows requires a separately audited OS key store.
+        """
+        if os.name != "posix":
+            return None
+        keyfile = Path.home() / ".config" / "ridgecode" / "plugin-approval.key"
+        try:
+            if keyfile.is_relative_to(self.root):
+                return None
+            for parent in (keyfile.parent.parent, keyfile.parent):
+                info = parent.lstat()
+                if (not stat.S_ISDIR(info.st_mode)
+                        or info.st_uid != os.getuid()
+                        or info.st_mode & 0o022):
+                    return None
+            fd = os.open(keyfile, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600):
+                    return None
+                key = os.read(fd, 33)
+                return key if len(key) == 32 else None
+            finally:
+                os.close(fd)
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+    def _approval_receipt(self, plugin: str, content_hash: str) -> str | None:
+        key = self._operator_approval_key()
+        if key is None:
+            return None
+        data = json.dumps(
+            ["ridge-plugin-hook-consent-v1", str(self.root), plugin, content_hash],
+            separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+        return hmac.new(key, data, hashlib.sha256).hexdigest()
+
     def set_trusted(self, name: str, trusted: bool) -> dict:
         """Bind executable-code approval to the current on-disk source tree."""
         with _STATE_LOCK:
@@ -241,8 +285,18 @@ class PluginCatalog:
             flags = state.get(name, {})
             flags = flags if isinstance(flags, dict) else {}
             fingerprint = self._content_digest(manifest) if trusted else None
+            receipt = (
+                self._approval_receipt(name, fingerprint)
+                if trusted and manifest.hooks_config else None
+            )
+            if trusted and manifest.hooks_config and receipt is None:
+                raise PermissionError(
+                    "Executable Hooks need an operator-owned 0600 approval key "
+                    "outside the project workspace"
+                )
             state[name] = {
                 **flags, "trusted": bool(trusted), "trusted_digest": fingerprint,
+                "trusted_receipt": receipt,
             }
             self._write_state(state)
         return {"name": name, "trusted": bool(trusted)}
@@ -253,7 +307,19 @@ class PluginCatalog:
                 and isinstance(expected, str) and len(expected) == 64):
             return False
         try:
-            return hmac.compare_digest(expected, self._content_digest(manifest))
+            if not hmac.compare_digest(expected, self._content_digest(manifest)):
+                return False
+            if manifest.hooks_config:
+                # A project writer may forge state.json AND an unkeyed digest.
+                # Executable commands also need an operator-signed consent
+                # bound to reviewed bytes, project root and plugin name.
+                receipt = flags.get("trusted_receipt")
+                actual = self._approval_receipt(manifest.name, expected)
+                return bool(
+                    isinstance(receipt, str) and len(receipt) == 64
+                    and actual is not None and hmac.compare_digest(receipt, actual)
+                )
+            return True
         except (OSError, ValueError, RuntimeError):
             return False
 
