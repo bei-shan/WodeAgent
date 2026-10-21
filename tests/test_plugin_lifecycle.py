@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.plugin_loader import PluginCatalog, PluginLoader
+from tests.plugin_approval_fixture import provision_plugin_approval_key
 from core.skills.skill_loader import SkillLoader
 from desktop.service.app import create_app
 from tests.test_web_service import FakeAgent
@@ -71,6 +72,7 @@ def test_python_extension_manifest_is_rejected_at_install(tmp_path):
 
 
 def test_inert_python_asset_never_imports_even_with_trusted_hook(tmp_path, monkeypatch):
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     manifest = {
         "name": "safe-hooks",
         "components": {"hooks": {"PreToolUse": [
@@ -95,6 +97,7 @@ def test_inert_python_asset_never_imports_even_with_trusted_hook(tmp_path, monke
 
 
 def test_trusted_plugin_hooks_register_in_memory_no_user_config_changes(tmp_path, monkeypatch):
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     manifest = {
         "name": "hooks-addon",
         "components": {"hooks": {
