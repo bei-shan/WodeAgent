@@ -33,6 +33,38 @@ class TurnIdempotencyConflict(RuntimeError):
 
 
 class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
+    def event_security_probe(self) -> bool:
+        """Readiness MUST reject missing RLS, permissive role or missing table."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT c.relrowsecurity, c.relforcerowsecurity,
+                              EXISTS (SELECT 1 FROM pg_policies p
+                                WHERE p.schemaname='ridge'
+                                  AND p.tablename='private_turn_events'),
+                              has_table_privilege(
+                                current_user, 'ridge.private_turn_events', 'SELECT'
+                              ),
+                              has_table_privilege(
+                                current_user, 'ridge.private_turn_events', 'INSERT'
+                              ),
+                              has_table_privilege(
+                                current_user, 'ridge.private_turn_events', 'UPDATE'
+                              ),
+                              has_table_privilege(
+                                current_user, 'ridge.private_turn_events', 'DELETE'
+                              ),
+                              r.rolsuper, r.rolbypassrls
+                       FROM pg_class c
+                       JOIN pg_namespace n ON n.oid=c.relnamespace
+                       JOIN pg_roles r ON r.rolname=current_user
+                       WHERE n.nspname='ridge'
+                         AND c.relname='private_turn_events'"""
+                )
+                row = cur.fetchone()
+                return bool(row and row[:5] == (True, True, True, True, True)
+                            and row[5:] == (False, False, False, False))
+
     @staticmethod
     def _event(cur, scope: MemoryScope, session_id: str, turn_id: str,
                state: str, fence: int) -> None:
