@@ -74,6 +74,8 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d ridge_ci \
             -v ON_ERROR_STOP=1 -f db/migrations/0003_private_project_memberships.sql
           psql -h 127.0.0.1 -U postgres -d ridge_ci \
+            -v ON_ERROR_STOP=1 -f db/migrations/0004_private_turn_event_outbox.sql
+          psql -h 127.0.0.1 -U postgres -d ridge_ci \
             -v ON_ERROR_STOP=1 -c "CREATE ROLE ridge_app LOGIN PASSWORD 'ci_only_runtime' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT"
           psql -h 127.0.0.1 -U postgres -d ridge_ci \
             -v ON_ERROR_STOP=1 -c "GRANT USAGE ON SCHEMA ridge TO ridge_app"
@@ -83,5 +85,7 @@ jobs:
             -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ridge.private_turn_jobs TO ridge_app"
           psql -h 127.0.0.1 -U postgres -d ridge_ci \
             -v ON_ERROR_STOP=1 -c "GRANT SELECT ON ridge.private_project_memberships TO ridge_app"
+          psql -h 127.0.0.1 -U postgres -d ridge_ci \
+            -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT ON ridge.private_turn_events TO ridge_app"
       - name: Run real PostgreSQL owner isolation and CAS tests
-        run: python -m pytest tests/test_postgres_private_sessions.py tests/test_postgres_turn_queue.py tests/test_hosted_identity_api.py tests/test_staging_tenant_acceptance.py -q
+        run: python -m pytest tests/test_postgres_private_sessions.py tests/test_postgres_turn_queue.py tests/test_postgres_turn_outbox.py tests/test_hosted_identity_api.py tests/test_staging_tenant_acceptance.py -q
