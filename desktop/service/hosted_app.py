@@ -163,7 +163,9 @@ def create_hosted_app(
         """Fail closed if DB, runtime role or row-level protection is missing."""
         import asyncio
         try:
-            if await asyncio.to_thread(store.production_probe):
+            if (await asyncio.to_thread(store.production_probe)
+                    and turn_events is not None
+                    and await asyncio.to_thread(turn_events.event_security_probe)):
                 return {"status": "ready"}
         except Exception:
             pass
