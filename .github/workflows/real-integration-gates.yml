@@ -59,6 +59,9 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d ridge_ci -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT ON ridge.private_turn_events TO ridge_app"
       - name: Run real Postgres integration (no skips)
         run: python scripts/ci_integration_gate.py tests/test_postgres_private_sessions.py tests/test_postgres_turn_queue.py tests/test_postgres_turn_outbox.py
+      - name: Destructive-isolated real backup and alternate-database restore
+        # The script itself requires CI=true and exact localhost/ridge_ci DSNs.
+        run: python scripts/postgres_backup_restore_acceptance.py
 
   redis-real:
     name: Redis quota and E2B fencing
