@@ -9,10 +9,12 @@ import os
 import uuid
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from core.persistence import PostgresPrivateSessionStore, SessionVersionConflict
+from core.persistence.postgres_turn_queue import PostgresPrivateTurnQueue
 from desktop.service.hosted_identity import HostedIdentity, InvalidPrincipal, OIDCSettings, OIDCVerifier
 
 
@@ -77,6 +79,7 @@ def create_hosted_app(
     *,
     verifier: OIDCVerifier | None = None,
     store: PostgresPrivateSessionStore | None = None,
+    turn_events: PostgresPrivateTurnQueue | None = None,
 ) -> FastAPI:
     """Separate factory and credentials from create_app() local trusted mode.
 
@@ -100,12 +103,17 @@ def create_hosted_app(
         store = PostgresPrivateSessionStore(dsn)
     if verifier is None:
         verifier = OIDCVerifier(OIDCSettings.from_env())
+    # Never couple test fakes to a global queue or infer an identity from
+    # requests. Production metadata store and event store share one DB.
+    if turn_events is None and type(store) is PostgresPrivateSessionStore:
+        turn_events = PostgresPrivateTurnQueue(store._dsn)
 
     app = FastAPI(title="Ridge Hosted Private Session API", version="0.1.0")
     app.add_middleware(RequestBodyLimit)
 
     app.state.store = store
     app.state.verifier = verifier
+    app.state.turn_events = turn_events
 
     @app.middleware("http")
     async def security_headers(request, call_next):
@@ -201,6 +209,78 @@ def create_hosted_app(
         except ValueError:
             raise HTTPException(404, "Session not found")
         return {"id": sid, "version": new_version}
+
+    async def _owned_event_page(sid: str, identity: HostedIdentity,
+                                after: int, limit: int) -> list[dict[str, Any]]:
+        """Same OIDC, live membership and session ownership as metadata routes."""
+        import asyncio
+        if turn_events is None:
+            raise HTTPException(503, "Hosted event ledger is not configured")
+        try:
+            session = await asyncio.to_thread(store.get, identity.scope, sid)
+        except ValueError:
+            raise HTTPException(404, "Session not found")
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        try:
+            # Revalidate membership immediately before event retrieval, not
+            # only when a connection initially authenticated.
+            if await asyncio.to_thread(store.authorize_membership, identity.scope) is not True:
+                raise HTTPException(403, "Project membership required")
+            return await asyncio.to_thread(
+                turn_events.events, identity.scope, sid, after=after, limit=limit,
+            )
+        except LookupError:
+            raise HTTPException(404, "Session not found")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, "Durable event ledger unavailable")
+
+    @app.get("/api/v2/sessions/{sid}/events")
+    async def replay_events(
+        sid: str,
+        after: int = Query(default=0, ge=0, le=9223372036854775807),
+        limit: int = Query(default=100, ge=1, le=100),
+        identity: HostedIdentity = Depends(authenticated),
+    ):
+        """Stateless finite cursor replay; does NOT enqueue or run any tools."""
+        return await _owned_event_page(sid, identity, after, limit)
+
+    @app.get("/api/v2/sessions/{sid}/events/stream")
+    async def replay_event_stream(
+        sid: str,
+        after: int = Query(default=0, ge=0, le=9223372036854775807),
+        limit: int = Query(default=100, ge=1, le=100),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+        identity: HostedIdentity = Depends(authenticated),
+    ):
+        """Finite SSE replay, with standard Last-Event-ID reconnect support.
+
+        A caller reconnects after the response ends. This is NOT an infinite
+        stream, changefeed listener or multi-process notification service.
+        """
+        import json
+        if last_event_id is not None:
+            if (not 1 <= len(last_event_id) <= 19
+                    or not last_event_id.isascii() or not last_event_id.isdecimal()):
+                raise HTTPException(400, "Invalid Last-Event-ID")
+            resumed = int(last_event_id)
+            if resumed > 9223372036854775807 or (after and after != resumed):
+                raise HTTPException(400, "Conflicting event cursor")
+            after = resumed
+        events = await _owned_event_page(sid, identity, after, limit)
+        frames = [
+            f"id: {event['id']}\\nevent: turn-state\\ndata: "
+            + json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\\n\\n"
+            for event in events
+        ]
+        if not frames:
+            frames = [": no-new-events\\n\\n"]
+        return StreamingResponse(
+            iter(frames), media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.delete("/api/v2/sessions/{sid}", status_code=204)
     async def delete_session(sid: str, identity: HostedIdentity = Depends(authenticated)):
