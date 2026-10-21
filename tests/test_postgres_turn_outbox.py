@@ -149,3 +149,8 @@ def test_replay_validates_cursor_without_database_mutation(stores):
                 queue.events(scope, sid, limit=bad)
     finally:
         sessions.delete(scope, sid)
+
+
+def test_live_outbox_rls_and_minimum_privilege_readiness(stores):
+    _sessions, queue = stores
+    assert queue.event_security_probe() is True
