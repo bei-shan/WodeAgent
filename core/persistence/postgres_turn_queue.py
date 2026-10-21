@@ -33,6 +33,78 @@ class TurnIdempotencyConflict(RuntimeError):
 
 
 class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
+    @staticmethod
+    def _event(cur, scope: MemoryScope, session_id: str, turn_id: str,
+               state: str, fence: int) -> None:
+        """Reserve owner-local cursor, then insert the immutable event atomically.
+
+        The update locks the owning session row so concurrent workers cannot
+        allocate duplicate/out-of-order cursors. NO result or payload is
+        published here. RLS and the composite session FK are mandatory.
+        """
+        if state not in {"queued", "running", "completed", "failed", "cancelled"}:
+            raise ValueError("Invalid internal turn event state")
+        cur.execute(
+            """UPDATE ridge.private_sessions
+                  SET turn_event_cursor=turn_event_cursor+1
+                WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
+                  AND session_id=%s
+                RETURNING turn_event_cursor""",
+            (scope.tenant_id, scope.project_id, scope.user_id, session_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("Cannot allocate event cursor outside owned session")
+        cur.execute(
+            """INSERT INTO ridge.private_turn_events
+                 (tenant_id, project_id, owner_user_id, session_id,
+                  event_seq, turn_id, state, fence)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (scope.tenant_id, scope.project_id, scope.user_id,
+             session_id, int(row[0]), turn_id, state, fence),
+        )
+
+    def events(
+        self, scope: MemoryScope, session_id: str, *,
+        after: int = 0, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Finite, read-only replay after an owner-local cursor.
+
+        Missing or out-of-scope sessions return LookupError, not metadata
+        about their events. The authenticated API must recheck membership.
+        """
+        self._validate(scope, session_id)
+        if type(after) is not int or not 0 <= after <= 2**63 - 1:
+            raise ValueError("Invalid event cursor")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Event batch limit must be 1..100")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                self._scope(cur, scope)
+                cur.execute(
+                    """SELECT 1 FROM ridge.private_sessions
+                         WHERE tenant_id=%s AND project_id=%s
+                           AND owner_user_id=%s AND session_id=%s""",
+                    (scope.tenant_id, scope.project_id, scope.user_id, session_id),
+                )
+                if cur.fetchone() is None:
+                    raise LookupError("Owned session does not exist")
+                cur.execute(
+                    """SELECT event_seq, turn_id, state, fence
+                         FROM ridge.private_turn_events
+                        WHERE tenant_id=%s AND project_id=%s
+                          AND owner_user_id=%s AND session_id=%s
+                          AND event_seq>%s
+                        ORDER BY event_seq LIMIT %s""",
+                    (scope.tenant_id, scope.project_id, scope.user_id,
+                     session_id, after, limit),
+                )
+                return [
+                    {"id": int(seq), "turn_id": str(tid),
+                     "state": state, "fence": int(fence)}
+                    for seq, tid, state, fence in cur.fetchall()
+                ]
+
     def enqueue(
         self, scope: MemoryScope, session_id: str, *,
         idempotency_key: str, payload: Mapping[str, Any],
@@ -60,7 +132,7 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                        DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
                          WHERE ridge.private_turn_jobs.session_id=EXCLUDED.session_id
                            AND ridge.private_turn_jobs.payload=EXCLUDED.payload
-                       RETURNING turn_id""",
+                       RETURNING turn_id, session_id, fence""",
                     (scope.tenant_id, scope.project_id, scope.user_id,
                      turn_id, session_id, idempotency_key, encoded),
                 )
@@ -72,6 +144,17 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                     raise TurnIdempotencyConflict(
                         "Turn idempotency key is already used for different work"
                     )
+                # The conflict-update locks the ledger row. A retried
+                # idempotency key may not append a second queued event.
+                cur.execute(
+                    """SELECT 1 FROM ridge.private_turn_events
+                         WHERE tenant_id=%s AND project_id=%s
+                           AND owner_user_id=%s AND turn_id=%s
+                         LIMIT 1""",
+                    (scope.tenant_id, scope.project_id, scope.user_id, row[0]),
+                )
+                if cur.fetchone() is None:
+                    self._event(cur, scope, str(row[1]), str(row[0]), "queued", int(row[2]))
                 return str(row[0])
 
     def claim(
@@ -116,6 +199,16 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                 if row is None:
                     return None
                 payload = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                cur.execute(
+                    """SELECT session_id FROM ridge.private_turn_jobs
+                         WHERE tenant_id=%s AND project_id=%s
+                           AND owner_user_id=%s AND turn_id=%s""",
+                    (scope.tenant_id, scope.project_id, scope.user_id, row[0]),
+                )
+                owned_session = cur.fetchone()
+                if owned_session is None:
+                    raise RuntimeError("Claimed turn has no owned session")
+                self._event(cur, scope, str(owned_session[0]), str(row[0]), "running", int(row[2]))
                 return LeasedTurn(str(row[0]), payload, int(row[2]), int(row[3]))
 
 
@@ -145,11 +238,17 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                  FROM expired e
                 WHERE j.turn_id=e.turn_id
                   AND j.tenant_id=%s AND j.project_id=%s
-                  AND j.owner_user_id=%s""",
+                  AND j.owner_user_id=%s
+               RETURNING j.turn_id, j.session_id, j.fence""",
             (scope.tenant_id, scope.project_id, scope.user_id, limit,
              scope.tenant_id, scope.project_id, scope.user_id),
         )
-        return cur.rowcount
+        rows = cur.fetchall()
+        for turn_id, session_id, fence in rows:
+            PostgresPrivateTurnQueue._event(
+                cur, scope, str(session_id), str(turn_id), "failed", int(fence),
+            )
+        return len(rows)
 
     def reap_expired(self, scope: MemoryScope, *, limit: int = 100) -> int:
         """Bounded, tenant-scoped cleanup of unconfirmed expired turns."""
@@ -188,10 +287,14 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                               updated_at=now()
                         WHERE tenant_id=%s AND project_id=%s
                           AND owner_user_id=%s AND turn_id=%s
-                          AND status IN ('queued', 'running')""",
+                          AND status IN ('queued', 'running')
+                        RETURNING session_id, fence""",
                     (scope.tenant_id, scope.project_id, scope.user_id, str(parsed)),
                 )
-                return cur.rowcount == 1
+                row = cur.fetchone()
+                if row is not None:
+                    self._event(cur, scope, str(row[0]), str(parsed), "cancelled", int(row[1]))
+                return row is not None
 
     def renew(
         self, scope: MemoryScope, turn_id: str, *,
@@ -256,8 +359,16 @@ class PostgresPrivateTurnQueue(PostgresPrivateSessionStore):
                     f"""UPDATE ridge.private_turn_jobs SET {update}
                         WHERE tenant_id=%s AND project_id=%s AND owner_user_id=%s
                           AND turn_id=%s AND lease_owner=%s AND fence=%s
-                          AND status='running' AND lease_until > now()""",
+                          AND status='running' AND lease_until > now()
+                        RETURNING session_id, fence""",
                     (value, scope.tenant_id, scope.project_id, scope.user_id,
                      turn_id, worker_id, fence),
                 )
-                return cur.rowcount == 1
+                row = cur.fetchone()
+                if row is not None and action != "renew":
+                    self._event(
+                        cur, scope, str(row[0]), turn_id,
+                        "completed" if action == "complete" else "failed",
+                        int(row[1]),
+                    )
+                return row is not None
