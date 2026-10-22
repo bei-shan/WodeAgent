@@ -175,8 +175,10 @@ class SessionManager:
             return snapshot
         merged = dict(snapshot)
         merged["history_messages"] = logged
+        # Never replace an existing history tree with a linear projection: the
+        # snapshot may carry forks the log does not describe.
         entries = log.derive_entries()
-        if entries:
+        if entries and not snapshot.get("history_entries"):
             merged["history_entries"] = entries
         cursor = log.read_cursor()
         if cursor:

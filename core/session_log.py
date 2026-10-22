@@ -184,7 +184,11 @@ class SessionLog:
         state = self._load_state()
         if state is None:
             existing = self.read_events()
-            if len(messages) < len(existing) or not self._ends_with_newline():
+            if len(messages) < len(existing):
+                self._republish_with_branch(messages, snapshot, cursor)
+                self._save_state(len(messages), cursor)
+                return len(messages)
+            if not self._ends_with_newline():
                 self._publish(messages, snapshot, cursor)
                 self._save_state(len(messages), cursor)
                 return len(messages)
@@ -194,7 +198,7 @@ class SessionLog:
             start = int(state["events"])
             last_cursor = state.get("cursor")
             if len(messages) < start:
-                self._publish(messages, snapshot, cursor)
+                self._republish_with_branch(messages, snapshot, cursor)
                 self._save_state(len(messages), cursor)
                 return len(messages)
 
@@ -214,6 +218,40 @@ class SessionLog:
         cursor = snapshot.get("cursor_id") or None
         self._publish(messages, snapshot, cursor)
         self._save_state(len(messages), cursor)
+
+    def _republish_with_branch(
+        self,
+        messages: list[dict[str, Any]],
+        snapshot: dict[str, Any],
+        cursor: Optional[str],
+    ) -> None:
+        """Republish after a shrink, recording where the branch left the old tail."""
+        self._publish(messages, snapshot, cursor, branch=self._branch_record(messages))
+
+    def _branch_record(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        existing = self.derive_messages()
+        common = 0
+        for left, right in zip(existing, messages):
+            left_id, right_id = left.get("message_id"), right.get("message_id")
+            if left_id and right_id:
+                if left_id != right_id:
+                    break
+            elif left.get("content") != right.get("content"):
+                break
+            common += 1
+        from_id = ""
+        if common:
+            from_id = str(existing[common - 1].get("message_id") or "")
+        return {
+            "from": from_id,
+            "from_index": common,
+            "from_length": len(existing),
+            "to_length": len(messages),
+        }
+
+    def read_branches(self) -> list[dict[str, Any]]:
+        """Branch points recorded when history shrank (fork/rollback audit)."""
+        return [record for record in self._iter_records() if record.get("type") == "branch"]
 
     def _append_messages(self, messages: Iterable[dict[str, Any]], start: int) -> int:
         appended = 0
@@ -252,8 +290,9 @@ class SessionLog:
         messages: Iterable[dict[str, Any]],
         snapshot: dict[str, Any],
         cursor: Optional[str] = None,
+        branch: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Write a complete generation atomically (header + messages + cursor)."""
+        """Write a complete generation atomically (header + branch + messages + cursor)."""
         self.directory.mkdir(parents=True, exist_ok=True)
         header = {
             "type": "header",
@@ -266,6 +305,12 @@ class SessionLog:
         try:
             with tmp.open("w", encoding="utf-8") as handle:
                 handle.write(json.dumps(header, ensure_ascii=False) + "\n")
+                if branch:
+                    handle.write(json.dumps({
+                        "type": "branch",
+                        "session_id": self.session_id,
+                        **branch,
+                    }, ensure_ascii=False) + "\n")
                 for index, message in enumerate(messages, start=1):
                     handle.write(json.dumps(
                         _message_event(self.session_id, index, message),

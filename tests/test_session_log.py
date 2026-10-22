@@ -253,3 +253,26 @@ def test_branch_shrink_is_not_overridden_by_the_older_log(tmp_path):
     assert loaded is not None
     assert [m["content"] for m in loaded["history_messages"]] == ["a"]
     assert len(SessionLog(tmp_path, session_id).derive_messages()) == 1
+
+
+def test_shrinking_history_records_a_branch_point(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("rewind")
+    manager.save_session(
+        session_id, _snapshot(("user", "a"), ("assistant", "b"), ("user", "c")),
+    )
+    manager.save_session(session_id, _snapshot(("user", "a")))
+
+    log = SessionLog(tmp_path, session_id)
+    branches = log.read_branches()
+    assert len(branches) == 1
+    assert branches[0]["from"] == "m1"
+    assert branches[0]["from_index"] == 1
+    assert branches[0]["from_length"] == 3
+    assert branches[0]["to_length"] == 1
+
+    # The record is audit history: later appends must neither drop nor replay it.
+    manager.save_session(session_id, _snapshot(("user", "a"), ("assistant", "b2")))
+    reloaded = SessionLog(tmp_path, session_id)
+    assert len(reloaded.read_branches()) == 1
+    assert [m["content"] for m in reloaded.derive_messages()] == ["a", "b2"]
