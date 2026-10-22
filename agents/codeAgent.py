@@ -1301,7 +1301,21 @@ class CodeAgent(Agent):
         snapshot = self._session_manager.load_session(session_id)
         if snapshot is None:
             return False
+        return self._apply_snapshot(session_id, snapshot)
 
+    def restore_session(self, session_id: str) -> bool:
+        """Load a persisted session without saving the current state first.
+
+        Process-per-session front ends (the ACP server) start from a fresh
+        agent whose empty state must not be persisted over the target.
+        """
+        snapshot = self._session_manager.load_session(session_id)
+        if snapshot is None:
+            return False
+        return self._apply_snapshot(session_id, snapshot)
+
+    def _apply_snapshot(self, session_id: str, snapshot: dict) -> bool:
+        """Adopt a loaded snapshot as this agent's current session."""
         self._session_id = session_id
         self._system_messages_override = snapshot.get("system_messages") or []
 

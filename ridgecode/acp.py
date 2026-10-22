@@ -92,8 +92,10 @@ class AcpServer:
         stdin: Optional[TextIO] = None,
         stdout: Optional[TextIO] = None,
         permission_timeout_s: float = 300.0,
+        resume_factory: Optional[Callable[[str, str], Any]] = None,
     ):
         self._factory = factory
+        self._resume_factory = resume_factory
         self._in = stdin or sys.stdin
         self._out = stdout or sys.stdout
         self._write_lock = threading.Lock()
@@ -294,8 +296,29 @@ class AcpServer:
 
     def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
         session_id = params.get("sessionId")
-        if not isinstance(session_id, str) or session_id not in self._sessions:
+        if not isinstance(session_id, str) or not session_id:
             raise AcpError(INVALID_PARAMS, "unknown sessionId")
+        with self._sessions_lock:
+            if session_id in self._sessions:
+                return {}
+        if self._resume_factory is None:
+            raise AcpError(INVALID_PARAMS, "unknown sessionId")
+        cwd = params.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            raise AcpError(INVALID_PARAMS, "session/load requires a cwd to restore")
+        try:
+            agent = self._resume_factory(cwd, session_id)
+        except Exception as exc:
+            raise AcpError(INTERNAL_ERROR, f"restore failed: {exc}") from exc
+        if agent is None:
+            raise AcpError(INVALID_PARAMS, "unknown sessionId")
+        session = AcpSession(
+            session_id, cwd, agent,
+            on_event=lambda event: self._forward_event(session_id, event),
+        )
+        self._install_permission_broker(session_id, agent)
+        with self._sessions_lock:
+            self._sessions[session_id] = session
         return {}
 
     def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -386,18 +409,31 @@ class AcpServer:
                     pass
 
 
-def default_agent_factory(cwd: str) -> Any:
-    """Build a local CodeAgent for the given workspace."""
+def default_agent_factory(cwd: str, session_id: Optional[str] = None) -> Any:
+    """Build a local CodeAgent for *cwd*, optionally restoring *session_id*.
+
+    Restoration uses ``restore_session`` so the fresh agent's empty state is
+    never saved over the session being loaded.
+    """
     from agents.codeAgent import CodeAgent
     from core.llm import HelloAgentsLLM
     from tools.registry import ToolRegistry
 
-    return CodeAgent(
+    agent = CodeAgent(
         name="acp",
         llm=HelloAgentsLLM(),
         tool_registry=ToolRegistry(),
         project_root=cwd,
     )
+    if session_id is None:
+        return agent
+    restored = getattr(agent, "restore_session", None)
+    if not callable(restored) or not restored(session_id):
+        close = getattr(agent, "close", None)
+        if callable(close):
+            close()
+        return None
+    return agent
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -405,7 +441,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--cwd", default=".", help="Default workspace root for new sessions")
     args = parser.parse_args(argv)
 
-    server = AcpServer(default_agent_factory)
+    server = AcpServer(default_agent_factory, resume_factory=default_agent_factory)
     try:
         server.serve()
     except KeyboardInterrupt:

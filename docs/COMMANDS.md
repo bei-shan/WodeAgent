@@ -50,6 +50,8 @@ python -m ridgecode acp --cwd /path/to/workspace
 
 需要用户确认的文件/命令操作会以 `session/request_permission` 反向请求编辑器，客户端返回 `selected` 才放行；超时、取消或未实现该请求一律按拒绝处理（fail closed）。
 
+`session/load` 支持跨进程恢复：进程重启后带上 `sessionId` 与 `cwd`，服务器会从磁盘快照重建历史并继续使用同一会话（恢复不会覆盖原快照）。
+
 支持 ACP 的编辑器（如 Zed）把上面的命令配置为 agent 启动命令即可；会话在进程内创建，进程退出即结束。该模式只面向本地受信任环境，不提供鉴权或多租户隔离。
 
 ## 检查、评测和测试
