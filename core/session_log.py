@@ -40,6 +40,13 @@ class SessionLog:
     def exists(self) -> bool:
         return self.path.exists()
 
+    def has_events(self) -> bool:
+        """True when the log carries any committed record beyond its header."""
+        for record in self._iter_records():
+            if record.get("type") in {"message", "branch"}:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------

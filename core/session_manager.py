@@ -100,6 +100,14 @@ class SessionManager:
             "schema_version": 2,
             "history_messages": [],
         })
+        # Every session gets its log at birth so snapshot and log never start
+        # out of sync.
+        self._sync_session_log(session_id, {
+            "version": 2,
+            "schema_version": 2,
+            "history_messages": [],
+            "created_at": now,
+        })
         return session_id
 
     def save_session(self, session_id: str, snapshot: dict[str, Any]) -> None:
@@ -142,7 +150,8 @@ class SessionManager:
         path = self._snapshot_path(session_id)
         if not path.exists():
             log = SessionLog(self._dir, session_id)
-            return log.to_snapshot() if log.exists() else None
+            # A header-only log is a session that was deleted, not one to revive.
+            return log.to_snapshot() if log.exists() and log.has_events() else None
         try:
             snapshot = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
@@ -211,6 +220,88 @@ class SessionManager:
             self.load_session(match.group(1))
             migrated += 1
         return {"migrated": migrated}
+
+    # ------------------------------------------------------------------
+    # Consistency audit (snapshot vs append-only log)
+    # ------------------------------------------------------------------
+    def audit_session(self, session_id: str) -> dict[str, Any]:
+        """Compare one session's snapshot and log without changing either.
+
+        States: ``snapshot_only``, ``log_only``, ``log_ahead`` (crash before the
+        snapshot write), ``log_behind`` (older writer), ``diverged`` (same
+        length, different content) and ``ok``.
+        """
+        snapshot = self._read_snapshot_raw(session_id)
+        log = SessionLog(self._dir, session_id)
+        report: dict[str, Any] = {
+            "session_id": session_id,
+            "snapshot_messages": len(snapshot.get("history_messages") or []) if snapshot else None,
+            "log_events": None,
+            "tree_entries": len(snapshot.get("history_entries") or []) if snapshot else None,
+            "state": "ok",
+        }
+        if snapshot is None:
+            has_log = log.exists() and log.has_events()
+            report["state"] = "log_only" if has_log else "missing"
+            if has_log:
+                report["log_events"] = len(log.read_events())
+            return report
+        if not log.exists():
+            report["state"] = "snapshot_only"
+            return report
+
+        logged = log.derive_messages()
+        report["log_events"] = len(logged)
+        current = snapshot.get("history_messages") or []
+        if len(logged) > len(current):
+            report["state"] = "log_ahead"
+        elif len(logged) < len(current):
+            report["state"] = "log_behind"
+        elif not _same_messages(logged, current):
+            report["state"] = "diverged"
+        return report
+
+    def reconcile_sessions(self, *, repair: bool = True) -> dict[str, int]:
+        """Audit every session and repair logs that lag or diverge.
+
+        ``log_ahead`` is left alone: the read path already prefers the log.
+        Repairs are one-directional (log follows snapshot) so a crash never
+        silently drops events the snapshot still holds.
+        """
+        counts: dict[str, int] = {}
+        session_ids: set[str] = set()
+        for path in self._dir.glob("*.json"):
+            match = _SESSION_FILE.fullmatch(path.name)
+            if match:
+                session_ids.add(match.group(1))
+        for path in self._dir.glob(f"*{LOG_SUFFIX}"):
+            session_id = path.name[: -len(LOG_SUFFIX)]
+            if _SESSION_ID.fullmatch(session_id):
+                session_ids.add(session_id)
+
+        for session_id in sorted(session_ids):
+            report = self.audit_session(session_id)
+            state = report["state"]
+            if repair and state in {"log_behind", "diverged"}:
+                snapshot = self._read_snapshot_raw(session_id)
+                if snapshot is not None:
+                    try:
+                        SessionLog(self._dir, session_id).rewrite(snapshot)
+                        state = "repaired"
+                    except (OSError, TypeError, ValueError):
+                        state = "repair_failed"
+            counts[state] = counts.get(state, 0) + 1
+        return counts
+
+    def _read_snapshot_raw(self, session_id: str) -> Optional[dict[str, Any]]:
+        path = self._snapshot_path(session_id)
+        if not path.exists():
+            return None
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return snapshot if isinstance(snapshot, dict) else None
 
     def _repair_log_behind_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         """Append events the log is missing so both views agree on read."""
@@ -362,7 +453,8 @@ class SessionManager:
             log_suffix = LOG_SUFFIX
             for path in self._dir.glob(f"*{log_suffix}"):
                 session_id = path.name[: -len(log_suffix)]
-                if _SESSION_ID.fullmatch(session_id):
+                # A header-only log does not resurrect a deleted session.
+                if _SESSION_ID.fullmatch(session_id) and SessionLog(self._dir, session_id).has_events():
                     logs.add(session_id)
 
             available = set(snapshots) | logs
@@ -566,3 +658,12 @@ class SessionManager:
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _same_messages(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+    if len(left) != len(right):
+        return False
+    for first, second in zip(left, right):
+        if (first.get("role"), first.get("content")) != (second.get("role"), second.get("content")):
+            return False
+    return True
