@@ -73,6 +73,25 @@ def test_process_restart_reuses_record_and_has_no_ephemeral_catalog_entry(tmp_pa
         assert {info.id for info in SessionManager().list_sessions()} == before
 
 
+def test_stale_index_entry_is_hidden_and_pruned_on_activate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
+    catalog = SessionManager()
+    ghost = catalog.create_session("Ghost without snapshot")
+    # Simulate a catalog entry whose snapshot was removed outside the catalog.
+    catalog._snapshot_path(ghost).unlink()
+    assert catalog.get_session(ghost) is not None
+    assert not catalog.snapshot_exists(ghost)
+    with TestClient(create_app(agent_factory=FakeAgent, project_root=str(tmp_path))) as client:
+        listed = {item["id"] for item in client.get("/api/sessions").json()}
+        assert ghost not in listed
+        response = client.post(f"/api/sessions/{ghost}/activate")
+        assert response.status_code == 404
+        assert "no longer exists" in response.json()["detail"]
+    # The unusable entry is gone so it cannot be offered again.
+    assert SessionManager().get_session(ghost) is None
+
+
 def test_architecture_boundaries():
     root = Path(__file__).resolve().parents[1]
     application = root / "desktop" / "service" / "application"

@@ -124,6 +124,14 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return None
 
+    def snapshot_exists(self, session_id: str) -> bool:
+        """Return ``True`` when a snapshot file is present for *session_id*.
+
+        Cheap existence probe used to hide index entries whose snapshot was
+        removed outside the catalog (manual cleanup, interrupted restore).
+        """
+        return self._snapshot_path(session_id).exists()
+
     def list_sessions(self) -> list[SessionInfo]:
         """Return all sessions sorted by *modified_at* descending."""
         return sorted(

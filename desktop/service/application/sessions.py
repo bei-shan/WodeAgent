@@ -70,11 +70,17 @@ class SessionService:
             })
         try:
             for info in self.catalog.list_sessions():
-                if info.id not in ids:
-                    result.append({
-                        "id": info.id, "title": info.title or info.id[:8],
-                        "busy": False, "pinned": info.id in self._pinned,
-                    })
+                if info.id in ids:
+                    continue
+                # An index entry can outlive its snapshot (manual cleanup or an
+                # interrupted restore). Hide it instead of offering a session
+                # that cannot be activated.
+                if not self.catalog.snapshot_exists(info.id):
+                    continue
+                result.append({
+                    "id": info.id, "title": info.title or info.id[:8],
+                    "busy": False, "pinned": info.id in self._pinned,
+                })
         except (OSError, ValueError) as exc:
             logger.warning("Unable to list persisted sessions: %s", type(exc).__name__)
         result.sort(key=lambda item: (not item["pinned"], item["id"]))
@@ -95,8 +101,15 @@ class SessionService:
         if self.controller.get_session(sid) is not None:
             return {"status": "active"}
         info = self.catalog.get_session(sid)
-        if info is None or self.catalog.load_session(sid) is None:
+        if info is None:
             raise NotFoundError("Session not found on disk")
+        if self.catalog.load_session(sid) is None:
+            # The index still advertises a session whose snapshot is gone.
+            # Drop the ghost entry so the client stops offering it, then fail
+            # with a reason the caller can act on.
+            logger.warning("Pruning session %s: snapshot missing from disk", sid)
+            self.catalog.delete_session(sid)
+            raise NotFoundError("Session snapshot no longer exists on disk")
         self.controller.attach_session(sid, self.agent_factory, title=info.title)
         return {"status": "activated", "id": sid}
 
