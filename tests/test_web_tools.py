@@ -145,9 +145,10 @@ def test_web_search_renders_numbered_results_and_dedupes():
     assert payload["status"] == "success"
     assert payload["data"]["count"] == 2
     # Frames escape markup so a page cannot close the untrusted block.
-    assert "1. First &lt;b&gt;hit&lt;/b&gt;" in payload["text"]
+    assert "1. [First &lt;b&gt;hit&lt;/b&gt;](https://a.example/1)" in payload["text"]
     assert "https://a.example/1" in payload["text"]
-    assert "2. Second" in payload["text"]
+    assert "2. [Second](https://b.example/2)" in payload["text"]
+    assert "&gt; alpha" in payload["text"]
     assert "<untrusted_data" in payload["text"]
 
 
@@ -173,3 +174,29 @@ def test_web_search_maps_provider_rejections():
     tool = WebSearchTool(poster=rejected, api_key="bad")
     payload = _payload(tool.run({"query": "x"}))
     assert payload["error"]["code"] == "ACCESS_DENIED"
+
+
+# ---------------------------------------------------------------------------
+# Output format
+# ---------------------------------------------------------------------------
+def test_web_fetch_passes_format_and_reports_it():
+    seen = {}
+
+    def fetcher(url, **kwargs):
+        seen.update(kwargs)
+        return _fetch_result("plain")
+
+    tool = WebFetchTool(fetcher=fetcher, rate_limiter=_limiters())
+    payload = _payload(tool.run({"url": "https://example.com/", "format": "text"}))
+    assert seen["format"] == "text"
+    assert payload["data"]["format"] == "text"
+
+    payload = _payload(tool.run({"url": "https://example.com/"}))
+    assert payload["data"]["format"] == "markdown"
+
+
+def test_web_fetch_rejects_unknown_format():
+    tool = WebFetchTool(fetcher=lambda url, **kwargs: _fetch_result("x"))
+    payload = _payload(tool.run({"url": "https://example.com/", "format": "pdf"}))
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_PARAM"

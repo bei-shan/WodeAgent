@@ -67,6 +67,15 @@ class WebFetchTool(Tool):
                 required=False,
                 default=DEFAULT_TIMEOUT_MS,
             ),
+            ToolParameter(
+                name="format",
+                type="string",
+                description=(
+                    "HTML 转换格式：markdown（默认，保留标题/链接/列表/代码块）或 text（纯文本）。"
+                ),
+                required=False,
+                default="markdown",
+            ),
         ]
 
     def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
@@ -105,6 +114,14 @@ class WebFetchTool(Tool):
             MIN_TIMEOUT_MS,
             MAX_TIMEOUT_MS,
         )
+        fmt = str(params_input.get("format") or "markdown").strip().lower()
+        if fmt not in {"markdown", "text"}:
+            return self.create_error_response(
+                error_code=ErrorCode.INVALID_PARAM,
+                message="format 只支持 markdown 或 text。",
+                params_input=params_input,
+                time_ms=0,
+            )
 
         try:
             url = web_guard.assert_public_url(raw_url)
@@ -124,11 +141,23 @@ class WebFetchTool(Tool):
             )
 
         try:
-            result = self._fetcher(
-                url,
-                timeout_s=timeout_ms / 1000.0,
-                rate_limiter=self._rate_limiter,
-            )
+            result = None
+            for attempt in range(2):
+                try:
+                    result = self._fetcher(
+                        url,
+                        timeout_s=timeout_ms / 1000.0,
+                        rate_limiter=self._rate_limiter,
+                        format=fmt,
+                    )
+                    break
+                except web_guard.WebAccessTimeout:
+                    # One retry only: transient DNS/TLS stalls are common, and a
+                    # third attempt would blow the tool budget.
+                    if attempt == 1:
+                        raise
+                    time.sleep(0.3)
+            assert result is not None
         except web_guard.WebAccessDenied as exc:
             return self.create_error_response(
                 error_code=ErrorCode.ACCESS_DENIED,
@@ -171,6 +200,7 @@ class WebFetchTool(Tool):
                 "characters": total_chars,
                 "truncated": truncated,
                 "redirects": result.redirects,
+                "format": fmt,
                 "host": urlsplit(result.final_url).hostname or "",
             },
             text=excerpt,

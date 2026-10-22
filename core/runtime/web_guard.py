@@ -21,6 +21,8 @@ from html.parser import HTMLParser
 from typing import Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from core.runtime.html_to_markdown import html_to_markdown
+
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 BLOCKED_HOSTS = frozenset({"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"})
 BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa", ".lan")
@@ -292,10 +294,16 @@ def fetch_url(
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     user_agent: str = DEFAULT_USER_AGENT,
     rate_limiter: Optional[HostRateLimiter] = None,
+    format: str = "markdown",
 ) -> FetchResult:
-    """Fetch one public URL, following redirects with re-validation."""
+    """Fetch one public URL, following redirects with re-validation.
+
+    ``format`` selects how HTML becomes model-readable text: ``markdown`` keeps
+    headings, links, lists and code fences; ``text`` flattens to prose.
+    """
     import httpx
 
+    as_markdown = format != "text"
     limiter = rate_limiter or DEFAULT_RATE_LIMITER
     current = assert_public_url(url)
     headers = {
@@ -337,7 +345,21 @@ def fetch_url(
                             f"Unsupported content type {content_type or 'unknown'!r}; WebFetch returns text only"
                         )
                     raw = _decode(bytes(body), content_type)
-                    text = html_to_text(raw) if kind == "html" else raw
+                    if kind == "html":
+                        text = html_to_markdown(raw, current) if as_markdown else html_to_text(raw)
+                        if as_markdown and len(text.strip()) < 80:
+                            # JS-heavy or consent-wall pages extract to nothing;
+                            # fall back to the plain-text rendering before failing.
+                            fallback = html_to_text(raw).strip()
+                            if len(fallback) > len(text.strip()):
+                                text = fallback
+                        if len(text.strip()) < 20:
+                            raise WebAccessError(
+                                "No readable text extracted from this page "
+                                "(it is probably JavaScript-rendered)."
+                            )
+                    else:
+                        text = raw
                     return FetchResult(
                         url=url,
                         final_url=current,
