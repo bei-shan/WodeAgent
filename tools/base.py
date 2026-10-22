@@ -91,6 +91,10 @@ class Tool(ABC):
     # Built-in tools opt in after their public parameter contracts are audited.
     # Custom/MCP tools retain their own validation until migrated.
     strict_input_contract: bool = False
+    # Cooperative execution budget enforced by ToolRegistry. ``None`` falls back
+    # to TOOL_TIMEOUT_DEFAULT_SECONDS; tools that manage their own deadline (Bash)
+    # set a slightly larger value so their own error wins.
+    timeout_seconds: Optional[float] = None
 
     """
     工具基类（遵循《通用工具响应协议》）

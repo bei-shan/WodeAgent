@@ -219,8 +219,9 @@ def test_discover_then_team_tools_no_duplicates():
     all_tools = set(registry.list_tools())
     # No overlap between non-team and team
     assert len(set(non_team) & set(team)) == 0
-    # Total should be 17 non-team + 15 team = 32 (SwitchModel removed)
-    assert len(all_tools) == 32
+    # Total should be 19 non-team + 15 team = 34 (SwitchModel removed,
+    # WebFetch/WebSearch added)
+    assert len(all_tools) == 34
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +266,7 @@ def test_real_tool_registration_via_bootstrap():
     non_team = bootstrap.discover_and_register()
     team = register_team_tools(bootstrap)
 
-    assert len(non_team) == 17  # SwitchModel removed
+    assert len(non_team) == 19  # SwitchModel removed, WebFetch/WebSearch added
     assert len(team) == 15
 
     # All tools are executable (run returns valid JSON)

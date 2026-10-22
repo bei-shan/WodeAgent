@@ -23,6 +23,9 @@ load_env()
 
 class BashTool(Tool):
     strict_input_contract = True
+    # Bash enforces its own timeout_ms (max 600s); the registry budget sits just
+    # above it so the tool's clearer error wins.
+    timeout_seconds = 620.0
     """Shell 命令执行工具，支持命令串联与沙箱限制"""
     usage_notes = 'Bash: Execute shell commands in project sandbox. Use for build/test/git/install commands. Do NOT use for: ls/cat/head/tail (use Read/LS), grep/find (use Grep/Glob). Interactive commands blocked. Network tools (curl/wget) blocked by default. Supports chaining (&&, ||, ;).'
 

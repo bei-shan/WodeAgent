@@ -9,6 +9,9 @@ import time
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Any, Callable, TypedDict
 
 from .base import Tool, ToolStatus, ErrorCode, ToolParameter
@@ -48,6 +51,10 @@ _PARENT_ONLY_TOOLS = frozenset({
     "TeamApprovePlan", "TeamCreate", "TeamDelete", "TeamCleanup",
     "TeamFanout", "TeamRetry",
 })
+
+
+class ToolTimeoutError(Exception):
+    """A tool exceeded its cooperative time budget."""
 
 
 class ReadMeta(TypedDict):
@@ -741,6 +748,9 @@ class ToolRegistry:
         # 乐观锁自动注入：为 Write/Edit 注入 expected_mtime_ms / expected_size_bytes
         # =====================================================================
         if name in {"Write", "Edit", "MultiEdit"}:
+            refusal = self._require_prior_read(name, parameters)
+            if refusal is not None:
+                return refusal
             parameters = self._inject_optimistic_lock_params(name, parameters)
         
         # 熔断检查
@@ -815,8 +825,17 @@ class ToolRegistry:
         # 优先查找Tool对象
         if tool is not None:
             try:
-                result = tool.run(parameters)
+                result = self._run_tool_with_timeout(tool, parameters)
                 result_payload = self._normalize_result(name, result, parameters)
+            except ToolTimeoutError as e:
+                result_payload = {
+                    "status": ToolStatus.ERROR.value,
+                    "data": {},
+                    "text": str(e),
+                    "error": {"code": ErrorCode.TIMEOUT.value, "message": str(e)},
+                    "stats": {"time_ms": 0},
+                    "context": {"cwd": ".", "params_input": parameters},
+                }
             except Exception as e:
                 result_payload = self._create_internal_error_payload(
                     name=name,
@@ -890,6 +909,87 @@ class ToolRegistry:
         if isinstance(data, dict):
             self._read_cache = dict(data)
     
+    # ------------------------------------------------------------------
+    # 读后写约束 与 工具超时
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _require_read_before_write() -> bool:
+        value = (os.getenv("AGENT_REQUIRE_READ_BEFORE_WRITE", "true") or "").strip().lower()
+        return value not in {"0", "false", "no", "off"}
+
+    def _lookup_read_meta(self, path: str) -> Optional[ReadMeta]:
+        meta = self._read_cache.get(path)
+        if meta:
+            return meta
+        normalized = path.replace("\\", "/")
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        return self._read_cache.get(normalized)
+
+    def _require_prior_read(self, tool_name: str, parameters: dict) -> Optional[str]:
+        """Refuse overwriting an existing file this session never read."""
+        if not self._require_read_before_write():
+            return None
+        path = parameters.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return None
+        if "expected_mtime_ms" in parameters and "expected_size_bytes" in parameters:
+            return None  # an explicit caller contract wins over the policy
+        try:
+            target = Path(path).expanduser()
+            if not target.is_absolute():
+                target = Path.cwd() / target
+            if not target.exists():
+                return None  # creating a new file needs no prior read
+        except OSError:
+            return None
+        if self._lookup_read_meta(path) is not None:
+            return None
+        message = (
+            f"Read '{path}' before modifying it. Existing files may only be "
+            "overwritten after a Read in this session, so concurrent edits are "
+            "not silently discarded."
+        )
+        return json.dumps({
+            "status": ToolStatus.ERROR.value,
+            "data": {},
+            "text": message,
+            "error": {"code": ErrorCode.ACCESS_DENIED.value, "message": message},
+            "stats": {"time_ms": 0},
+            "context": {"cwd": ".", "params_input": parameters},
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _tool_timeout_seconds(tool: Any) -> float:
+        explicit = getattr(tool, "timeout_seconds", None)
+        if explicit is not None:
+            try:
+                return max(0.0, float(explicit))
+            except (TypeError, ValueError):
+                pass
+        try:
+            return max(0.0, float(os.getenv("TOOL_TIMEOUT_DEFAULT_SECONDS", "600") or 600))
+        except ValueError:
+            return 600.0
+
+    def _run_tool_with_timeout(self, tool: Any, parameters: dict) -> Any:
+        """Run a tool under a cooperative budget; never block the turn forever."""
+        timeout_s = self._tool_timeout_seconds(tool)
+        if timeout_s <= 0:
+            return tool.run(parameters)
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tool-call")
+        future = executor.submit(tool.run, parameters)
+        try:
+            return future.result(timeout=timeout_s)
+        except FuturesTimeout as exc:
+            future.cancel()
+            raise ToolTimeoutError(
+                f"Tool '{getattr(tool, 'name', '?')}' exceeded {timeout_s:g}s; stopped "
+                "waiting (the underlying operation may still be running)."
+            ) from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     def _inject_optimistic_lock_params(self, tool_name: str, parameters: dict) -> dict:
         """
         为 Write/Edit 工具自动注入乐观锁参数

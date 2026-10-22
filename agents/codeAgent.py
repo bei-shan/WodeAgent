@@ -36,6 +36,8 @@ from tools.registry import ToolRegistry
 from core.worktree.manager import WorktreeManager, WorktreeError
 from core.runtime.services import RuntimeServices
 from core.runtime.middleware import PolicyMiddlewarePipeline
+from core.runtime.repeat_tool_reminder import RepeatToolReminder
+from core.session_title import generate_title, is_placeholder_title
 from core.runtime.service_mcp import MCPService
 from core.runtime.service_teams import TeamService
 from core.runtime.service_sessions import SessionService
@@ -183,7 +185,11 @@ class CodeAgent(Agent):
             self._init_tools()
             self._runtime_services.post_start()
             if self._hosted_tool_authority is None:
-                self._tool_interceptors = (self._runtime_services.get("hooks"),)
+                self._repeat_reminder = RepeatToolReminder()
+                self._tool_interceptors = (
+                    self._runtime_services.get("hooks"),
+                    self._repeat_reminder,
+                )
                 self._model_interceptors = (self._runtime_services.get("vcr"),)
 
             # Deferred catalog sees fully registered tools.
@@ -198,6 +204,7 @@ class CodeAgent(Agent):
             self.trace_logger = create_trace_logger()
             self._system_messages_logged = False
             self._run_id = 0
+            self._title_attempted = False
             self._system_messages_override: Optional[List[dict]] = None
         except BaseException:
             self.close()
@@ -1210,6 +1217,55 @@ class CodeAgent(Agent):
             self._session_manager.save_session(self._session_id, snapshot)
         except Exception as exc:
             self.logger.warning("Auto-save session failed: %s", exc)
+        self._maybe_generate_title()
+
+    def _maybe_generate_title(self) -> None:
+        """Ask a cheap model for a title once, in the background.
+
+        Only placeholder titles are replaced, only after a real exchange exists,
+        and every failure is swallowed: a title is never worth breaking a turn.
+        """
+        if getattr(self, "_title_attempted", True):
+            return
+        if getattr(self, "_hosted_tool_authority", None) is not None:
+            return
+        manager = getattr(self, "_session_manager", None)
+        session_id = getattr(self, "_session_id", None)
+        if manager is None or not session_id:
+            return
+        try:
+            info = manager.get_session(session_id)
+        except Exception:
+            return
+        if info is None or not is_placeholder_title(getattr(info, "title", "")):
+            self._title_attempted = True
+            return
+        try:
+            messages = self.history_manager.to_messages()
+        except Exception:
+            return
+        if not any(m.get("role") == "assistant" for m in messages if isinstance(m, dict)):
+            return
+        self._title_attempted = True
+
+        def _generate() -> None:
+            try:
+                from core.model_profiles import create_llm_from_pointer
+
+                llm = create_llm_from_pointer("compact", fallback_llm=self.llm)
+                title = generate_title(llm, messages)
+                if not title:
+                    return
+                if manager.rename_session(session_id, title):
+                    session = getattr(self, "session", None)
+                    if session is not None:
+                        session.title = title
+            except Exception as exc:  # titles are strictly best-effort
+                self.logger.debug("Session title generation skipped: %s", exc)
+
+        threading.Thread(
+            target=_generate, name=f"title-{session_id}", daemon=True,
+        ).start()
 
     def resume_session(self, session_id: str) -> bool:
         """Switch to a different session by ID.
