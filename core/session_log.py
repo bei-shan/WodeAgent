@@ -206,6 +206,15 @@ class SessionLog:
         self._save_state(len(messages), cursor)
         return appended
 
+    def rewrite(self, snapshot: dict[str, Any]) -> None:
+        """Republish the whole log from *snapshot* (used by migrations)."""
+        messages = snapshot.get("history_messages")
+        if not isinstance(messages, list):
+            messages = []
+        cursor = snapshot.get("cursor_id") or None
+        self._publish(messages, snapshot, cursor)
+        self._save_state(len(messages), cursor)
+
     def _append_messages(self, messages: Iterable[dict[str, Any]], start: int) -> int:
         appended = 0
         with self.path.open("a", encoding="utf-8") as handle:

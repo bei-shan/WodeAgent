@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.session_log import LOG_SUFFIX, SessionLog
+from core.session_migrations import migrate_snapshot, needs_migration
 
 
 # Local single-process safety only. A multi-instance deployment needs a
@@ -93,8 +94,12 @@ class SessionManager:
             modified_at=now,
         )
         self._append_index(info)
-        # Write an empty snapshot so the file exists.
-        self._write_snapshot(session_id, {"version": 1, "history_messages": []})
+        # Write an empty snapshot so the file exists (current schema).
+        self._write_snapshot(session_id, {
+            "version": 2,
+            "schema_version": 2,
+            "history_messages": [],
+        })
         return session_id
 
     def save_session(self, session_id: str, snapshot: dict[str, Any]) -> None:
@@ -145,7 +150,36 @@ class SessionManager:
         if not isinstance(snapshot, dict):
             return None
         self._repair_log_behind_snapshot(session_id, snapshot)
+        if needs_migration(snapshot):
+            snapshot = self._migrate_on_load(session_id, snapshot)
         return snapshot
+
+    def _migrate_on_load(self, session_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Migrate a legacy snapshot once, then persist the stamped version."""
+        try:
+            migrated = migrate_snapshot(snapshot, log=SessionLog(self._dir, session_id))
+            if migrated != snapshot:
+                self._write_snapshot(session_id, migrated)
+            return migrated
+        except (OSError, TypeError, ValueError):
+            return snapshot
+
+    def migrate_sessions(self) -> dict[str, int]:
+        """Stamp every legacy snapshot with the current schema version."""
+        migrated = 0
+        for path in self._dir.glob("*.json"):
+            match = _SESSION_FILE.fullmatch(path.name)
+            if not match:
+                continue
+            try:
+                snapshot = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(snapshot, dict) or not needs_migration(snapshot):
+                continue
+            self.load_session(match.group(1))
+            migrated += 1
+        return {"migrated": migrated}
 
     def _repair_log_behind_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         """Append events the log is missing so both views agree on read."""
