@@ -41,7 +41,32 @@ class AgentTurnLifecycle:
         with get_telemetry().span("agent.turn", kind="agent") as observation:
             result = self._run(input_text, **kwargs)
             observation.attribute("ridge.turn.status", getattr(self.host, "last_turn_status", "completed"))
+        return self._drive_goal(result)
+
+    def _drive_goal(self, result: str) -> str:
+        """Run automatic continuation rounds while an active goal remains.
+
+        Each continuation is a normal turn, so events, saving and status are
+        identical to user-triggered ones. The driver owns every stopping rule;
+        this loop only counts the rounds it has already run in this invocation.
+        """
+        driver = getattr(self.host, "_goal_driver", None)
+        if driver is None:
             return result
+        session_id = getattr(self.host, "_session_id", "")
+        rounds = 0
+        while True:
+            interrupt = getattr(self.host, "_interrupt_requested", None)
+            decision = driver.decide(
+                session_id,
+                turn_status=getattr(self.host, "last_turn_status", "completed"),
+                interrupted=bool(interrupt is not None and interrupt.is_set()),
+                auto_rounds=rounds,
+            )
+            if not decision.continue_run:
+                return result
+            rounds += 1
+            result = self._run(decision.prompt, show_raw=False)
 
     def _run(self, input_text: str, **kwargs) -> str:
         """Run one Agent turn with deterministic completion."""

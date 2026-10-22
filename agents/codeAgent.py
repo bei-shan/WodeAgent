@@ -205,6 +205,7 @@ class CodeAgent(Agent):
             self._system_messages_logged = False
             self._run_id = 0
             self._title_attempted = False
+            self._goal_driver = self._build_goal_driver()
             self._system_messages_override: Optional[List[dict]] = None
         except BaseException:
             self.close()
@@ -252,6 +253,27 @@ class CodeAgent(Agent):
             mcp_tools_prompt=self._mcp_tools_prompt,
             skills_prompt=self._skills_prompt,
         )
+
+    def _build_goal_driver(self):
+        """Goal autorun is local-only; each continuation stays a normal turn."""
+        if getattr(self, "_hosted_tool_authority", None) is not None:
+            return None
+        try:
+            from core.goal_driver import GoalRoundDriver
+            from core.goals import GoalStore
+
+            enabled = (os.getenv("AGENT_GOAL_AUTORUN", "true") or "").strip().lower() not in {
+                "0", "false", "no", "off",
+            }
+            try:
+                max_rounds = int(os.getenv("AGENT_GOAL_MAX_AUTO_ROUNDS", "8") or 8)
+            except ValueError:
+                max_rounds = 8
+            store = GoalStore(Path(self.project_root) / "memory" / "goals")
+            return GoalRoundDriver(store, max_auto_rounds=max_rounds, enabled=enabled)
+        except Exception as exc:  # autorun must never block agent construction
+            self.logger.warning("Goal driver unavailable: %s", exc)
+            return None
 
     def _init_tools(self) -> None:
         """Register built-in and MCP tools via ToolBootstrap auto-discovery."""
