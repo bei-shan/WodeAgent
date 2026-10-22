@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from core.session_log import LOG_SUFFIX, SessionLog
+
 
 # Local single-process safety only. A multi-instance deployment needs a
 # transactional shared session store (e.g. PostgreSQL), not JSON indexes.
@@ -32,6 +34,7 @@ _INDEX_WRITE_LOCK = threading.RLock()
 # Snapshots are ``<12 hex>.json``; turn sidecars (``<id>.turn.json``) and the
 # index itself must never be treated as sessions during reconciliation.
 _SESSION_FILE = re.compile(r"([0-9a-f]{12})\.json\Z")
+_SESSION_ID = re.compile(r"[0-9a-f]{12}\Z")
 
 
 @dataclass
@@ -101,6 +104,9 @@ class SessionManager:
         the current title is a placeholder.
         """
         self._write_snapshot(session_id, snapshot)
+        # Durable append-only log: the snapshot stays the compatibility surface,
+        # the log is what future readers and migrations derive from.
+        self._sync_session_log(session_id, snapshot)
         history = snapshot.get("history_messages") or []
         message_count = len(history)
         preview = ""
@@ -124,14 +130,19 @@ class SessionManager:
         )
 
     def load_session(self, session_id: str) -> Optional[dict[str, Any]]:
-        """Load a session snapshot by ID.  Returns ``None`` if not found."""
+        """Load a session snapshot by ID.  Returns ``None`` if not found.
+
+        A lost snapshot is rebuilt from the append-only log when one exists.
+        """
         path = self._snapshot_path(session_id)
         if not path.exists():
-            return None
+            log = SessionLog(self._dir, session_id)
+            return log.to_snapshot() if log.exists() else None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+        return snapshot if isinstance(snapshot, dict) else None
 
     def snapshot_exists(self, session_id: str) -> bool:
         """Return ``True`` when a snapshot file is present for *session_id*.
@@ -215,6 +226,11 @@ class SessionManager:
                 except OSError:
                     return False
 
+            try:
+                SessionLog(self._dir, session_id).path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
             index = self._load_index()
             new_index = [s for s in index if s.id != session_id]
             if len(new_index) == len(index):
@@ -245,28 +261,35 @@ class SessionManager:
                 self._reconciled = False
 
     def reconcile_index(self) -> dict[str, int]:
-        """Make ``index.json`` agree with the snapshots on disk.
+        """Make ``index.json`` agree with the durable files on disk.
 
-        Snapshots are the source of truth. Orphan snapshots are indexed with
-        metadata derived from their history; entries whose snapshot vanished are
-        dropped. The write only happens when something actually changed.
+        A session counts as present when either its snapshot or its append-only
+        log exists. Orphans are indexed from whichever is readable; entries with
+        neither are dropped. The write only happens when something changed.
         """
         with _INDEX_WRITE_LOCK:
             index = self._load_index()
             known = {item.id: item for item in index}
-            on_disk: dict[str, Path] = {}
+            snapshots: dict[str, Path] = {}
             for path in self._dir.glob("*.json"):
                 match = _SESSION_FILE.fullmatch(path.name)
                 if match:
-                    on_disk[match.group(1)] = path
+                    snapshots[match.group(1)] = path
+            logs: set[str] = set()
+            log_suffix = LOG_SUFFIX
+            for path in self._dir.glob(f"*{log_suffix}"):
+                session_id = path.name[: -len(log_suffix)]
+                if _SESSION_ID.fullmatch(session_id):
+                    logs.add(session_id)
 
-            kept = [info for session_id, info in known.items() if session_id in on_disk]
+            available = set(snapshots) | logs
+            kept = [info for session_id, info in known.items() if session_id in available]
             removed = len(known) - len(kept)
             added = 0
-            for session_id, path in on_disk.items():
-                if session_id in known:
-                    continue
-                derived = self._derive_info(session_id, path)
+            for session_id in available - set(known):
+                derived = self._derive_info(session_id, snapshots.get(session_id))
+                if derived is None:
+                    derived = self._derive_info_from_log(session_id)
                 if derived is None:
                     continue
                 kept.append(derived)
@@ -277,8 +300,10 @@ class SessionManager:
                 self._write_index(kept)
             return {"added": added, "removed": removed}
 
-    def _derive_info(self, session_id: str, path: Path) -> Optional[SessionInfo]:
+    def _derive_info(self, session_id: str, path: Optional[Path]) -> Optional[SessionInfo]:
         """Rebuild one index entry from its snapshot, or ``None`` if unreadable."""
+        if path is None:
+            return None
         try:
             snapshot = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -305,6 +330,33 @@ class SessionManager:
             created_at=stamp,
             modified_at=stamp,
             message_count=len(history),
+            preview=preview,
+        )
+
+    def _derive_info_from_log(self, session_id: str) -> Optional[SessionInfo]:
+        """Rebuild one index entry from the append-only log."""
+        log = SessionLog(self._dir, session_id)
+        if not log.exists():
+            return None
+        messages = log.derive_messages()
+        header = log.read_header() or {}
+        stamp = str(header.get("created_at") or "") or self._file_stamp(log.path)
+        title = ""
+        preview = ""
+        for message in messages:
+            if message.get("role") != "user":
+                continue
+            content = str(message.get("content", "")).strip()
+            if content:
+                title = content[: self._auto_title_max_len]
+                preview = content[:100]
+                break
+        return SessionInfo(
+            id=session_id,
+            title=title or f"Recovered session {stamp[:16]}",
+            created_at=stamp,
+            modified_at=stamp,
+            message_count=len(messages),
             preview=preview,
         )
 
@@ -408,6 +460,13 @@ class SessionManager:
                 preview=preview,
             ))
             self._write_index(index)
+
+    def _sync_session_log(self, session_id: str, snapshot: dict[str, Any]) -> None:
+        """Append new events to the durable log; never fail the snapshot write."""
+        try:
+            SessionLog(self._dir, session_id).sync(snapshot)
+        except (OSError, TypeError, ValueError):
+            pass
 
     def _write_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         path = self._snapshot_path(session_id)
