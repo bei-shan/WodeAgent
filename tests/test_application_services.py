@@ -80,14 +80,16 @@ def test_stale_index_entry_is_hidden_and_pruned_on_activate(tmp_path, monkeypatc
     ghost = catalog.create_session("Ghost without snapshot")
     # Simulate a catalog entry whose snapshot was removed outside the catalog.
     catalog._snapshot_path(ghost).unlink()
-    assert catalog.get_session(ghost) is not None
+    # The raw cache still holds the entry; reading through the public API heals it.
+    assert any(item.id == ghost for item in catalog._load_index())
     assert not catalog.snapshot_exists(ghost)
     with TestClient(create_app(agent_factory=FakeAgent, project_root=str(tmp_path))) as client:
         listed = {item["id"] for item in client.get("/api/sessions").json()}
         assert ghost not in listed
         response = client.post(f"/api/sessions/{ghost}/activate")
         assert response.status_code == 404
-        assert "no longer exists" in response.json()["detail"]
+        # Either the lazy reconciler pruned it already or activate self-heals.
+        assert "not found" in response.json()["detail"].lower()
     # The unusable entry is gone so it cannot be offered again.
     assert SessionManager().get_session(ghost) is None
 

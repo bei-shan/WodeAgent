@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -27,6 +28,10 @@ from typing import Any, Optional
 # Local single-process safety only. A multi-instance deployment needs a
 # transactional shared session store (e.g. PostgreSQL), not JSON indexes.
 _INDEX_WRITE_LOCK = threading.RLock()
+
+# Snapshots are ``<12 hex>.json``; turn sidecars (``<id>.turn.json``) and the
+# index itself must never be treated as sessions during reconciliation.
+_SESSION_FILE = re.compile(r"([0-9a-f]{12})\.json\Z")
 
 
 @dataclass
@@ -62,6 +67,10 @@ class SessionManager:
         self._dir = Path(sessions_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._auto_title_max_len = auto_title_max_len
+        # index.json is a cache over snapshots: reconcile lazily, once per
+        # manager instance, so a crashed or manual edit cannot leave ghosts.
+        self._reconciled = False
+        self._reconcile_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -134,6 +143,7 @@ class SessionManager:
 
     def list_sessions(self) -> list[SessionInfo]:
         """Return all sessions sorted by *modified_at* descending."""
+        self._ensure_reconciled()
         return sorted(
             self._load_index(),
             key=lambda s: s.modified_at,
@@ -142,6 +152,7 @@ class SessionManager:
 
     def get_session(self, session_id: str) -> Optional[SessionInfo]:
         """Return metadata for a single session, or ``None``."""
+        self._ensure_reconciled()
         for s in self._load_index():
             if s.id == session_id:
                 return s
@@ -210,6 +221,99 @@ class SessionManager:
                 return False  # not found
             self._write_index(new_index)
             return True
+
+    # ------------------------------------------------------------------
+    # Index reconciliation (index.json is a cache over snapshots)
+    # ------------------------------------------------------------------
+
+    def _ensure_reconciled(self) -> None:
+        """Run the reconcile pass at most once per manager instance."""
+        if self._reconciled:
+            return
+        disabled = (os.getenv("SESSION_INDEX_RECONCILE", "true") or "").strip().lower()
+        if disabled in {"0", "false", "no", "off"}:
+            self._reconciled = True
+            return
+        with self._reconcile_lock:
+            if self._reconciled:
+                return
+            # Set before scanning: a snapshot read must never re-enter here.
+            self._reconciled = True
+            try:
+                self.reconcile_index()
+            except Exception:
+                self._reconciled = False
+
+    def reconcile_index(self) -> dict[str, int]:
+        """Make ``index.json`` agree with the snapshots on disk.
+
+        Snapshots are the source of truth. Orphan snapshots are indexed with
+        metadata derived from their history; entries whose snapshot vanished are
+        dropped. The write only happens when something actually changed.
+        """
+        with _INDEX_WRITE_LOCK:
+            index = self._load_index()
+            known = {item.id: item for item in index}
+            on_disk: dict[str, Path] = {}
+            for path in self._dir.glob("*.json"):
+                match = _SESSION_FILE.fullmatch(path.name)
+                if match:
+                    on_disk[match.group(1)] = path
+
+            kept = [info for session_id, info in known.items() if session_id in on_disk]
+            removed = len(known) - len(kept)
+            added = 0
+            for session_id, path in on_disk.items():
+                if session_id in known:
+                    continue
+                derived = self._derive_info(session_id, path)
+                if derived is None:
+                    continue
+                kept.append(derived)
+                added += 1
+
+            if added or removed:
+                kept.sort(key=lambda item: (item.created_at, item.id))
+                self._write_index(kept)
+            return {"added": added, "removed": removed}
+
+    def _derive_info(self, session_id: str, path: Path) -> Optional[SessionInfo]:
+        """Rebuild one index entry from its snapshot, or ``None`` if unreadable."""
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(snapshot, dict):
+            return None
+        history = snapshot.get("history_messages")
+        if not isinstance(history, list):
+            history = []
+        title = ""
+        preview = ""
+        for message in history:
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = str(message.get("content", "")).strip()
+            if content:
+                title = content[: self._auto_title_max_len]
+                preview = content[:100]
+                break
+        stamp = self._file_stamp(path)
+        return SessionInfo(
+            id=session_id,
+            title=title or f"Recovered session {stamp[:16]}",
+            created_at=stamp,
+            modified_at=stamp,
+            message_count=len(history),
+            preview=preview,
+        )
+
+    @staticmethod
+    def _file_stamp(path: Path) -> str:
+        try:
+            return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(path.stat().st_mtime))
+        except OSError:
+            return _now_iso()
 
     # ------------------------------------------------------------------
     # Internal
@@ -292,6 +396,18 @@ class SessionManager:
                     s.preview = preview
                     self._write_index(index)
                     return
+            # The entry is missing (pruned by reconciliation or never indexed):
+            # the snapshot write is authoritative, so rebuild the cache row.
+            now = _now_iso()
+            index.append(SessionInfo(
+                id=session_id,
+                title=title or f"New session {now[:16]}",
+                created_at=now,
+                modified_at=now,
+                message_count=message_count,
+                preview=preview,
+            ))
+            self._write_index(index)
 
     def _write_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         path = self._snapshot_path(session_id)
