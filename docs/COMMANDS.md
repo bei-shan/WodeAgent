@@ -40,6 +40,16 @@ python -m ridgecode tui
 
 OpenTUI 使用已经启动的本地 Agent API。按需配置 `RIDGECODE_SERVER`、`RIDGECODE_AUTH_TOKEN`。TUI 与 Web 是客户端，不会自动创建独立的 Hosted Worker。
 
+## 作为编辑器后端（ACP）
+
+```bash
+python -m ridgecode acp --cwd /path/to/workspace
+```
+
+以 stdio 上的 JSON-RPC 提供 [Agent Client Protocol](https://agentclientprotocol.com) 子集：`initialize`、`session/new`、`session/load`、`session/prompt`、`session/cancel`。Agent 回复通过 `session/update`（`agent_message_chunk`）流式发送，工具调用以 `tool_call` / `tool_call_update` 通知转发。
+
+支持 ACP 的编辑器（如 Zed）把上面的命令配置为 agent 启动命令即可；会话在进程内创建，进程退出即结束。该模式只面向本地受信任环境，不提供鉴权或多租户隔离。
+
 ## 检查、评测和测试
 
 ```bash

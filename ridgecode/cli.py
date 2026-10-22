@@ -76,6 +76,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cmds.add_parser("web", help="Start the local Vite Web client (requires npm ci)")
     cmds.add_parser("tui", help="Start the OpenTUI client (requires bun install)")
+    acp = cmds.add_parser("acp", help="Run the Agent Client Protocol server over stdio")
+    acp.add_argument("--cwd", default=".", help="Default workspace root for new sessions")
 
     evaluate = cmds.add_parser("eval", help="Run offline scripted Agent evaluation")
     evaluate.add_argument("--json", action="store_true")
@@ -109,6 +111,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _ui("npm", "desktop/web", ["run", "dev"])
     if args.command == "tui":
         return _ui("bun", "tui", ["run", "dev"])
+    if args.command == "acp":
+        from ridgecode.acp import main as acp_main
+        return acp_main(["--cwd", args.cwd])
     if args.command == "eval":
         from scripts.agent_eval import main as evaluate
         options = ["--json"] if args.json else []
