@@ -105,13 +105,13 @@ class SessionManager:
     def save_session(self, session_id: str, snapshot: dict[str, Any]) -> None:
         """Persist a session snapshot and update the index.
 
-        Automatically extracts *title* from the first user message if
-        the current title is a placeholder.
+        The durable log is written first: a crash between the two writes leaves
+        the log ahead of the snapshot, and readers prefer the log. The snapshot
+        stays the compatibility export. Automatically extracts *title* from the
+        first user message if the current title is a placeholder.
         """
-        self._write_snapshot(session_id, snapshot)
-        # Durable append-only log: the snapshot stays the compatibility surface,
-        # the log is what future readers and migrations derive from.
         self._sync_session_log(session_id, snapshot)
+        self._write_snapshot(session_id, snapshot)
         history = snapshot.get("history_messages") or []
         message_count = len(history)
         preview = ""
@@ -149,10 +149,39 @@ class SessionManager:
             return None
         if not isinstance(snapshot, dict):
             return None
+        snapshot = self._prefer_log_history(session_id, snapshot)
         self._repair_log_behind_snapshot(session_id, snapshot)
         if needs_migration(snapshot):
             snapshot = self._migrate_on_load(session_id, snapshot)
         return snapshot
+
+    def _prefer_log_history(self, session_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Use the log's history when it is strictly ahead of the snapshot.
+
+        The log is written before the snapshot, so a crash can leave the log
+        ahead. A shorter log (older code, manual edit) is left to the repair
+        pass instead. Branch/rollback sessions are republished, so the log never
+        carries a stale longer history for them.
+        """
+        log = SessionLog(self._dir, session_id)
+        if not log.exists():
+            return snapshot
+        try:
+            logged = log.derive_messages()
+        except OSError:
+            return snapshot
+        current = snapshot.get("history_messages") or []
+        if len(logged) <= len(current):
+            return snapshot
+        merged = dict(snapshot)
+        merged["history_messages"] = logged
+        entries = log.derive_entries()
+        if entries:
+            merged["history_entries"] = entries
+        cursor = log.read_cursor()
+        if cursor:
+            merged["cursor_id"] = cursor
+        return merged
 
     def _migrate_on_load(self, session_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
         """Migrate a legacy snapshot once, then persist the stamped version."""

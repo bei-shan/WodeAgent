@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from core.session_log import LOG_SUFFIX, SessionLog
 from core.session_manager import SessionManager
 
@@ -200,3 +202,54 @@ def test_delete_removes_log_and_cursor_state(tmp_path):
     assert manager.delete_session(session_id) is True
     assert not log.path.exists()
     assert not log.state_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Log-first reads (B2c)
+# ---------------------------------------------------------------------------
+def test_log_ahead_of_snapshot_wins_on_load(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("ahead")
+    manager.save_session(session_id, _snapshot(("user", "one"), ("assistant", "two")))
+
+    # Simulate a crash after the log append but before the snapshot write.
+    ahead = _snapshot(("user", "one"), ("assistant", "two"), ("user", "three"))
+    ahead["cursor_id"] = "m3"
+    SessionLog(tmp_path, session_id).sync(ahead)
+
+    loaded = manager.load_session(session_id)
+    assert loaded is not None
+    assert [m["content"] for m in loaded["history_messages"]] == ["one", "two", "three"]
+    assert len(loaded["history_entries"]) == 3
+    assert loaded["cursor_id"] == "m3"
+
+
+def test_snapshot_write_failure_still_leaves_a_readable_log(tmp_path, monkeypatch):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("crash")
+
+    def boom(session_id: str, snapshot: dict) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "_write_snapshot", boom)
+    with pytest.raises(OSError):
+        manager.save_session(session_id, _snapshot(("user", "survived")))
+
+    monkeypatch.undo()
+    loaded = manager.load_session(session_id)
+    assert loaded is not None
+    assert [m["content"] for m in loaded["history_messages"]] == ["survived"]
+
+
+def test_branch_shrink_is_not_overridden_by_the_older_log(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("branch")
+    manager.save_session(
+        session_id, _snapshot(("user", "a"), ("assistant", "b"), ("user", "c")),
+    )
+    manager.save_session(session_id, _snapshot(("user", "a")))
+
+    loaded = manager.load_session(session_id)
+    assert loaded is not None
+    assert [m["content"] for m in loaded["history_messages"]] == ["a"]
+    assert len(SessionLog(tmp_path, session_id).derive_messages()) == 1
