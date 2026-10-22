@@ -142,7 +142,23 @@ class SessionManager:
             snapshot = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
-        return snapshot if isinstance(snapshot, dict) else None
+        if not isinstance(snapshot, dict):
+            return None
+        self._repair_log_behind_snapshot(session_id, snapshot)
+        return snapshot
+
+    def _repair_log_behind_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
+        """Append events the log is missing so both views agree on read."""
+        log = SessionLog(self._dir, session_id)
+        if not log.exists():
+            return
+        try:
+            logged = len(log.derive_messages())
+            current = len(snapshot.get("history_messages") or [])
+            if logged < current:
+                log.sync(snapshot)
+        except (OSError, TypeError, ValueError):
+            pass
 
     def snapshot_exists(self, session_id: str) -> bool:
         """Return ``True`` when a snapshot file is present for *session_id*.
@@ -227,7 +243,9 @@ class SessionManager:
                     return False
 
             try:
-                SessionLog(self._dir, session_id).path.unlink(missing_ok=True)
+                log = SessionLog(self._dir, session_id)
+                log.path.unlink(missing_ok=True)
+                log.state_path.unlink(missing_ok=True)
             except OSError:
                 pass
 

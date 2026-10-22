@@ -126,3 +126,77 @@ def test_log_records_reasoning_and_metadata(tmp_path):
     assert events[0]["reasoning_content"] == "why"
     assert events[0]["metadata"] == {"step": 2}
     assert json.loads(json.dumps(events[0]))["seq"] == 1
+
+
+def test_cursor_state_is_written_and_fallback_still_appends(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("cursor state")
+    manager.save_session(session_id, _snapshot(("user", "a"), ("assistant", "b")))
+    log = SessionLog(tmp_path, session_id)
+    state = json.loads(log.state_path.read_text(encoding="utf-8"))
+    assert state["events"] == 2
+    assert state["size"] == log.path.stat().st_size
+
+    # Losing the cursor only costs a rescan; appends must stay correct.
+    log.state_path.unlink()
+    manager.save_session(
+        session_id, _snapshot(("user", "a"), ("assistant", "b"), ("user", "c")),
+    )
+    lines = [line for line in log.path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1 + 3
+    assert [m["content"] for m in log.derive_messages()] == ["a", "b", "c"]
+
+
+def test_cursor_events_track_and_deduplicate(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("cursor")
+    snapshot = _snapshot(("user", "hi"), ("assistant", "there"))
+    snapshot["cursor_id"] = "m2"
+    manager.save_session(session_id, snapshot)
+
+    log = SessionLog(tmp_path, session_id)
+    assert log.read_cursor() == "m2"
+    assert log.to_snapshot()["cursor_id"] == "m2"
+    cursor_lines = [
+        line for line in log.path.read_text(encoding="utf-8").splitlines()
+        if '"type": "cursor"' in line
+    ]
+    assert len(cursor_lines) == 1
+
+    manager.save_session(session_id, snapshot)  # unchanged cursor: no new event
+    assert len([line for line in log.path.read_text(encoding="utf-8").splitlines()
+                if '"type": "cursor"' in line]) == 1
+
+    snapshot["cursor_id"] = "m1"
+    manager.save_session(session_id, snapshot)
+    assert SessionLog(tmp_path, session_id).read_cursor() == "m1"
+
+
+def test_load_repairs_a_log_that_lags_the_snapshot(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("lagging")
+    manager.save_session(session_id, _snapshot(("user", "one")))
+
+    # Snapshot advanced on disk without going through save_session.
+    (tmp_path / f"{session_id}.json").write_text(
+        json.dumps(_snapshot(("user", "one"), ("assistant", "two"), ("user", "three"))),
+        encoding="utf-8",
+    )
+    loaded = manager.load_session(session_id)
+    assert loaded is not None
+    assert len(loaded["history_messages"]) == 3
+    assert [m["content"] for m in SessionLog(tmp_path, session_id).derive_messages()] == [
+        "one", "two", "three",
+    ]
+
+
+def test_delete_removes_log_and_cursor_state(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    session_id = manager.create_session("bye")
+    manager.save_session(session_id, _snapshot(("user", "x")))
+    log = SessionLog(tmp_path, session_id)
+    assert log.state_path.exists()
+
+    assert manager.delete_session(session_id) is True
+    assert not log.path.exists()
+    assert not log.state_path.exists()
