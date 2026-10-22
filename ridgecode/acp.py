@@ -91,6 +91,7 @@ class AcpServer:
         *,
         stdin: Optional[TextIO] = None,
         stdout: Optional[TextIO] = None,
+        permission_timeout_s: float = 300.0,
     ):
         self._factory = factory
         self._in = stdin or sys.stdin
@@ -98,6 +99,10 @@ class AcpServer:
         self._write_lock = threading.Lock()
         self._sessions: dict[str, AcpSession] = {}
         self._sessions_lock = threading.Lock()
+        self._permission_timeout_s = max(0.01, float(permission_timeout_s))
+        self._pending: dict[Any, dict[str, Any]] = {}
+        self._pending_lock = threading.Lock()
+        self._next_request_id = 1000
 
     # ------------------------------------------------------------------
     # Transport
@@ -116,6 +121,80 @@ class AcpServer:
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
+
+    # ------------------------------------------------------------------
+    # Client-bound requests (permission approval)
+    # ------------------------------------------------------------------
+    def _resolve_pending(self, request_id: Any, message: dict[str, Any]) -> None:
+        with self._pending_lock:
+            entry = self._pending.get(request_id)
+        if entry is None:
+            return
+        entry["result"] = message.get("result")
+        entry["error"] = message.get("error")
+        entry["event"].set()
+
+    def _request_client(
+        self, method: str, params: dict[str, Any], timeout_s: float,
+    ) -> tuple[bool, Optional[dict[str, Any]]]:
+        with self._pending_lock:
+            self._next_request_id += 1
+            request_id = self._next_request_id
+            entry: dict[str, Any] = {
+                "event": threading.Event(), "result": None, "error": None,
+            }
+            self._pending[request_id] = entry
+        self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        completed = entry["event"].wait(timeout_s)
+        with self._pending_lock:
+            self._pending.pop(request_id, None)
+        return (True, entry) if completed else (False, None)
+
+    def _ask_permission(
+        self, session_id: str, description: str, tool_name: str, action: str,
+    ) -> str:
+        """Bridge one tool permission prompt to the editor; deny by default."""
+        params = {
+            "sessionId": session_id,
+            "toolCall": {
+                "toolCallId": f"perm-{uuid.uuid4().hex[:8]}",
+                "title": f"{tool_name}: {action}",
+                "kind": "other",
+                "status": "pending",
+                "content": [{"type": "text", "text": str(description)[:2000]}],
+            },
+            "options": [
+                {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+            ],
+        }
+        completed, entry = self._request_client(
+            "session/request_permission", params, self._permission_timeout_s,
+        )
+        if not completed or entry is None or entry.get("error"):
+            return "denied"
+        outcome = ((entry.get("result") or {}).get("outcome") or {})
+        if outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow":
+            return "granted"
+        return "denied"
+
+    def _install_permission_broker(self, session_id: str, agent: Any) -> None:
+        """Route gate and host-command approvals to the editor client."""
+
+        def broker(description: str, tool_name: str, action: str) -> str:
+            return self._ask_permission(session_id, description, tool_name, action)
+
+        gate = getattr(agent, "_permission_gate", None)
+        if gate is not None:
+            try:
+                gate._broker = broker
+            except Exception:
+                pass
+        registry = getattr(agent, "tool_registry", None)
+        get_tool = getattr(registry, "get_tool", None)
+        bash = get_tool("Bash") if callable(get_tool) else None
+        if bash is not None and hasattr(bash, "_command_approval_broker"):
+            bash._command_approval_broker = broker
 
     # ------------------------------------------------------------------
     # Loop
@@ -143,7 +222,10 @@ class AcpServer:
         method = message.get("method")
         msg_id = message.get("id")
         if not isinstance(method, str):
-            return None  # a response from the client; nothing to do
+            # A response from the client (e.g. a permission decision).
+            if msg_id is not None:
+                self._resolve_pending(msg_id, message)
+            return None
         params = message.get("params")
         if not isinstance(params, dict):
             params = {}
@@ -205,6 +287,7 @@ class AcpServer:
             session_id, cwd, agent,
             on_event=lambda event: self._forward_event(session_id, event),
         )
+        self._install_permission_broker(session_id, agent)
         with self._sessions_lock:
             self._sessions[session_id] = session
         return {"sessionId": session_id}

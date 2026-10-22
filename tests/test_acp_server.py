@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import json
 import threading
+import time
+from types import SimpleNamespace
 
 from core.events import AgentEvent, EventType
 from ridgecode.acp import (
@@ -210,3 +212,110 @@ def test_close_disposes_agents():
     server.handle({"jsonrpc": "2.0", "id": 16, "method": "session/new", "params": {"cwd": "/tmp"}})
     server.close()
     assert closed == [True]
+
+
+# ---------------------------------------------------------------------------
+# Permission approvals
+# ---------------------------------------------------------------------------
+def _wait_for_permission_request(out: io.StringIO, timeout: float = 2.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for message in _messages(out):
+            if message.get("method") == "session/request_permission":
+                return message
+        time.sleep(0.01)
+    raise AssertionError("no session/request_permission was emitted")
+
+
+def _ask_in_thread(server, session_id, holder):
+    holder["decision"] = server._ask_permission(session_id, "/tmp/outside", "Write", "write")
+    holder["done"].set()
+
+
+def _new_session(server, request_id: int = 20) -> str:
+    return server.handle({
+        "jsonrpc": "2.0", "id": request_id, "method": "session/new", "params": {"cwd": "/tmp"},
+    })["sessionId"]
+
+
+def test_permission_request_is_forwarded_and_granted():
+    server, out = _server(FakeAgent())
+    session_id = _new_session(server)
+    holder: dict = {"done": threading.Event()}
+    thread = threading.Thread(target=_ask_in_thread, args=(server, session_id, holder))
+    thread.start()
+
+    request = _wait_for_permission_request(out)
+    assert request["params"]["sessionId"] == session_id
+    assert request["params"]["toolCall"]["title"] == "Write: write"
+    assert [option["optionId"] for option in request["params"]["options"]] == ["allow", "reject"]
+
+    server.handle({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {"outcome": {"outcome": "selected", "optionId": "allow"}},
+    })
+    assert holder["done"].wait(timeout=2)
+    thread.join(timeout=2)
+    assert holder["decision"] == "granted"
+
+
+def test_permission_rejection_and_cancellation_deny():
+    for outcome in ({"outcome": "selected", "optionId": "reject"}, {"outcome": "cancelled"}):
+        server, out = _server(FakeAgent())
+        session_id = _new_session(server)
+        holder: dict = {"done": threading.Event()}
+        thread = threading.Thread(target=_ask_in_thread, args=(server, session_id, holder))
+        thread.start()
+
+        request = _wait_for_permission_request(out)
+        server.handle({"jsonrpc": "2.0", "id": request["id"], "result": {"outcome": outcome}})
+        assert holder["done"].wait(timeout=2)
+        thread.join(timeout=2)
+        assert holder["decision"] == "denied"
+
+
+def test_permission_timeout_denies():
+    agent = FakeAgent()
+    out = io.StringIO()
+    server = AcpServer(lambda cwd: agent, stdout=out, permission_timeout_s=0.05)
+    session_id = _new_session(server)
+
+    started = time.monotonic()
+    assert server._ask_permission(session_id, "/tmp/x", "Write", "write") == "denied"
+    assert time.monotonic() - started < 2
+    # The stale request id must not leak into the pending table.
+    assert not server._pending
+
+
+def test_brokers_are_installed_on_the_agent():
+    class Agent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self._permission_gate = SimpleNamespace(_broker=None)
+            self.bash_tool = SimpleNamespace(_command_approval_broker=None)
+            self.tool_registry = SimpleNamespace(
+                get_tool=lambda name: self.bash_tool if name == "Bash" else None,
+            )
+
+    agent = Agent()
+    server, out = _server(agent)
+    _new_session(server)
+
+    assert callable(agent._permission_gate._broker)
+    assert callable(agent.bash_tool._command_approval_broker)
+
+    holder: dict = {"done": threading.Event()}
+    thread = threading.Thread(
+        target=lambda: holder.update(decision=agent._permission_gate._broker("cmd", "Bash", "execute-command")),
+    )
+    thread.start()
+    request = _wait_for_permission_request(out)
+    assert request["params"]["toolCall"]["title"] == "Bash: execute-command"
+    server.handle({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {"outcome": {"outcome": "selected", "optionId": "allow"}},
+    })
+    thread.join(timeout=2)
+    assert holder["decision"] == "granted"

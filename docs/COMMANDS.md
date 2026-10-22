@@ -48,6 +48,8 @@ python -m ridgecode acp --cwd /path/to/workspace
 
 以 stdio 上的 JSON-RPC 提供 [Agent Client Protocol](https://agentclientprotocol.com) 子集：`initialize`、`session/new`、`session/load`、`session/prompt`、`session/cancel`。Agent 回复通过 `session/update`（`agent_message_chunk`）流式发送，工具调用以 `tool_call` / `tool_call_update` 通知转发。
 
+需要用户确认的文件/命令操作会以 `session/request_permission` 反向请求编辑器，客户端返回 `selected` 才放行；超时、取消或未实现该请求一律按拒绝处理（fail closed）。
+
 支持 ACP 的编辑器（如 Zed）把上面的命令配置为 agent 启动命令即可；会话在进程内创建，进程退出即结束。该模式只面向本地受信任环境，不提供鉴权或多租户隔离。
 
 ## 检查、评测和测试
