@@ -183,7 +183,7 @@ class Config(BaseModel):
         if teammate_mode_raw not in {"auto", "in-process", "tmux"}:
             teammate_mode_raw = "auto"
 
-        return cls(
+        config = cls(
             # LLM
             default_model=env_str("LLM_MODEL_ID", "gpt-3.5-turbo"),
             default_provider=env_str("LLM_PROVIDER", "openai"),
@@ -290,6 +290,15 @@ class Config(BaseModel):
             team_max_inbox_size=env_int("TEAM_MAX_INBOX_SIZE", 10000),
             team_max_work_items=env_int("TEAM_MAX_WORK_ITEMS", 5000),
         )
+        # A settings file written from the Web UI overrides env defaults for
+        # agents constructed after the change; a broken file never blocks boot.
+        try:
+            from core.context_settings import apply_overrides
+
+            apply_overrides(config)
+        except Exception:
+            pass
+        return config
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典（兼容旧接口）。"""

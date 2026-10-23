@@ -631,6 +631,23 @@ def create_app(
             "rounds_count": info.get("rounds_count"),
         }
 
+    # ── Context compaction settings ─────────────────────────────
+    @app.get("/api/settings/context")
+    async def get_context_settings():
+        from core.context_settings import load_settings
+
+        return {"settings": load_settings().to_dict()}
+
+    @app.put("/api/settings/context")
+    async def update_context_settings(body: dict):
+        from core.context_settings import ContextSettingsError, save_settings
+
+        try:
+            saved = await asyncio.to_thread(save_settings, body)
+        except ContextSettingsError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {"settings": saved.to_dict()}
+
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):
         data = app.state.session_service.export_portable(sid)

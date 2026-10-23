@@ -549,6 +549,49 @@ class HistoryManager:
         })
         return info if return_info else True
 
+    def _collect_touched_paths(self, messages: List[Message], limit: int = 20) -> List[str]:
+        """File paths referenced by tool calls in the compressed region.
+
+        A path-only digest restores orientation after compaction without
+        re-reading file contents, which would immediately refill the window.
+        """
+        file_tools = {
+            "Read", "Write", "Edit", "MultiEdit", "LS", "Glob", "Grep",
+        }
+        paths: List[str] = []
+        seen: set[str] = set()
+        for message in messages:
+            if message.role != "assistant":
+                continue
+            calls = (message.metadata or {}).get("tool_calls") or []
+            for call in calls if isinstance(calls, list) else []:
+                function = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(function, dict):
+                    continue
+                if str(function.get("name") or "") not in file_tools:
+                    continue
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (TypeError, ValueError):
+                        continue
+                if not isinstance(arguments, dict):
+                    continue
+                for key in ("path", "file_path", "file", "pattern"):
+                    value = arguments.get(key)
+                    if not isinstance(value, str):
+                        continue
+                    candidate = value.strip()
+                    if not candidate or len(candidate) > 300 or candidate in seen:
+                        continue
+                    seen.add(candidate)
+                    paths.append(candidate)
+                    break
+                if len(paths) >= limit:
+                    return paths
+        return paths
+
     def prune_tool_outputs(
         self, *, keep_rounds: int | None = None, min_chars: int | None = None,
     ) -> int:
@@ -718,6 +761,15 @@ class HistoryManager:
             return info if return_info else False
 
         new_summary = new_summary.strip()
+        touched = self._collect_touched_paths(messages_to_compress)
+        if touched:
+            digest = (
+                "\n\n<files_touched>\n"
+                + "\n".join(f"- {path}" for path in touched)
+                + "\n</files_touched>"
+            )
+            if len(new_summary) + len(digest) <= self._config.summary_output_max_chars:
+                new_summary += digest
 
         # A tiny but durable user-goal anchor survives successive compactions,
         # even if a later model forgets the original objective. Treat this as

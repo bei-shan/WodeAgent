@@ -54,6 +54,7 @@ function AppCore() {
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [actionNotice, setActionNotice] = useState('')
   const [goal, setGoal] = useState<api.GoalInfo | null>(null)
   const [goalOpen, setGoalOpen] = useState(false)
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
@@ -273,6 +274,21 @@ function AppCore() {
     if (!activeSidRef.current) return
     try { await api.sessions.interrupt(activeSidRef.current) }
     catch (e: any) { alert('中断失败：' + e.message) }
+  }
+
+  const compactHistory = async () => {
+    const sid = activeSidRef.current
+    if (!sid) return
+    const focus = window.prompt('压缩焦点（可选，例如：保留 API 设计细节）') ?? ''
+    try {
+      const result = await api.sessions.compact(sid, focus)
+      setActionNotice(result.compacted
+        ? '已压缩历史' + (result.summary_generated ? '（含摘要）' : '')
+        : '未压缩：' + (result.reason || '内容不足'))
+    } catch (error: any) {
+      setActionNotice('压缩失败：' + (error?.message || String(error)))
+    }
+    window.setTimeout(() => setActionNotice(''), 5000)
   }
 
   // File upload
@@ -515,6 +531,13 @@ function AppCore() {
                 {tools.length > 0 && <span className="execution-count">{tools.length}</span>}
               </button>
             )}
+            {activeSid && (
+              <button type="button" className="execution-launch" onClick={compactHistory}
+                title="把较早的历史压缩成摘要，减小上下文">
+                <Svg d={Icons.clock} size={16} />
+                <span className="hidden sm:inline">压缩上下文</span>
+              </button>
+            )}
             {sending && (
               <button type="button" onClick={interrupt}
                 className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">停止生成</button>
@@ -525,6 +548,12 @@ function AppCore() {
             </a>
           </div>
         </header>
+
+        {actionNotice && (
+          <div className="px-4 py-1.5 text-xs text-gray-500 bg-gray-50 border-b border-gray-100">
+            {actionNotice}
+          </div>
+        )}
 
         {sidebarTab === 'skills' && (
           <SkillsPanel skills={skillsList} onRefresh={async () => { try { setSkillsList(await api.skills.list()) } catch {} }} />

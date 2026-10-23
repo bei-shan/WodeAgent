@@ -588,6 +588,7 @@ export function ModelsPanel() {
 
         {notice && <div className="text-xs text-gray-500 mb-3">{notice}</div>}
         <SearchSettingsCard onNotice={setNotice} />
+        <CompactionSettingsCard onNotice={setNotice} />
 
         <div className="space-y-2 mb-6">
           {settings.profiles.length === 0 && (
@@ -863,6 +864,87 @@ export function ToolsPanel() {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+export function CompactionSettingsCard({ onNotice }: { onNotice: (text: string) => void }) {
+  const [settings, setSettings] = useState<api.ContextSettings | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.contextSettings.get().then(result => setSettings(result.settings)).catch(cause => {
+      onNotice(cause instanceof Error ? cause.message : String(cause))
+    })
+  }, [])
+
+  if (!settings) return null
+
+  const update = (patch: Partial<api.ContextSettings>) => {
+    setSettings({ ...settings, ...patch })
+  }
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      const result = await api.contextSettings.save(settings)
+      setSettings(result.settings)
+      onNotice('压缩设置已保存（对新会话生效）')
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+      <div className="text-sm font-medium text-gray-700 mb-3">上下文压缩</div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-gray-500">
+          摘要阈值（0.5–0.95）
+          <input type="number" step={0.05} min={0.5} max={0.95}
+            value={settings.compression_threshold}
+            onChange={event => update({ compression_threshold: Number(event.target.value) })}
+            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+        </label>
+        <label className="text-xs text-gray-500">
+          保留最近轮数（2–40）
+          <input type="number" min={2} max={40} value={settings.min_retain_rounds}
+            onChange={event => update({ min_retain_rounds: Number(event.target.value) })}
+            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+        </label>
+        <label className="text-xs text-gray-500">
+          修剪起始比例（0.3–0.9）
+          <input type="number" step={0.05} min={0.3} max={0.9}
+            value={settings.tool_prune_soft_ratio}
+            disabled={!settings.tool_prune_enabled}
+            onChange={event => update({ tool_prune_soft_ratio: Number(event.target.value) })}
+            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm disabled:opacity-40" />
+        </label>
+        <label className="text-xs text-gray-500">
+          修剪保留轮数（1–10）
+          <input type="number" min={1} max={10}
+            value={settings.tool_prune_keep_rounds}
+            disabled={!settings.tool_prune_enabled}
+            onChange={event => update({ tool_prune_keep_rounds: Number(event.target.value) })}
+            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm disabled:opacity-40" />
+        </label>
+      </div>
+      <label className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+        <input type="checkbox" checked={settings.tool_prune_enabled}
+          onChange={event => update({ tool_prune_enabled: event.target.checked })} />
+        先修剪旧工具输出，再考虑生成摘要
+      </label>
+      <div className="flex justify-end mt-3">
+        <button type="button" onClick={save} disabled={busy}
+          className="px-4 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-40">
+          保存压缩设置
+        </button>
+      </div>
+      <p className="text-[10px] text-gray-400 mt-2">
+        写入 .mycodeagent/settings/context.json，环境变量仍是进程启动时的默认值。
+      </p>
     </div>
   )
 }

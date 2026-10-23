@@ -108,3 +108,21 @@ def test_compact_endpoint_rejects_unknown_sessions(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     with TestClient(app) as client:
         assert client.post("/api/sessions/ffffffffffff/compact", json={}).status_code == 404
+
+def test_compact_appends_a_bounded_path_digest():
+    import json
+
+    captured: dict = {}
+    manager = _manager(captured)
+    for index in range(5):
+        manager.append_user(f"question {index}")
+        manager.append_assistant("working", metadata={"tool_calls": [
+            {"function": {"name": "Read", "arguments": json.dumps({"path": f"src/file{index}.py"})}},
+        ]})
+
+    assert manager.compact(return_info=True)["compressed"] is True
+    summary = next(m.content for m in manager._messages if m.role == "summary")
+    assert "<files_touched>" in summary
+    assert "src/file0.py" in summary
+    # The retained tail is not part of the compressed region.
+    assert "src/file4.py" not in summary

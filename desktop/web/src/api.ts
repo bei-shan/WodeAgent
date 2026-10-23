@@ -161,6 +161,10 @@ export const sessions = {
     req<{ status: string }>('POST', `/sessions/${id}/messages`, { content }),
   interrupt: (id: string) =>
     req<{ status: string }>('POST', `/sessions/${id}/interrupt`),
+  compact: (id: string, focus = '') =>
+    req<{ compacted: boolean; reason: string; summary_generated: boolean }>(
+      'POST', `/sessions/${encodeURIComponent(id)}/compact`, { focus },
+    ),
   resolvePerm: (sid: string, rid: string, decision: string) =>
     req<{ status: string }>('POST', `/sessions/${sid}/permissions/${rid}/resolve`, { decision }),
   answerAsk: (sid: string, rid: string, answer: string) =>
@@ -299,6 +303,22 @@ export const settingsKeys = {
     req<{ name: string; backend: string; configured: boolean }>('PUT', '/settings/keys', body),
   remove: (name: string) =>
     req<{ deleted: boolean }>('DELETE', `/settings/keys/${encodeURIComponent(name)}`),
+};
+
+// ── Context compaction settings ──────────────────────────────────────
+
+export interface ContextSettings {
+  compression_threshold: number;
+  min_retain_rounds: number;
+  tool_prune_enabled: boolean;
+  tool_prune_soft_ratio: number;
+  tool_prune_keep_rounds: number;
+}
+
+export const contextSettings = {
+  get: () => req<{ settings: ContextSettings }>('GET', '/settings/context'),
+  save: (values: Partial<ContextSettings>) =>
+    req<{ settings: ContextSettings }>('PUT', '/settings/context', values),
 };
 
 // ── Tool manifest ────────────────────────────────────────────────────
