@@ -16,7 +16,7 @@ import re
 import socket
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from typing import Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -286,6 +286,37 @@ def _classify(content_type: str) -> str:
     return "unknown"
 
 
+FETCH_CACHE_TTL_S = 300.0
+FETCH_CACHE_MAX_ENTRIES = 32
+_FETCH_CACHE: "dict[tuple[str, str], tuple[FetchResult, float]]" = {}
+_FETCH_CACHE_LOCK = threading.Lock()
+
+
+def clear_fetch_cache() -> None:
+    with _FETCH_CACHE_LOCK:
+        _FETCH_CACHE.clear()
+
+
+def _cache_get(key: tuple[str, str], now: float) -> Optional[FetchResult]:
+    with _FETCH_CACHE_LOCK:
+        entry = _FETCH_CACHE.get(key)
+        if entry is None:
+            return None
+        result, expires_at = entry
+        if expires_at <= now:
+            _FETCH_CACHE.pop(key, None)
+            return None
+        return replace(result)
+
+
+def _cache_put(key: tuple[str, str], result: FetchResult, now: float) -> None:
+    with _FETCH_CACHE_LOCK:
+        if len(_FETCH_CACHE) >= FETCH_CACHE_MAX_ENTRIES:
+            oldest = min(_FETCH_CACHE, key=lambda item: _FETCH_CACHE[item][1])
+            _FETCH_CACHE.pop(oldest, None)
+        _FETCH_CACHE[key] = (replace(result), now + FETCH_CACHE_TTL_S)
+
+
 def fetch_url(
     url: str,
     *,
@@ -295,17 +326,52 @@ def fetch_url(
     user_agent: str = DEFAULT_USER_AGENT,
     rate_limiter: Optional[HostRateLimiter] = None,
     format: str = "markdown",
+    use_cache: bool = True,
 ) -> FetchResult:
     """Fetch one public URL, following redirects with re-validation.
 
     ``format`` selects how HTML becomes model-readable text: ``markdown`` keeps
-    headings, links, lists and code fences; ``text`` flattens to prose.
+    headings, links, lists and code fences; ``text`` flattens to prose. Successful
+    responses are cached for ``FETCH_CACHE_TTL_S`` so repeated reads of the same
+    page neither re-download nor re-consume the per-host budget.
     """
+    normalized = assert_public_url(url)
+    key = (normalized, format)
+    now = time.monotonic()
+    if use_cache:
+        cached = _cache_get(key, now)
+        if cached is not None:
+            return cached
+    result = _fetch_uncached(
+        normalized,
+        timeout_s=timeout_s,
+        max_bytes=max_bytes,
+        max_redirects=max_redirects,
+        user_agent=user_agent,
+        rate_limiter=rate_limiter,
+        format=format,
+    )
+    if use_cache:
+        _cache_put(key, result, now)
+    return result
+
+
+def _fetch_uncached(
+    url: str,
+    *,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+    user_agent: str = DEFAULT_USER_AGENT,
+    rate_limiter: Optional[HostRateLimiter] = None,
+    format: str = "markdown",
+) -> FetchResult:
+    """Perform the request; *url* must already be normalized and validated."""
     import httpx
 
     as_markdown = format != "text"
     limiter = rate_limiter or DEFAULT_RATE_LIMITER
-    current = assert_public_url(url)
+    current = url
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",

@@ -195,6 +195,20 @@ def test_web_fetch_passes_format_and_reports_it():
     assert payload["data"]["format"] == "markdown"
 
 
+def test_web_fetch_passes_fresh_as_the_cache_switch():
+    seen = {}
+
+    def fetcher(url, **kwargs):
+        seen.update(kwargs)
+        return _fetch_result("x")
+
+    tool = WebFetchTool(fetcher=fetcher, rate_limiter=_limiters())
+    tool.run({"url": "https://example.com/", "fresh": True})
+    assert seen["use_cache"] is False
+    tool.run({"url": "https://example.com/"})
+    assert seen["use_cache"] is True
+
+
 def test_web_fetch_rejects_unknown_format():
     tool = WebFetchTool(fetcher=lambda url, **kwargs: _fetch_result("x"))
     payload = _payload(tool.run({"url": "https://example.com/", "format": "pdf"}))

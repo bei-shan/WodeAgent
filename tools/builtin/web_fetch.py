@@ -76,6 +76,13 @@ class WebFetchTool(Tool):
                 required=False,
                 default="markdown",
             ),
+            ToolParameter(
+                name="fresh",
+                type="boolean",
+                description="跳过 5 分钟响应缓存重新抓取（默认 false）。",
+                required=False,
+                default=False,
+            ),
         ]
 
     def is_concurrency_safe(self, parameters: Dict[str, Any]) -> bool:
@@ -149,6 +156,7 @@ class WebFetchTool(Tool):
                         timeout_s=timeout_ms / 1000.0,
                         rate_limiter=self._rate_limiter,
                         format=fmt,
+                        use_cache=not bool(params_input.get("fresh")),
                     )
                     break
                 except web_guard.WebAccessTimeout:
