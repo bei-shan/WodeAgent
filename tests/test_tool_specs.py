@@ -110,3 +110,14 @@ def test_team_tools_stay_registered_but_are_only_summarized():
     )
     assert team_notes > 500
     assert len(notes) < expanded - team_notes + 400
+
+def test_discovery_visibility_derives_from_the_manifest():
+    """One source of truth: schemas hidden by discovery == deferred tools."""
+    from core.runtime.tool_catalog import DEFAULT_ALWAYS_VISIBLE
+    from tools.tool_specs import CORE_TOOLS
+
+    assert DEFAULT_ALWAYS_VISIBLE == CORE_TOOLS | {"ToolSearch"}
+    for deferred in ("MultiEdit", "LS", "Workflow", "TeamFanout", "TeamCollect"):
+        assert deferred not in DEFAULT_ALWAYS_VISIBLE
+    for core in ("Read", "Bash", "WebSearch", "WebFetch", "Goal", "Memory"):
+        assert core in DEFAULT_ALWAYS_VISIBLE

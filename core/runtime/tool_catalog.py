@@ -12,14 +12,12 @@ from collections.abc import Callable
 from typing import Any
 
 from tools.base import ErrorCode, Tool, ToolParameter
+from tools.tool_specs import CORE_TOOLS
 
-# Keep file/code primitives available; defer optional MCP, team and plugin
-# integrations until searched. Callers may override this explicit allowlist.
-DEFAULT_ALWAYS_VISIBLE: frozenset[str] = frozenset({
-    "Read", "Write", "Edit", "MultiEdit", "LS", "Glob", "Grep",
-    "Bash", "TodoWrite", "AskUser", "Task", "TaskOutput", "Skill",
-    "EnterPlanMode", "ExitPlanMode", "ToolSearch",
-})
+# Keep exactly the manifest's core tools visible; defer optional MCP, team and
+# plugin integrations until searched. Deriving this from the manifest keeps the
+# two lists from drifting apart (they previously disagreed on Web/Memory/Goal).
+DEFAULT_ALWAYS_VISIBLE: frozenset[str] = frozenset(CORE_TOOLS) | {"ToolSearch"}
 
 
 class ToolDiscoveryState:
