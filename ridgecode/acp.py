@@ -75,6 +75,7 @@ class AcpSession:
         self.cwd = cwd
         self.agent = agent
         self._cancelled = threading.Event()
+        self._prompt_lock = threading.Lock()
         self._attach_sink(on_event)
 
     def _attach_sink(self, on_event: Callable[[Any], None]) -> None:
@@ -98,7 +99,15 @@ class AcpSession:
         return self._cancelled.is_set()
 
     def prompt(self, text: str) -> str:
-        return str(self.agent.run(text))
+        """Run one turn; a session runs at most one prompt at a time."""
+        if not self._prompt_lock.acquire(blocking=False):
+            raise AcpError(INVALID_REQUEST, "session already has a running prompt")
+        try:
+            # A cancel delivered while idle must not poison this turn.
+            self._cancelled.clear()
+            return str(self.agent.run(text))
+        finally:
+            self._prompt_lock.release()
 
     def cancel(self) -> None:
         self._cancelled.set()
@@ -388,6 +397,8 @@ class AcpServer:
             raise AcpError(INVALID_PARAMS, "prompt contains no text content")
         try:
             session.prompt(text)
+        except AcpError:
+            raise
         except Exception as exc:
             raise AcpError(INTERNAL_ERROR, f"agent failed: {exc}") from exc
         return {"stopReason": STOP_CANCELLED if session.cancelled else STOP_END_TURN}
