@@ -76,3 +76,37 @@ def test_tools_api_returns_groups(tmp_path, monkeypatch):
         assert payload["groups"]["files"]
         read = next(entry for entry in payload["tools"] if entry["name"] == "Read")
         assert read["kind"] == "read" and read["read_only"] is True
+
+def test_team_tools_stay_registered_but_are_only_summarized():
+    """P2 check: hiding team tools must not make them uncallable."""
+    from unittest.mock import MagicMock
+
+    from core.tool_bootstrap import ToolBootstrap, register_team_tools
+    from tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    bootstrap = ToolBootstrap(registry=registry, project_root=".")
+    for name in ("code_agent", "team_manager", "config", "event_sink", "interactive"):
+        bootstrap.provide(name, MagicMock())
+    registered = register_team_tools(bootstrap)
+    team = [name for name in registry.list_tools() if name.startswith("Team")]
+    assert len(team) >= 14
+    assert len(registered) == len(team) + 1  # + SendMessage
+
+    notes = ContextBuilder(tool_registry=registry, project_root=".")._tool_usage_notes()
+    assert "Also available:" in notes
+    for name in team:
+        assert name in notes, "team tool must stay discoverable"
+        assert f"{name}:" not in notes, "team notes must not be expanded"
+
+    expanded = sum(
+        len(getattr(registry.get_tool(name), "usage_notes", "") or "")
+        for name in registry.list_tools()
+    )
+    assert len(notes) < expanded
+    # The whole deferred footer stays small relative to expanded team notes.
+    team_notes = sum(
+        len(getattr(registry.get_tool(name), "usage_notes", "") or "") for name in team
+    )
+    assert team_notes > 500
+    assert len(notes) < expanded - team_notes + 400
