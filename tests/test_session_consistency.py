@@ -88,12 +88,17 @@ def test_snapshot_only_and_log_only_states(tmp_path):
     assert report["log_events"] == 1
 
 
-def test_snapshot_without_log_is_reported_as_snapshot_only(tmp_path):
+def test_snapshot_without_log_is_reported_and_backfilled(tmp_path):
     manager = SessionManager(sessions_dir=str(tmp_path))
     orphan = "abcdefabcdef"
     (tmp_path / f"{orphan}.json").write_text(json.dumps(_snapshot(("user", "a"))), encoding="utf-8")
     assert manager.audit_session(orphan)["state"] == "snapshot_only"
-    assert manager.reconcile_sessions() == {"snapshot_only": 1}
+    assert manager.reconcile_sessions(repair=False) == {"snapshot_only": 1}
+
+    assert manager.reconcile_sessions() == {"repaired": 1}
+    assert SessionLog(tmp_path, orphan).exists()
+    assert [m["content"] for m in SessionLog(tmp_path, orphan).derive_messages()] == ["a"]
+    assert manager.audit_session(orphan)["state"] == "ok"
 
 
 def test_repair_never_touches_the_snapshot_or_its_tree(tmp_path):

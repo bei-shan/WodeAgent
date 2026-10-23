@@ -79,6 +79,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     acp = cmds.add_parser("acp", help="Run the Agent Client Protocol server over stdio")
     acp.add_argument("--cwd", default=".", help="Default workspace root for new sessions")
 
+    maintain = cmds.add_parser("maintain", help="Audit and repair the local session store")
+    maintain.add_argument("--sessions-dir", default="memory/sessions")
+    maintain.add_argument("--dry-run", action="store_true", help="Report only; change nothing")
+    maintain.add_argument("--json", action="store_true")
+
     evaluate = cmds.add_parser("eval", help="Run offline scripted Agent evaluation")
     evaluate.add_argument("--json", action="store_true")
     evaluate.add_argument("--case", action="append")
@@ -114,6 +119,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "acp":
         from ridgecode.acp import main as acp_main
         return acp_main(["--cwd", args.cwd])
+    if args.command == "maintain":
+        from ridgecode.maintenance import main as maintain_main
+        options = ["--sessions-dir", args.sessions_dir]
+        if args.dry_run:
+            options.append("--dry-run")
+        if args.json:
+            options.append("--json")
+        return maintain_main(options)
     if args.command == "eval":
         from scripts.agent_eval import main as evaluate
         options = ["--json"] if args.json else []

@@ -261,14 +261,8 @@ class SessionManager:
             report["state"] = "diverged"
         return report
 
-    def reconcile_sessions(self, *, repair: bool = True) -> dict[str, int]:
-        """Audit every session and repair logs that lag or diverge.
-
-        ``log_ahead`` is left alone: the read path already prefers the log.
-        Repairs are one-directional (log follows snapshot) so a crash never
-        silently drops events the snapshot still holds.
-        """
-        counts: dict[str, int] = {}
+    def session_ids(self) -> list[str]:
+        """Every session id discoverable from snapshots or logs."""
         session_ids: set[str] = set()
         for path in self._dir.glob("*.json"):
             match = _SESSION_FILE.fullmatch(path.name)
@@ -278,11 +272,20 @@ class SessionManager:
             session_id = path.name[: -len(LOG_SUFFIX)]
             if _SESSION_ID.fullmatch(session_id):
                 session_ids.add(session_id)
+        return sorted(session_ids)
 
-        for session_id in sorted(session_ids):
+    def reconcile_sessions(self, *, repair: bool = True) -> dict[str, int]:
+        """Audit every session and repair logs that lag or diverge.
+
+        ``log_ahead`` is left alone: the read path already prefers the log.
+        Repairs are one-directional (log follows snapshot) so a crash never
+        silently drops events the snapshot still holds.
+        """
+        counts: dict[str, int] = {}
+        for session_id in self.session_ids():
             report = self.audit_session(session_id)
             state = report["state"]
-            if repair and state in {"log_behind", "diverged"}:
+            if repair and state in {"log_behind", "diverged", "snapshot_only"}:
                 snapshot = self._read_snapshot_raw(session_id)
                 if snapshot is not None:
                     try:
