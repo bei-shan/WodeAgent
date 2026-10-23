@@ -278,6 +278,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .execution-panel { position: fixed; inset: 0 0 0 auto; z-index: 47; width: min(440px, 100vw); max-width: 100%; box-shadow: -3px 0 30px rgba(0,0,0,.18); }
 }
 
+/* Goal badge: server-owned objective state, refreshed after each turn. */
+.goal-wrap { position: relative; }
+.goal-badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e5e5e5; background: #fff; border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #4b4b4b; }
+.goal-badge:hover { background: #f7f7f7; }
+.goal-dot { width: 8px; height: 8px; border-radius: 999px; background: #b0b0b0; }
+.goal-badge.active .goal-dot { background: #f59e0b; }
+.goal-badge.complete .goal-dot { background: #10b981; }
+.goal-badge.blocked .goal-dot { background: #ef4444; }
+.goal-popover { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: 320px; max-width: 80vw; background: #fff; border: 1px solid #e8e8e8; border-radius: 12px; padding: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .14); }
+.goal-objective { margin: 0 0 8px; font-size: 13px; line-height: 1.55; color: #1f2328; }
+.goal-meta { margin: 0; font-size: 12px; color: #6b7280; }
+.goal-blocked { margin: 8px 0 0; font-size: 12px; color: #b91c1c; }
+
+
 .markdown-html > :first-child { margin-top: 0; }
 .markdown-html > :last-child { margin-bottom: 0; }
 .markdown-html p { margin: 0 0 12px; white-space: pre-wrap; }

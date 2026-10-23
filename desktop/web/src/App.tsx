@@ -54,6 +54,8 @@ function AppCore() {
   const [askReq, setAskReq] = useState<AskRequest | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [goal, setGoal] = useState<api.GoalInfo | null>(null)
+  const [goalOpen, setGoalOpen] = useState(false)
   const [generatedFiles, setGeneratedFiles] = useState<{name: string; path: string}[]>([])
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<{name: string; path: string}[]>([])
@@ -91,6 +93,17 @@ function AppCore() {
   useEffect(() => { api.info.models().then(setModels).catch(() => {}) }, [])
   useEffect(() => { api.skills.list().then(setSkillsList).catch(() => {}) }, [])
   useEffect(() => { api.mcp.list().then(setMcpServers).catch(() => {}) }, [])
+
+  // Goal is server state the agent may change during a turn, so refresh it
+  // when the session changes and whenever a turn finishes.
+  useEffect(() => {
+    if (!activeSid) { setGoal(null); setGoalOpen(false); return }
+    let cancelled = false
+    api.goal.get(activeSid)
+      .then(result => { if (!cancelled) setGoal(result.goal) })
+      .catch(() => { if (!cancelled) setGoal(null) })
+    return () => { cancelled = true }
+  }, [activeSid, sending])
 
   const handleEvent = createSessionEventHandler({
     activeSidRef, setSubagentStatus, setMessages, setGeneratedFiles, setTools,
@@ -460,6 +473,31 @@ function AppCore() {
             <h2 className="topbar-title">{activeTitle}</h2>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {activeSid && goal && (
+              <div className="goal-wrap">
+                <button type="button" className={`goal-badge ${goal.status}`}
+                  aria-expanded={goalOpen} title={goal.objective}
+                  onClick={() => setGoalOpen(value => !value)}>
+                  <span className="goal-dot" aria-hidden="true" />
+                  <span className="goal-label">
+                    {goal.status === 'active'
+                      ? `目标 ${goal.rounds_started}/${goal.max_rounds}`
+                      : goal.status === 'complete' ? '目标已完成' : '目标受阻'}
+                  </span>
+                </button>
+                {goalOpen && (
+                  <div className="goal-popover" role="dialog" aria-label="目标详情">
+                    <p className="goal-objective">{goal.objective}</p>
+                    <p className="goal-meta">
+                      状态 {goal.status} · 轮次 {goal.rounds_started}/{goal.max_rounds}
+                    </p>
+                    {goal.blocked_reason && (
+                      <p className="goal-blocked">受阻：{goal.blocked_reason}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {activeSid && (
               <div className={`connection-state ${streamConnected ? '' : 'offline'}`} role="status">
                 <span className="connection-dot" aria-hidden="true" />

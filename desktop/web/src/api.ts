@@ -167,6 +167,29 @@ export const sessions = {
     req<{ status: string }>('POST', `/sessions/${sid}/ask-user/${rid}/answer`, { answer }),
 };
 
+// ── Goal ─────────────────────────────────────────────────────────────
+
+export type GoalStatus = 'active' | 'complete' | 'blocked';
+
+export interface GoalInfo {
+  session_id: string;
+  objective: string;
+  status: GoalStatus;
+  rounds_started: number;
+  max_rounds: number;
+  blocked_reason?: string;
+}
+
+export const goal = {
+  get: (sid: string) => req<{ goal: GoalInfo | null }>('GET', `/sessions/${encodeURIComponent(sid)}/goal`),
+  set: (sid: string, objective: string, maxRounds?: number) =>
+    req<{ goal: GoalInfo }>('PUT', `/sessions/${encodeURIComponent(sid)}/goal`, {
+      objective,
+      ...(maxRounds === undefined ? {} : { max_rounds: maxRounds }),
+    }),
+  clear: (sid: string) => req<{ cleared: boolean }>('DELETE', `/sessions/${encodeURIComponent(sid)}/goal`),
+};
+
 // ── Files ────────────────────────────────────────────────────────────
 
 export const files = {
