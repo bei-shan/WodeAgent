@@ -565,6 +565,24 @@ def create_app(
 
         return {"keys": [secret_status(name) for name in sorted(_allowed_key_names())]}
 
+    # ── Tool inventory ──────────────────────────────────────────
+    @app.get("/api/tools")
+    async def list_tools():
+        from tools.tool_specs import SPECS
+
+        tools = []
+        for name in sorted(SPECS):
+            entry = {"name": name, **SPECS[name].as_dict()}
+            tools.append(entry)
+        groups: dict[str, list[str]] = {}
+        for entry in tools:
+            groups.setdefault(entry["group"], []).append(entry["name"])
+        return {
+            "tools": tools,
+            "groups": groups,
+            "core": [entry["name"] for entry in tools if entry["exposure"] == "core"],
+        }
+
     @app.put("/api/settings/keys")
     async def set_tool_key(body: dict):
         from core.secrets import set_secret

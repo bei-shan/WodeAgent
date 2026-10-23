@@ -10,7 +10,7 @@ import { createSessionEventHandler } from './state/sessionEvents'
 import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
 import { PermissionModal, AskUserModal, ToolCard, SessionItem } from './components/ConversationWidgets'
-import { SkillsPanel, McpPanel, HooksPanel, MemoryPanel, ModelsPanel } from './components/ManagementPanels'
+import { SkillsPanel, McpPanel, HooksPanel, MemoryPanel, ModelsPanel, ToolsPanel } from './components/ManagementPanels'
 import type { Message, ToolEntry, PermRequest, AskRequest } from './components/types'
 import AuthGate from './AuthGate'
 import type { SessionInfo, SkillInfo, McpServerCfg, TeamInfo } from './api'
@@ -72,7 +72,7 @@ function AppCore() {
   const [newTeamName, setNewTeamName] = useState('')
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'memory'|'models'|'trace'>('sessions')
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'memory'|'models'|'tools'|'trace'>('sessions')
   const [sessionSearch, setSessionSearch] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
@@ -308,6 +308,7 @@ function AppCore() {
     { key: 'hooks' as const, icon: Icons.clock, label: 'Hooks' },
     { key: 'memory' as const, icon: Icons.brain, label: '记忆' },
     { key: 'models' as const, icon: Icons.settings, label: '模型' },
+    { key: 'tools' as const, icon: Icons.settings, label: '工具' },
     { key: 'trace' as const, icon: Icons.brain, label: 'Trace' },
   ]
 
@@ -535,6 +536,7 @@ function AppCore() {
         {sidebarTab === 'hooks' && <HooksPanel />}
         {sidebarTab === 'memory' && <MemoryPanel />}
         {sidebarTab === 'models' && <ModelsPanel />}
+        {sidebarTab === 'tools' && <ToolsPanel />}
         {sidebarTab === 'files' && <FileBrowser sessionId={activeSid} />}
         {sidebarTab === 'trace' && <TracePanel sessionId={activeSid} />}
 

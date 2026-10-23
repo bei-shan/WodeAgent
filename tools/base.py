@@ -334,6 +334,24 @@ class Tool(ABC):
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
     
+    def _cap_text(self, text: Any) -> Any:
+        """Bound the model-facing summary; ``data`` stays complete on purpose."""
+        if not isinstance(text, str):
+            return text
+        try:
+            from tools.tool_specs import spec_for
+
+            budget = spec_for(self.name).output_budget
+        except Exception:
+            budget = 16_000
+        if budget and len(text) > budget:
+            removed = len(text) - budget
+            return (
+                text[:budget]
+                + f"\n[truncated {removed} chars; narrow the request or use offset/limit]"
+            )
+        return text
+
     def _build_response(
         self,
         status: ToolStatus,
@@ -376,7 +394,7 @@ class Tool(ABC):
         payload = {
             "status": status.value,
             "data": data,
-            "text": text,
+            "text": self._cap_text(text),
             "stats": stats,
             "context": context,
         }

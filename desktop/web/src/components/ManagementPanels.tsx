@@ -769,3 +769,100 @@ export function SearchSettingsCard({ onNotice }: { onNotice: (text: string) => v
     </div>
   )
 }
+
+const TOOL_GROUP_LABELS: Record<string, string> = {
+  files: '文件',
+  runtime: '运行时',
+  agents: '子代理与编排',
+  web: '网络',
+  interaction: '交互',
+  planning: '规划',
+  memory: '记忆',
+  team: '团队',
+  general: '其他',
+}
+
+export function ToolsPanel() {
+  const [manifest, setManifest] = useState<api.ToolManifest | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.tools.list().then(setManifest).catch(cause => {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    })
+  }, [])
+
+  if (error) return <div className="flex-1 bg-[#F9FAFB] p-6 text-sm text-red-500">{error}</div>
+  if (!manifest) return <div className="flex-1 bg-[#F9FAFB] p-6 text-sm text-gray-400">正在读取工具清单…</div>
+
+  const byName = new Map(manifest.tools.map(tool => [tool.name, tool]))
+  const groupNames = Object.keys(manifest.groups).sort()
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+      <div className="max-w-3xl mx-auto py-8 px-6">
+        <h2 className="text-xl font-semibold text-gray-800">工具</h2>
+        <p className="text-xs text-gray-400 mt-1 mb-6">
+          共 {manifest.tools.length} 个，其中 {manifest.core.length} 个每轮会展开说明；
+          其余仅以一行提示出现，模型仍可调用。
+        </p>
+
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">{manifest.tools.length}</div>
+            <div className="text-[10px] text-gray-400">全部工具</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">{manifest.core.length}</div>
+            <div className="text-[10px] text-gray-400">每轮展开</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">
+              {manifest.tools.filter(tool => tool.approval === 'ask').length}
+            </div>
+            <div className="text-[10px] text-gray-400">需要确认</div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {groupNames.map(group => (
+            <div key={group} className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="text-sm font-medium text-gray-700 mb-2">
+                {TOOL_GROUP_LABELS[group] || group}
+                <span className="text-[10px] text-gray-400 ml-2">
+                  {manifest.groups[group].length}
+                </span>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {manifest.groups[group].map(name => {
+                  const tool = byName.get(name)
+                  if (!tool) return null
+                  return (
+                    <div key={name} className="py-2 flex items-center gap-2">
+                      <span className="text-sm text-gray-700 w-32 shrink-0">{name}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                        {tool.kind}
+                      </span>
+                      {tool.read_only && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-600">只读</span>
+                      )}
+                      {tool.approval === 'ask' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600">需确认</span>
+                      )}
+                      {tool.exposure === 'deferred' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-400">按需</span>
+                      )}
+                      <span className="text-[10px] text-gray-400 ml-auto">
+                        {Math.round(tool.output_budget / 1000)}k
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}

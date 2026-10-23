@@ -301,6 +301,28 @@ export const settingsKeys = {
     req<{ deleted: boolean }>('DELETE', `/settings/keys/${encodeURIComponent(name)}`),
 };
 
+// ── Tool manifest ────────────────────────────────────────────────────
+
+export interface ToolManifestEntry {
+  name: string;
+  kind: 'read' | 'write' | 'exec' | 'network' | 'agent' | 'control';
+  read_only: boolean;
+  approval: 'auto' | 'ask' | 'deny';
+  exposure: 'core' | 'deferred';
+  group: string;
+  output_budget: number;
+}
+
+export interface ToolManifest {
+  tools: ToolManifestEntry[];
+  groups: Record<string, string[]>;
+  core: string[];
+}
+
+export const tools = {
+  list: () => req<ToolManifest>('GET', '/tools'),
+};
+
 // ── Files ────────────────────────────────────────────────────────────
 
 export const files = {

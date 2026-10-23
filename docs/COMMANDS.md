@@ -117,6 +117,14 @@ Web 端「工作台 → 模型」可以新增/覆盖模型配置：名称、模�
 - 没有可用凭据库时退回 `.mycodeagent/settings/keys.json`，权限 0600
 - 环境变量是最后兜底；模型密钥不再写进 `models.json`
 
+## 工具清单
+
+每个工具在 `tools/tool_specs.py` 里有一条声明：`kind`（read/write/exec/network/agent/control）、`read_only`、`approval`（auto/ask/deny）、`exposure`（core/deferred）、`output_budget`、`group`。权限提示、UI 分组、并发策略和 prompt 组装都以这张表为准，不再各自硬编码。
+
+- **每轮展开的只有 14 个 core 工具**，其余（`LS`、`MultiEdit`、`EnterPlanMode`、worktree、`Workflow`、`BrowserUse`、全部团队工具等）只以一行 "Also available: ..." 出现，模型仍可调用
+- 工具返回的 `text` 受 `output_budget` 约束，超出会截断并附"用 offset/limit 收窄"的提示；`data` 保持完整，不影响程序化调用
+- 「工作台 → 工具」列出全部工具及来源分组、只读/需确认/按需标签
+
 ## 检查、评测和测试
 
 ```bash

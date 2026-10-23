@@ -55,9 +55,9 @@ class TestContextBuilder(unittest.TestCase):
         """Operator override is system text; tool notes remain low trust."""
         structure = {}
         with self._make_project(structure) as project:
-            from tools.builtin.list_files import ListFilesTool
+            from tools.builtin.read_file import ReadTool
             registry = DummyToolRegistry()
-            registry.get_all_tools = lambda: [ListFilesTool(project_root=str(project.root))]
+            registry.get_all_tools = lambda: [ReadTool(project_root=str(project.root))]
             builder = ContextBuilder(
                 tool_registry=registry,
                 project_root=str(project.root), trusted_prompt_root=str(project.root),
@@ -65,9 +65,9 @@ class TestContextBuilder(unittest.TestCase):
             )
             messages = builder.get_system_messages()
             self.assertIn("OVERRIDE", messages[0]["content"])
-            self.assertNotIn("LS:", "\n".join(m["content"] for m in messages))
+            self.assertNotIn("Read:", "\n".join(m["content"] for m in messages))
             refs = builder.get_reference_messages()
-            self.assertTrue(any(m["role"] == "user" and "LS:" in m["content"] for m in refs))
+            self.assertTrue(any(m["role"] == "user" and "Read:" in m["content"] for m in refs))
 
     def test_code_law_lowercase_name(self):
         structure = {

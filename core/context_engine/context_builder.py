@@ -152,17 +152,31 @@ class ContextBuilder:
         return messages
 
     def _tool_usage_notes(self) -> str:
-        """Collect live tool advice exclusively for low-trust references."""
+        """Collect live tool advice exclusively for low-trust references.
+
+        Only core tools expand their notes; deferred ones are named in a single
+        footer line so the system prompt stays small and predictable.
+        """
+        from tools.tool_specs import spec_for
+
         try:
             visible = getattr(self.tool_registry, "get_prompt_tools", None)
             tools = visible() if callable(visible) else self.tool_registry.get_all_tools()
         except Exception:
             tools = []
         lines: List[str] = []
+        deferred: List[str] = []
         for tool in tools:
+            name = str(getattr(tool, "name", "") or "")
+            if spec_for(name).exposure == "deferred":
+                if name:
+                    deferred.append(name)
+                continue
             notes = getattr(tool, "usage_notes", "")
             if isinstance(notes, str) and notes.strip():
                 lines.append(notes.strip())
+        if deferred:
+            lines.append("Also available: " + ", ".join(sorted(deferred)))
         disabled = self._get_disabled_tools()
         if disabled:
             lines.append("Disabled tools (temporary): " + ", ".join(str(n) for n in disabled))
