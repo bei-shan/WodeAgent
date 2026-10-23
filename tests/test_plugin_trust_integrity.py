@@ -7,6 +7,7 @@ import pytest
 
 from core.plugin_loader import PluginCatalog, PluginLoader
 from tests.test_plugin_lifecycle import bundle
+from tests.plugin_approval_fixture import provision_plugin_approval_key
 
 
 def code_bundle(name="fingerprint-test"):
@@ -29,6 +30,7 @@ def code_bundle(name="fingerprint-test"):
 
 def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle())
     catalog.set_enabled("fingerprint-test", True)
@@ -56,6 +58,7 @@ def test_trust_is_bound_to_reviewed_code_and_can_be_reauthorized(tmp_path, monke
 
 def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("asset-review"))
     catalog.set_enabled("asset-review", True)
@@ -78,6 +81,7 @@ def test_changed_manifest_or_supporting_asset_invalidates_trust(tmp_path, monkey
 
 def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("legacy-review"))
     catalog.set_enabled("legacy-review", True)
@@ -93,6 +97,7 @@ def test_unverified_trust_flag_is_not_sufficient(tmp_path, monkeypatch):
 
 def test_symlinked_file_after_consent_invalidates_executable_trust(tmp_path, monkeypatch):
     monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
     catalog = PluginCatalog(tmp_path)
     catalog.install_zip(code_bundle("link-review"))
     catalog.set_enabled("link-review", True)
@@ -117,3 +122,58 @@ def test_content_consent_requires_small_bounded_regular_files(tmp_path):
     with pytest.raises(ValueError, match="exceeds size"):
         catalog.set_trusted("large-review", True)
     assert not catalog.list_plugins()[0]["trust_valid"]
+
+
+def test_forged_project_state_cannot_enable_executable_hook(tmp_path, monkeypatch):
+    """Attackers can edit project state AND unkeyed SHA-256; neither grants host code."""
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    key = provision_plugin_approval_key(monkeypatch, tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    catalog.install_zip(code_bundle("forged-hook"))
+    catalog.set_enabled("forged-hook", True)
+    manifest = catalog._find("forged-hook")
+    flags = catalog._state()
+    flags["forged-hook"]["trusted"] = True
+    flags["forged-hook"]["trusted_digest"] = catalog._content_digest(manifest)
+    flags["forged-hook"]["trusted_receipt"] = "0" * 64
+    catalog._write_state(flags)
+    assert not catalog.hooks_trusted("forged-hook")
+    assert PluginLoader(str(tmp_path)).discover() == []
+    key.unlink()
+    with pytest.raises(PermissionError, match="operator-owned"):
+        catalog.set_trusted("forged-hook", True)
+    assert PluginLoader(str(tmp_path)).discover() == []
+
+
+def test_operator_secret_must_have_owner_only_permissions(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    key = provision_plugin_approval_key(monkeypatch, tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    catalog.install_zip(code_bundle("private-key-hook"))
+    catalog.set_enabled("private-key-hook", True)
+    catalog.set_trusted("private-key-hook", True)
+    assert catalog.hooks_trusted("private-key-hook")
+    key.chmod(0o644)
+    assert not catalog.hooks_trusted("private-key-hook")
+    assert PluginLoader(str(tmp_path)).discover() == []
+    key.chmod(0o600)
+    assert catalog.hooks_trusted("private-key-hook")
+
+
+def test_hook_approval_receipt_cannot_be_replayed_into_other_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIDGE_ALLOW_TRUSTED_HOOKS", "1")
+    provision_plugin_approval_key(monkeypatch, tmp_path)
+    first = PluginCatalog(tmp_path / "first")
+    second = PluginCatalog(tmp_path / "second")
+    archive = code_bundle("signed-source")
+    for catalog in (first, second):
+        catalog.install_zip(archive)
+        catalog.set_enabled("signed-source", True)
+    first.set_trusted("signed-source", True)
+    assert first.hooks_trusted("signed-source")
+    copied = first._state()["signed-source"]
+    forged = second._state()
+    forged["signed-source"] = dict(copied)
+    second._write_state(forged)
+    assert not second.hooks_trusted("signed-source")
+    assert PluginLoader(str(second.root)).discover() == []
