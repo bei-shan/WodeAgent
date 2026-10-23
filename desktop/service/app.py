@@ -512,6 +512,82 @@ def create_app(
 
         return {"deleted": await asyncio.to_thread(delete_profile, name)}
 
+    @app.post("/api/settings/models/{name}/test")
+    async def test_model_profile(name: str):
+        from core.model_profiles import test_profile
+
+        try:
+            return await asyncio.to_thread(test_profile, name)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+
+    # ── Search provider ─────────────────────────────────────────
+    @app.get("/api/settings/search")
+    async def get_search_settings():
+        from core.web_search_config import load_search_settings, provider_status
+
+        settings = load_search_settings()
+        return {**settings, "providers": provider_status()}
+
+    @app.put("/api/settings/search")
+    async def update_search_settings(body: dict):
+        from core.web_search_config import (
+            SearchSettingsError,
+            load_search_settings,
+            save_search_settings,
+            provider_status,
+        )
+
+        try:
+            settings = await asyncio.to_thread(
+                save_search_settings,
+                str(body.get("provider") or ""),
+                str(body.get("searxng_base_url") or ""),
+            )
+        except SearchSettingsError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {**settings, "providers": provider_status()}
+
+    # ── Tool credentials ────────────────────────────────────────
+    def _allowed_key_names() -> set[str]:
+        from core.secrets import TOOL_KEYS
+        from core.web_search_config import PROVIDERS
+
+        names = set(TOOL_KEYS)
+        names.update(
+            entry["key_env"] for entry in PROVIDERS.values() if entry.get("key_env")
+        )
+        return names
+
+    @app.get("/api/settings/keys")
+    async def list_tool_keys():
+        from core.secrets import secret_status
+
+        return {"keys": [secret_status(name) for name in sorted(_allowed_key_names())]}
+
+    @app.put("/api/settings/keys")
+    async def set_tool_key(body: dict):
+        from core.secrets import set_secret
+
+        name = str(body.get("name") or "").strip()
+        if name not in _allowed_key_names():
+            raise InvalidInputError(f"Unsupported key: {name}")
+        try:
+            backend = await asyncio.to_thread(
+                set_secret, name, str(body.get("value") or ""),
+            )
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {"name": name, "backend": backend, "configured": True}
+
+    @app.delete("/api/settings/keys/{name}")
+    async def delete_tool_key(name: str):
+        from core.secrets import delete_secret
+
+        if name not in _allowed_key_names():
+            raise InvalidInputError(f"Unsupported key: {name}")
+        return {"deleted": await asyncio.to_thread(delete_secret, name)}
+
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):
         data = app.state.session_service.export_portable(sid)

@@ -122,8 +122,9 @@ def test_web_fetch_escapes_marker_breakout_in_page_text():
 # ---------------------------------------------------------------------------
 # WebSearch
 # ---------------------------------------------------------------------------
-def test_web_search_without_key_reports_configuration_gap():
-    tool = WebSearchTool(api_key="")
+def test_web_search_without_key_reports_configuration_gap(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    tool = WebSearchTool(api_key="", provider="tavily")
     payload = _payload(tool.run({"query": "python asyncio"}))
     assert payload["status"] == "error"
     assert "TAVILY_API_KEY" in payload["error"]["message"]

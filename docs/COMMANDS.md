@@ -100,6 +100,22 @@ Web 端「工作台 → 模型」可以新增/覆盖模型配置：名称、模�
 - API Key 只在本机保存；`GET /api/settings/models` 与 `/api/models` 只返回 `***末四位`，不返回明文
 - 留空 API Key 保存时保留原值，方便只改模型 ID
 - 与 `.env` 中 `MODEL_PROFILES` 同名时，**这里的配置优先**；改完新建会话即可选用
+- 卡片上的「测试」会发一次极小的请求（`max_tokens=8`），返回耗时与错误原因
+
+### 联网搜索
+
+「工作台 → 模型 → 联网搜索」可选 Tavily / Brave / Serper / Exa / SearXNG / DuckDuckGo：
+
+- 前四家需要各自密钥（`TAVILY_API_KEY`、`BRAVE_API_KEY`、`SERPER_API_KEY`、`EXA_API_KEY`）
+- SearXNG 只需实例地址（`http(s)://...`）；DuckDuckGo 不需要密钥
+- 选择写入 `.mycodeagent/settings/search.json`；`WEB_SEARCH_PROVIDER` 环境变量优先级更高
+- 任一 provider 的凭据缺失时，`WebSearch` 返回明确的配置提示，而不是静默失败
+
+### 密钥存储
+
+- 优先系统凭据库（Windows Credential Locker / macOS Keychain），服务名 `ridgecode`
+- 没有可用凭据库时退回 `.mycodeagent/settings/keys.json`，权限 0600
+- 环境变量是最后兜底；模型密钥不再写进 `models.json`
 
 ## 检查、评测和测试
 

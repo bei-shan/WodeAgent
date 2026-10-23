@@ -255,6 +255,50 @@ export const modelSettings = {
   }) => req<{ profile: ModelProfileInfo }>('PUT', '/settings/models', profile),
   remove: (name: string) =>
     req<{ deleted: boolean }>('DELETE', `/settings/models/${encodeURIComponent(name)}`),
+  test: (name: string) =>
+    req<{ ok: boolean; latency_ms: number; message: string }>(
+      'POST', `/settings/models/${encodeURIComponent(name)}/test`,
+    ),
+};
+
+// ── Search settings ─────────────────────────────────────────────────
+
+export interface SearchProvider {
+  name: string;
+  label: string;
+  requires_key: boolean;
+  requires_url: boolean;
+  key_env: string | null;
+  signup: string;
+  configured: boolean;
+  credential: string | null;
+}
+
+export interface SearchSettings {
+  provider: string;
+  searxng_base_url: string;
+  providers: SearchProvider[];
+}
+
+export const searchSettings = {
+  get: () => req<SearchSettings>('GET', '/settings/search'),
+  save: (body: { provider: string; searxng_base_url?: string }) =>
+    req<SearchSettings>('PUT', '/settings/search', body),
+};
+
+export interface ToolKeyStatus {
+  name: string;
+  configured: boolean;
+  source: string;
+  api_key: string | null;
+}
+
+export const settingsKeys = {
+  list: () => req<{ keys: ToolKeyStatus[] }>('GET', '/settings/keys'),
+  save: (body: { name: string; value: string }) =>
+    req<{ name: string; backend: string; configured: boolean }>('PUT', '/settings/keys', body),
+  remove: (name: string) =>
+    req<{ deleted: boolean }>('DELETE', `/settings/keys/${encodeURIComponent(name)}`),
 };
 
 // ── Files ────────────────────────────────────────────────────────────

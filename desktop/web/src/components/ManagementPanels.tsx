@@ -518,6 +518,7 @@ export function ModelsPanel() {
   const [form, setForm] = useState({ name: '', model: '', provider: '', base_url: '', api_key: '' })
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [testing, setTesting] = useState('')
 
   const load = async () => {
     try {
@@ -559,6 +560,20 @@ export function ModelsPanel() {
     }
   }
 
+  const test = async (name: string) => {
+    setTesting(name)
+    try {
+      const result = await api.modelSettings.test(name)
+      setNotice(
+        `${name}：${result.ok ? '连通' : '失败'}（${result.latency_ms}ms）${result.message}`,
+      )
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTesting('')
+    }
+  }
+
   if (!settings) {
     return <div className="flex-1 bg-[#F9FAFB] p-6 text-sm text-gray-400">正在读取模型配置…</div>
   }
@@ -572,6 +587,7 @@ export function ModelsPanel() {
         </p>
 
         {notice && <div className="text-xs text-gray-500 mb-3">{notice}</div>}
+        <SearchSettingsCard onNotice={setNotice} />
 
         <div className="space-y-2 mb-6">
           {settings.profiles.length === 0 && (
@@ -595,10 +611,17 @@ export function ModelsPanel() {
                   密钥：{profile.has_key ? profile.api_key : '未设置'}
                 </div>
               </div>
-              {profile.source === 'file' && (
-                <button type="button" onClick={() => remove(profile.name)}
-                  className="text-xs text-red-500 hover:text-red-600 shrink-0">删除</button>
-              )}
+              <div className="flex items-center gap-3 shrink-0">
+                <button type="button" onClick={() => test(profile.name)}
+                  disabled={testing === profile.name}
+                  className="text-xs text-blue-500 hover:text-blue-600 disabled:opacity-40">
+                  {testing === profile.name ? '测试中…' : '测试'}
+                </button>
+                {profile.source === 'file' && (
+                  <button type="button" onClick={() => remove(profile.name)}
+                    className="text-xs text-red-500 hover:text-red-600">删除</button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -632,6 +655,116 @@ export function ModelsPanel() {
             env 中通过 MODEL_PROFILES 配置的同名模型会被这里覆盖；保存后新会话即可选用。
           </p>
         </div>
+      </div>
+    </div>
+  )
+}
+
+export function SearchSettingsCard({ onNotice }: { onNotice: (text: string) => void }) {
+  const [settings, setSettings] = useState<api.SearchSettings | null>(null)
+  const [keyValue, setKeyValue] = useState('')
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      const current = await api.searchSettings.get()
+      setSettings(current)
+      setUrl(current.searxng_base_url || '')
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const selected = settings?.providers.find(item => item.name === settings.provider)
+
+  const switchProvider = async (provider: string) => {
+    setBusy(true)
+    try {
+      setSettings(await api.searchSettings.save({ provider, searxng_base_url: url }))
+      onNotice('搜索服务已切换为 ' + provider)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveUrl = async () => {
+    if (!settings) return
+    setBusy(true)
+    try {
+      setSettings(await api.searchSettings.save({
+        provider: settings.provider, searxng_base_url: url.trim(),
+      }))
+      onNotice('SearXNG 地址已保存')
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveKey = async () => {
+    if (!selected?.key_env || !keyValue.trim()) return
+    setBusy(true)
+    try {
+      const saved = await api.settingsKeys.save({ name: selected.key_env, value: keyValue.trim() })
+      setKeyValue('')
+      await load()
+      onNotice(`密钥已保存（${saved.backend === 'keyring' ? '系统凭据库' : '本地文件'}）`)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!settings) return null
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium text-gray-700">联网搜索</div>
+        <span className="text-[10px] text-gray-400">
+          {selected?.configured ? '已配置 ' + selected.credential : '未配置凭据'}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <select value={settings.provider} disabled={busy}
+          onChange={event => switchProvider(event.target.value)}
+          className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+          {settings.providers.map(provider => (
+            <option key={provider.name} value={provider.name}>{provider.label}</option>
+          ))}
+        </select>
+        {selected?.requires_url && (
+          <>
+            <input value={url} onChange={event => setUrl(event.target.value)}
+              placeholder="http://localhost:8080"
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+            <button type="button" onClick={saveUrl} disabled={busy}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">
+              保存地址
+            </button>
+          </>
+        )}
+        {selected?.requires_key && (
+          <>
+            <input type="password" value={keyValue} onChange={event => setKeyValue(event.target.value)}
+              placeholder={selected.key_env || 'API Key'}
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+            <button type="button" onClick={saveKey} disabled={busy || !keyValue.trim()}
+              className="px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-40">
+              保存密钥
+            </button>
+          </>
+        )}
+        {!selected?.requires_key && !selected?.requires_url && (
+          <span className="text-xs text-gray-400">该服务不需要密钥。</span>
+        )}
       </div>
     </div>
   )

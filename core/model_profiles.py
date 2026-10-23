@@ -46,9 +46,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from core.secrets import delete_secret, get_secret, mask, set_secret
 
 PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
@@ -137,10 +140,14 @@ def upsert_profile(
     profiles = load_saved_profiles()
     previous = profiles.get(key, {})
     stored_key = api_key if api_key not in (None, "") else previous.get("api_key")
+    if stored_key:
+        # Keys live in the OS keychain when available; models.json only keeps
+        # non-secret routing data.
+        set_secret(f"model.{key}", stored_key)
     profiles[key] = {
         "model": model_id,
         "provider": (provider or "").strip() or previous.get("provider"),
-        "api_key": stored_key or None,
+        "api_key": None,
         "base_url": (base_url or "").strip() or previous.get("base_url"),
     }
     save_saved_profiles(profiles)
@@ -154,7 +161,42 @@ def delete_profile(name: str) -> bool:
         return False
     del profiles[key]
     save_saved_profiles(profiles)
+    delete_secret(f"model.{key}")
     return True
+
+
+def test_profile(name: str, *, timeout_s: float = 20.0) -> Dict[str, Any]:
+    """Send one tiny request with a profile's stored credentials."""
+    key = str(name or "").strip().lower()
+    profile = load_model_profiles().get(key)
+    if profile is None:
+        raise ValueError("Unknown model profile")
+    from core.llm import HelloAgentsLLM
+
+    started = time.monotonic()
+    try:
+        llm = HelloAgentsLLM(
+            model=profile.model,
+            api_key=profile.api_key,
+            base_url=profile.base_url,
+            provider=profile.provider,
+            temperature=0.0,
+            max_tokens=8,
+            timeout=timeout_s,
+        )
+        reply = llm.invoke([{"role": "user", "content": "Reply with OK."}])
+        text = getattr(reply, "content", None) or str(reply)
+        return {
+            "ok": True,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "message": " ".join(str(text).split())[:80],
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "message": " ".join(str(exc).split())[:300],
+        }
 
 
 def profile_source(name: str) -> str:
@@ -188,14 +230,11 @@ class ModelProfile:
         self.base_url = base_url
 
     def as_dict(self) -> dict:
-        masked = None
-        if self.api_key:
-            masked = "***" + self.api_key[-4:] if len(self.api_key) >= 12 else "***"
         return {
             "name": self.name,
             "model": self.model,
             "provider": self.provider,
-            "api_key": masked,
+            "api_key": mask(self.api_key),
             "has_key": bool(self.api_key),
             "base_url": self.base_url,
             "source": profile_source(self.name),
@@ -234,7 +273,7 @@ def load_model_profiles() -> Dict[str, ModelProfile]:
             name=name,
             model=entry["model"] or "",
             provider=entry.get("provider"),
-            api_key=entry.get("api_key"),
+            api_key=entry.get("api_key") or get_secret(f"model.{name}"),
             base_url=entry.get("base_url"),
         )
     return profiles

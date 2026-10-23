@@ -13,6 +13,7 @@ from core.model_profiles import (
     profiles_path,
     upsert_profile,
 )
+from core.secrets import get_secret
 from desktop.service.app import create_app
 from tests.test_web_service import FakeAgent
 
@@ -34,7 +35,9 @@ def test_profiles_roundtrip_and_mask(tmp_path, monkeypatch):
     upsert_profile("kimi", "kimi-k2", provider="openai", api_key="sk-abcdef123456", base_url="https://x/v1")
     saved = load_saved_profiles()
     assert saved["kimi"]["model"] == "kimi-k2"
-    assert saved["kimi"]["api_key"] == "sk-abcdef123456"
+    # Secrets never enter models.json; they live in the keychain/file store.
+    assert saved["kimi"]["api_key"] is None
+    assert get_secret("model.kimi") == "sk-abcdef123456"
     assert profiles_path().is_file()
 
     profiles = load_model_profiles()
@@ -51,7 +54,7 @@ def test_empty_api_key_keeps_the_stored_key(tmp_path, monkeypatch):
 
     upsert_profile("kimi", "kimi-k2", api_key="sk-secret-123456")
     upsert_profile("kimi", "kimi-k2-turbo", api_key="")
-    assert load_saved_profiles()["kimi"]["api_key"] == "sk-secret-123456"
+    assert get_secret("model.kimi") == "sk-secret-123456"
     assert load_saved_profiles()["kimi"]["model"] == "kimi-k2-turbo"
 
 
