@@ -90,6 +90,11 @@ class Config(BaseModel):
     context_anchor_max_chars: int = 1200
     context_response_reserve_tokens: int = 4096
     context_compaction_max_failures: int = 3
+    # Prune bulky old tool outputs before paying for a summary (opencode-style).
+    tool_prune_enabled: bool = True
+    tool_prune_soft_ratio: float = 0.5
+    tool_prune_keep_rounds: int = 3
+    tool_prune_min_chars: int = 600
     tool_message_format: str = "strict"
 
     # ===== Tool Output Truncation =====
@@ -235,6 +240,10 @@ class Config(BaseModel):
             context_anchor_max_chars=env_int("CONTEXT_ANCHOR_MAX_CHARS", 1200),
             context_response_reserve_tokens=env_int("CONTEXT_RESPONSE_RESERVE_TOKENS", 4096),
             context_compaction_max_failures=env_int("CONTEXT_COMPACTION_MAX_FAILURES", 3),
+            tool_prune_enabled=env_bool("TOOL_PRUNE_ENABLED", True),
+            tool_prune_soft_ratio=env_float("TOOL_PRUNE_SOFT_RATIO", 0.5),
+            tool_prune_keep_rounds=env_int("TOOL_PRUNE_KEEP_ROUNDS", 3),
+            tool_prune_min_chars=env_int("TOOL_PRUNE_MIN_CHARS", 600),
             tool_message_format=env_str("TOOL_MESSAGE_FORMAT", "strict"),
             # Tool Output Truncation
             tool_output_max_lines=env_int("TOOL_OUTPUT_MAX_LINES", 2000),

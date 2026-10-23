@@ -549,6 +549,48 @@ class HistoryManager:
         })
         return info if return_info else True
 
+    def prune_tool_outputs(
+        self, *, keep_rounds: int | None = None, min_chars: int | None = None,
+    ) -> int:
+        """Collapse bulky old tool results into a re-run hint; no model call.
+
+        Mirrors opencode's ``compaction.prune`` and Anthropic's context editing:
+        recent rounds and every tool_call/tool_result pair stay intact, while
+        outputs older than *keep_rounds* rounds shrink to a short stub. This
+        defers the expensive summary and preserves detail for longer.
+        """
+        keep = max(1, int(
+            keep_rounds if keep_rounds is not None else self._config.tool_prune_keep_rounds
+        ))
+        threshold = max(0, int(
+            min_chars if min_chars is not None else self._config.tool_prune_min_chars
+        ))
+        messages = self._context_branch_messages() if self._has_forks() else self._messages
+        user_indexes = [
+            index for index, message in enumerate(messages) if message.role == "user"
+        ]
+        if len(user_indexes) <= keep:
+            return 0
+        cutoff = user_indexes[-keep]
+        pruned = 0
+        for message in messages[:cutoff]:
+            if message.role != "tool" or (message.metadata or {}).get("pruned"):
+                continue
+            content = message.content or ""
+            if len(content) <= threshold:
+                continue
+            message.metadata["pruned"] = True
+            message.metadata["original_chars"] = len(content)
+            message.content = (
+                f"[tool output omitted: {len(content)} chars; re-run the tool if needed]"
+            )
+            pruned += 1
+        if pruned:
+            # Provider usage described the pre-prune request; force a fresh
+            # estimate instead of trusting a stale lower bound.
+            self._last_usage_tokens = 0
+        return pruned
+
     def should_compress(self, pending_input: str, *, request_token_estimate: int | None = None) -> bool:
         if self._has_forks():
             messages = self._context_branch_messages()
@@ -575,8 +617,12 @@ class HistoryManager:
         )
         return estimated_total >= max(1, threshold)
 
-    def compact(self, on_event=None, return_info: bool = False):
-        """执行历史压缩。分支下仅压缩当前路径并保留其他节点。"""
+    def compact(self, on_event=None, return_info: bool = False, focus: str | None = None):
+        """执行历史压缩。分支下仅压缩当前路径并保留其他节点。
+
+        ``focus`` lets a manual compaction steer the summary (Claude Code's
+        ``/compact <instructions>``); it is ignored for branch-scoped summaries.
+        """
         def _emit(event: str, payload: dict):
             if on_event:
                 try:
@@ -649,6 +695,16 @@ class HistoryManager:
         # then replace them with ONE consolidated summary. Repeated compaction
         # must not grow an unbounded chain of summary messages.
         summary_sources = existing_summaries + messages_to_compress
+        if focus:
+            summary_sources = summary_sources + [
+                Message(
+                    content=(
+                        "[Compaction focus requested by the user]: "
+                        + " ".join(str(focus).split())[:500]
+                    ),
+                    role="user",
+                )
+            ]
         try:
             new_summary = self._summary_generator(summary_sources)
         except Exception:

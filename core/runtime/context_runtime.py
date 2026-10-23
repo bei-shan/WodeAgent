@@ -34,6 +34,27 @@ class ContextRuntime:
         Reported usage remains a lower bound when previous model calls exist.
         """
         host = self.host
+        # Cheap deterministic stage first: old bulky tool outputs collapse to a
+        # stub before we pay for a summary. Skipped for short sessions and for
+        # hosts that do not expose the estimator (port compatibility).
+        prune = getattr(host.history_manager, "prune_tool_outputs", None)
+        estimator = getattr(host.history_manager, "estimate_context_tokens", None)
+        window = int(getattr(host.config, "context_window", 0) or 0)
+        if (
+            getattr(host.config, "tool_prune_enabled", True)
+            and callable(prune) and callable(estimator) and window > 0
+        ):
+            soft_ratio = float(getattr(host.config, "tool_prune_soft_ratio", 0.5) or 0)
+            try:
+                near_limit = estimator(pending_input) >= int(window * soft_ratio)
+            except Exception:
+                near_limit = False
+            if near_limit:
+                pruned = prune()
+                if pruned:
+                    trace_logger.log_event(
+                        "history_tool_outputs_pruned", {"messages": pruned}, step=step,
+                    )
         history = (host.history_manager.to_messages_branch()
                    if hasattr(host.history_manager, "to_messages_branch")
                    else host.history_manager.to_messages())

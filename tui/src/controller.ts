@@ -180,6 +180,15 @@ export class TuiController {
       this.note(formatSessionTree(await this.api.tree(id)))
       return
     }
+    if (cmd.type === "compact") {
+      if (this.view.busy) { this.note("Wait for the current turn to finish."); return }
+      const result = await this.api.compact(id, cmd.focus)
+      if (this.disposed) return
+      this.note(result.compacted
+        ? "已压缩历史" + (result.summary_generated ? "（含摘要）" : "")
+        : "未压缩：" + (result.reason || "内容不足"))
+      return
+    }
     if (cmd.type === "goal") {
       if (cmd.action === "set") {
         const saved = await this.api.setGoal(id, cmd.objective)

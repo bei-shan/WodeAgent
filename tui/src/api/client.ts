@@ -111,6 +111,11 @@ export class AgentClient {
   }
   history(id: string) { return this.request<SavedHistory>("GET", "/api/sessions/" + encodeURIComponent(id) + "/history") }
   turn(id: string) { return this.request<TurnOutcome>("GET", "/api/sessions/" + encodeURIComponent(id) + "/turn") }
+  compact(id: string, focus = "") {
+    return this.request<{ compacted: boolean; reason: string; summary_generated: boolean }>(
+      "POST", "/api/sessions/" + encodeURIComponent(id) + "/compact", { focus },
+    )
+  }
   goal(id: string) {
     return this.request<{ goal: GoalInfo | null }>("GET", "/api/sessions/" + encodeURIComponent(id) + "/goal")
   }

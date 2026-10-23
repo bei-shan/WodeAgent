@@ -606,6 +606,31 @@ def create_app(
             raise InvalidInputError(f"Unsupported key: {name}")
         return {"deleted": await asyncio.to_thread(delete_secret, name)}
 
+    # ── Manual compaction ───────────────────────────────────────
+    @app.post("/api/sessions/{sid}/compact")
+    async def compact_session(sid: str, body: dict | None = None):
+        """Compact history on demand, optionally steering the summary."""
+        app.state.session_service._require_known(sid)
+        session = app.state.controller.get_session(sid)
+        if session is None:
+            raise InvalidInputError("Session is not active; send a message first.")
+        if session.busy:
+            raise InvalidInputError("Wait for the current turn to finish.")
+        focus = str((body or {}).get("focus") or "").strip()[:500]
+
+        def run():
+            agent = session.ensure_agent()
+            return agent.history_manager.compact(focus=focus, return_info=True)
+
+        info = await asyncio.to_thread(run)
+        return {
+            "compacted": bool(info.get("compressed")),
+            "reason": info.get("reason") or "",
+            "summary_generated": bool(info.get("summary_generated")),
+            "messages_before": info.get("messages_before"),
+            "rounds_count": info.get("rounds_count"),
+        }
+
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):
         data = app.state.session_service.export_portable(sid)

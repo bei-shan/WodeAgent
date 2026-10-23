@@ -9,6 +9,7 @@ export type TerminalCommand =
   | { type: "model"; profile: string }
   | { type: "plan" | "teams"; enabled: boolean }
   | { type: "goal"; action: "show" | "set" | "clear"; objective: string }
+  | { type: "compact"; focus: string }
   | { type: "invalid"; reason: string }
 
 export const TERMINAL_HELP = [
@@ -18,7 +19,7 @@ export const TERMINAL_HELP = [
   "/tree · /fork NODE_ID (8 hex chars)",
   "/export FILE · /import FILE (portable conversation only)",
   "/goal · /goal set TEXT · /goal clear",
-  "/stop · Ctrl+N new · Ctrl+C interrupt/exit",
+  "/compact [FOCUS] · /stop · Ctrl+N new · Ctrl+C interrupt/exit",
 ].join("\n")
 
 export function parseTerminalCommand(raw: string): TerminalCommand | null {
@@ -71,6 +72,7 @@ export function parseTerminalCommand(raw: string): TerminalCommand | null {
       }
       return { type: "invalid", reason: "Usage: /goal · /goal set TEXT · /goal clear" }
     }
+    case "compact": return { type: "compact", focus: arg }
     default: return { type: "invalid", reason: "Unknown command: /" + name + ". Use /help." }
   }
 }
