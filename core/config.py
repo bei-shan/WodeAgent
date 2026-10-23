@@ -163,6 +163,16 @@ class Config(BaseModel):
         enable_teams_raw = env_str("ENABLE_AGENT_TEAMS", "")
         if not enable_teams_raw:
             enable_teams_raw = env_str("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "false")
+        teams_enabled = enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"}
+
+        # Team tools add ~5.6k chars of function schemas per request. Defer them
+        # behind ToolSearch by default when teams are on, unless the operator
+        # explicitly chose a discovery setting.
+        discovery_raw = env_str("TOOL_DEFERRED_DISCOVERY_ENABLED", "")
+        if discovery_raw:
+            discovery_enabled = discovery_raw.lower() in {"1", "true", "yes", "y", "on"}
+        else:
+            discovery_enabled = teams_enabled
 
         teammate_mode_raw = (env_str("TEAMMATE_MODE", "auto") or "auto").strip().lower()
         if teammate_mode_raw not in {"auto", "in-process", "tmux"}:
@@ -185,7 +195,7 @@ class Config(BaseModel):
             max_steps=env_int("MAX_STEPS", 50),
             tool_parallel_reads_enabled=env_bool("TOOL_PARALLEL_READS_ENABLED", True),
             tool_max_concurrency=max(1, min(8, env_int("TOOL_MAX_CONCURRENCY", 4))),
-            tool_deferred_discovery_enabled=env_bool("TOOL_DEFERRED_DISCOVERY_ENABLED", False),
+            tool_deferred_discovery_enabled=discovery_enabled,
             tool_discovery_max_promoted=max(1, min(48, env_int("TOOL_DISCOVERY_MAX_PROMOTED", 18))),
             sandbox_mode=env_str("AGENT_SANDBOX_MODE", "local_trusted"),
             require_isolated_execution=env_bool("AGENT_REQUIRE_ISOLATED_EXECUTION", False),
@@ -210,7 +220,7 @@ class Config(BaseModel):
             sandbox_e2b_redis_ledger_enabled=env_bool("AGENT_SANDBOX_E2B_REDIS_LEDGER_ENABLED", False),
             sandbox_e2b_deployment=env_str("AGENT_SANDBOX_E2B_DEPLOYMENT", "default"),
             # AgentTeams
-            enable_agent_teams=enable_teams_raw.lower() in {"1", "true", "yes", "y", "on"},
+            enable_agent_teams=teams_enabled,
             agent_teams_store_dir=env_str("AGENT_TEAMS_STORE_DIR", ".teams"),
             agent_tasks_store_dir=env_str("AGENT_TASKS_STORE_DIR", ".tasks"),
             teammate_mode=teammate_mode_raw,

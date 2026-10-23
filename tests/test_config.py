@@ -394,3 +394,38 @@ def test_to_dict_returns_all_fields():
     assert d["vcr_enabled"] is False
     assert d["subagent_max_steps"] == 15
     assert d["circuit_failure_threshold"] == 3
+
+def test_teams_enable_deferred_discovery_by_default(monkeypatch):
+    """Team tools cost ~5.6k schema chars; defer them unless told otherwise."""
+    from core.config import Config
+
+    monkeypatch.delenv("TOOL_DEFERRED_DISCOVERY_ENABLED", raising=False)
+    monkeypatch.setenv("ENABLE_AGENT_TEAMS", "true")
+    config = Config.from_env()
+    assert config.enable_agent_teams is True
+    assert config.tool_deferred_discovery_enabled is True
+
+
+def test_explicit_discovery_setting_wins_over_teams(monkeypatch):
+    from core.config import Config
+
+    monkeypatch.setenv("ENABLE_AGENT_TEAMS", "true")
+    monkeypatch.setenv("TOOL_DEFERRED_DISCOVERY_ENABLED", "false")
+    assert Config.from_env().tool_deferred_discovery_enabled is False
+
+    monkeypatch.delenv("ENABLE_AGENT_TEAMS", raising=False)
+    monkeypatch.setenv("TOOL_DEFERRED_DISCOVERY_ENABLED", "true")
+    config = Config.from_env()
+    assert config.enable_agent_teams is False
+    assert config.tool_deferred_discovery_enabled is True
+
+
+def test_teams_off_keeps_discovery_off(monkeypatch):
+    from core.config import Config
+
+    monkeypatch.delenv("ENABLE_AGENT_TEAMS", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", raising=False)
+    monkeypatch.delenv("TOOL_DEFERRED_DISCOVERY_ENABLED", raising=False)
+    config = Config.from_env()
+    assert config.enable_agent_teams is False
+    assert config.tool_deferred_discovery_enabled is False
