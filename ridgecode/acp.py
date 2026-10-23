@@ -1,4 +1,4 @@
-"""ACP (Agent Client Protocol) server over stdio.
+﻿"""ACP (Agent Client Protocol) server over stdio.
 
 Implements the subset an editor needs to drive this agent:
 
@@ -92,6 +92,7 @@ class AcpServer:
         stdin: Optional[TextIO] = None,
         stdout: Optional[TextIO] = None,
         permission_timeout_s: float = 300.0,
+        input_timeout_s: float = 300.0,
         resume_factory: Optional[Callable[[str, str], Any]] = None,
     ):
         self._factory = factory
@@ -102,6 +103,7 @@ class AcpServer:
         self._sessions: dict[str, AcpSession] = {}
         self._sessions_lock = threading.Lock()
         self._permission_timeout_s = max(0.01, float(permission_timeout_s))
+        self._input_timeout_s = max(0.01, float(input_timeout_s))
         self._pending: dict[Any, dict[str, Any]] = {}
         self._pending_lock = threading.Lock()
         self._next_request_id = 1000
@@ -180,8 +182,27 @@ class AcpServer:
             return "granted"
         return "denied"
 
-    def _install_permission_broker(self, session_id: str, agent: Any) -> None:
-        """Route gate and host-command approvals to the editor client."""
+    def _ask_user(self, session_id: str, prompt: str) -> str:
+        """Ask the editor for free-text input (non-standard ACP extension).
+
+        Clients that do not implement ``session/request_input`` answer with a
+        method-not-found error; the question then degrades to an empty answer
+        rather than blocking the turn forever.
+        """
+        params = {
+            "sessionId": session_id,
+            "prompt": {"type": "text", "text": str(prompt)[:4000]},
+        }
+        completed, entry = self._request_client(
+            "session/request_input", params, self._input_timeout_s,
+        )
+        if not completed or entry is None or entry.get("error"):
+            return ""
+        answer = (entry.get("result") or {}).get("answer")
+        return answer if isinstance(answer, str) else ""
+
+    def _install_bridges(self, session_id: str, agent: Any) -> None:
+        """Route approvals and interactive questions to the editor client."""
 
         def broker(description: str, tool_name: str, action: str) -> str:
             return self._ask_permission(session_id, description, tool_name, action)
@@ -194,9 +215,14 @@ class AcpServer:
                 pass
         registry = getattr(agent, "tool_registry", None)
         get_tool = getattr(registry, "get_tool", None)
-        bash = get_tool("Bash") if callable(get_tool) else None
+        if not callable(get_tool):
+            return
+        bash = get_tool("Bash")
         if bash is not None and hasattr(bash, "_command_approval_broker"):
             bash._command_approval_broker = broker
+        ask = get_tool("AskUser")
+        if ask is not None and hasattr(ask, "_input_func"):
+            ask._input_func = lambda prompt: self._ask_user(session_id, prompt)
 
     # ------------------------------------------------------------------
     # Loop
@@ -289,7 +315,7 @@ class AcpServer:
             session_id, cwd, agent,
             on_event=lambda event: self._forward_event(session_id, event),
         )
-        self._install_permission_broker(session_id, agent)
+        self._install_bridges(session_id, agent)
         with self._sessions_lock:
             self._sessions[session_id] = session
         return {"sessionId": session_id}
@@ -316,7 +342,7 @@ class AcpServer:
             session_id, cwd, agent,
             on_event=lambda event: self._forward_event(session_id, event),
         )
-        self._install_permission_broker(session_id, agent)
+        self._install_bridges(session_id, agent)
         with self._sessions_lock:
             self._sessions[session_id] = session
         return {}

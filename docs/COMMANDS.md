@@ -52,6 +52,8 @@ python -m ridgecode acp --cwd /path/to/workspace
 
 `session/load` 支持跨进程恢复：进程重启后带上 `sessionId` 与 `cwd`，服务器会从磁盘快照重建历史并继续使用同一会话（恢复不会覆盖原快照）。
 
+Agent 需要向用户提问时，会发送非标准的 `session/request_input`（参数为 `{sessionId, prompt}`，期望返回 `{answer}`）。未实现该方法、返回错误或超时的客户端会得到空回答，回合继续而不是卡死。只支持标准 ACP 的编辑器可以忽略这条扩展。
+
 支持 ACP 的编辑器（如 Zed）把上面的命令配置为 agent 启动命令即可；会话在进程内创建，进程退出即结束。该模式只面向本地受信任环境，不提供鉴权或多租户隔离。
 
 ## 检查、评测和测试
