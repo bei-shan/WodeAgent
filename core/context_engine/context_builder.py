@@ -54,6 +54,7 @@ class ContextBuilder:
     _output_style_prompt: str = field(default="", init=False)
     _mcp_tools_prompt: str = field(default="", init=False)
     _skills_prompt: str = field(default="", init=False)
+    _memory_prompt: str = field(default="", init=False)
 
     # ══════════════════════════════════════════════════════════════
     # Public API
@@ -98,9 +99,15 @@ class ContextBuilder:
         code_law = self._load_code_law()
         if code_law:
             refs.append(untrusted_reference("workspace CODE_LAW", code_law))
+        if self._memory_prompt:
+            refs.append(untrusted_reference("workspace long-term memory", self._memory_prompt))
         for block in self._runtime_system_blocks:
             refs.append(untrusted_reference("runtime or hook context", block))
         return refs
+
+    def set_memory_prompt(self, prompt: str) -> None:
+        """Recall results for the current turn; refreshed every turn."""
+        self._memory_prompt = prompt or ""
 
     def set_mcp_tools_prompt(self, prompt: str) -> None:
         """更新 MCP 工具提示（无需清缓存 — Late Binding 自动感知）。"""

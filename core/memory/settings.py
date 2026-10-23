@@ -36,6 +36,8 @@ class MemorySettings:
     enabled: bool = False
     provider: str = "off"
     limit: int = DEFAULT_LIMIT
+    auto_capture: bool = False
+    max_per_turn: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -85,25 +87,53 @@ def load_settings(project_root: str | Path) -> MemorySettings:
         limit = int(raw.get("limit") or DEFAULT_LIMIT)
     except (TypeError, ValueError):
         limit = DEFAULT_LIMIT
+    try:
+        max_per_turn = int(raw.get("max_per_turn") or 1)
+    except (TypeError, ValueError):
+        max_per_turn = 1
     return MemorySettings(
         enabled=bool(raw.get("enabled")),
         provider=provider,
         limit=max(1, min(MAX_LIMIT, limit)),
+        auto_capture=bool(raw.get("auto_capture")),
+        max_per_turn=max(1, min(3, max_per_turn)),
     )
 
 
-def validate(enabled: bool, provider: str, limit: int) -> MemorySettings:
+def validate(
+    enabled: bool,
+    provider: str,
+    limit: int,
+    auto_capture: bool = False,
+    max_per_turn: int = 1,
+) -> MemorySettings:
     if provider not in AVAILABLE_PROVIDERS:
         raise MemorySettingsError(f"Unsupported memory provider: {provider}")
     if enabled and provider == "off":
         raise MemorySettingsError("Choose a provider before enabling memory")
     if not 1 <= limit <= MAX_LIMIT:
         raise MemorySettingsError(f"limit must be 1..{MAX_LIMIT}")
-    return MemorySettings(enabled=bool(enabled), provider=provider, limit=int(limit))
+    if auto_capture and not enabled:
+        raise MemorySettingsError("Enable memory before turning on automatic capture")
+    if not 1 <= max_per_turn <= 3:
+        raise MemorySettingsError("max_per_turn must be 1..3")
+    return MemorySettings(
+        enabled=bool(enabled),
+        provider=provider,
+        limit=int(limit),
+        auto_capture=bool(auto_capture),
+        max_per_turn=int(max_per_turn),
+    )
 
 
 def save_settings(project_root: str | Path, settings: MemorySettings) -> MemorySettings:
-    checked = validate(settings.enabled, settings.provider, settings.limit)
+    checked = validate(
+        settings.enabled,
+        settings.provider,
+        settings.limit,
+        settings.auto_capture,
+        settings.max_per_turn,
+    )
     path = settings_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")

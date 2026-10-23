@@ -431,6 +431,8 @@ def create_app(
                 enabled=bool(body.get("enabled")),
                 provider=str(body.get("provider") or "off"),
                 limit=int(body.get("limit") or 8),
+                auto_capture=bool(body.get("auto_capture")),
+                max_per_turn=int(body.get("max_per_turn") or 1),
             ))
         except (MemorySettingsError, MemoryProviderUnavailable, TypeError, ValueError) as exc:
             raise InvalidInputError(str(exc)) from exc

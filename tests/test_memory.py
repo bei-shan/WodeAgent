@@ -34,11 +34,16 @@ def _enable(tmp_path, provider="sqlite", limit=8) -> None:
 # ---------------------------------------------------------------------------
 def test_settings_default_off_and_roundtrip(tmp_path, monkeypatch):
     _project(tmp_path, monkeypatch)
-    assert load_settings(tmp_path).to_dict() == {"enabled": False, "provider": "off", "limit": 8}
+    assert load_settings(tmp_path).to_dict() == {
+        "enabled": False, "provider": "off", "limit": 8,
+        "auto_capture": False, "max_per_turn": 1,
+    }
 
-    saved = save_settings(tmp_path, MemorySettings(enabled=True, provider="sqlite", limit=5))
+    saved = save_settings(tmp_path, MemorySettings(
+        enabled=True, provider="sqlite", limit=5, auto_capture=True, max_per_turn=2,
+    ))
     assert saved.enabled is True
-    assert load_settings(tmp_path) == MemorySettings(True, "sqlite", 5)
+    assert load_settings(tmp_path) == MemorySettings(True, "sqlite", 5, True, 2)
     assert json.loads(settings_path(tmp_path).read_text(encoding="utf-8"))["provider"] == "sqlite"
 
 
@@ -50,6 +55,15 @@ def test_settings_validation(tmp_path, monkeypatch):
         save_settings(tmp_path, MemorySettings(enabled=True, provider="nope"))
     with pytest.raises(MemorySettingsError):
         save_settings(tmp_path, MemorySettings(enabled=True, provider="sqlite", limit=0))
+    # Automatic capture requires memory itself.
+    with pytest.raises(MemorySettingsError):
+        save_settings(tmp_path, MemorySettings(
+            enabled=False, provider="off", auto_capture=True,
+        ))
+    with pytest.raises(MemorySettingsError):
+        save_settings(tmp_path, MemorySettings(
+            enabled=True, provider="sqlite", max_per_turn=9,
+        ))
 
 
 def test_corrupt_settings_fall_back_to_off(tmp_path, monkeypatch):
@@ -122,7 +136,18 @@ def test_memory_api_reports_settings_and_enables(tmp_path, monkeypatch):
 
         enabled = client.put("/api/memory", json={"enabled": True, "provider": "sqlite", "limit": 5})
         assert enabled.status_code == 200
-        assert enabled.json()["settings"] == {"enabled": True, "provider": "sqlite", "limit": 5}
+        assert enabled.json()["settings"] == {
+            "enabled": True, "provider": "sqlite", "limit": 5,
+            "auto_capture": False, "max_per_turn": 1,
+        }
+
+        captured = client.put("/api/memory", json={
+            "enabled": True, "provider": "sqlite", "limit": 5,
+            "auto_capture": True, "max_per_turn": 2,
+        })
+        assert captured.status_code == 200
+        assert captured.json()["settings"]["auto_capture"] is True
+        assert captured.json()["settings"]["max_per_turn"] == 2
 
         assert client.put(
             "/api/memory", json={"enabled": True, "provider": "mem0"},
@@ -130,6 +155,9 @@ def test_memory_api_reports_settings_and_enables(tmp_path, monkeypatch):
         assert client.put(
             "/api/memory", json={"enabled": True, "provider": "off"},
         ).status_code == 400
+        assert client.put("/api/memory", json={
+            "enabled": False, "provider": "off", "auto_capture": True,
+        }).status_code == 400
 
 
 def test_memory_records_api_roundtrip(tmp_path, monkeypatch):

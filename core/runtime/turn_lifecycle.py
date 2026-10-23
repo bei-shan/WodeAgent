@@ -83,6 +83,9 @@ class AgentTurnLifecycle:
         host.context_builder.set_skills_prompt(host._skills_prompt)
         preprocess_result = preprocess_input(input_text)
         processed_input = preprocess_result.processed_input
+        memory_refresh = getattr(host, "_refresh_memory_prompt", None)
+        if callable(memory_refresh):
+            memory_refresh(processed_input)
 
         # 2. Parse token budget from user input
         if hasattr(host, "_budget_tracker"):
@@ -157,6 +160,9 @@ class AgentTurnLifecycle:
             # Save the user input and any completed steps even when provider
             # calls fail or the user cancels the remaining execution.
             host._auto_save_session()
+            capture_memories = getattr(host, "_maybe_capture_memories", None)
+            if callable(capture_memories) and host.last_turn_status == "completed":
+                capture_memories()
             trace_logger.log_event(
                 "run_end",
                 {"run_id": run_id, "final": response_text, "status": host.last_turn_status},

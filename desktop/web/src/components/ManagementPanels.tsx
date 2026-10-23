@@ -454,6 +454,17 @@ export function MemoryPanel() {
               onChange={event => setStatus({ ...status, settings: { ...status.settings, limit: Number(event.target.value) } })}
               onBlur={() => saveSettings(status.settings)}
               className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+            <label className="flex items-center gap-2 text-xs text-gray-500">
+              <input type="checkbox" checked={status.settings.auto_capture} disabled={!enabled}
+                onChange={event => saveSettings({ ...status.settings, auto_capture: event.target.checked })} />
+              自动记忆
+            </label>
+            <label className="text-xs text-gray-500">每回合最多</label>
+            <input type="number" min={1} max={3} value={status.settings.max_per_turn}
+              disabled={!status.settings.auto_capture}
+              onChange={event => setStatus({ ...status, settings: { ...status.settings, max_per_turn: Number(event.target.value) } })}
+              onBlur={() => saveSettings(status.settings)}
+              className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm disabled:opacity-40" />
             <span className="text-[10px] text-gray-400 break-all">{status.store}</span>
           </div>
         </div>

@@ -196,6 +196,8 @@ export interface MemorySettings {
   enabled: boolean;
   provider: string;
   limit: number;
+  auto_capture: boolean;
+  max_per_turn: number;
 }
 
 export interface MemoryRecordInfo {
