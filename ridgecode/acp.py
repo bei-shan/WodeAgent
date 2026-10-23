@@ -1,4 +1,4 @@
-﻿"""ACP (Agent Client Protocol) server over stdio.
+"""ACP (Agent Client Protocol) server over stdio.
 
 Implements the subset an editor needs to drive this agent:
 
@@ -22,6 +22,37 @@ from typing import Any, Callable, Optional, TextIO
 PROTOCOL_VERSION = 1
 STOP_END_TURN = "end_turn"
 STOP_CANCELLED = "cancelled"
+
+# ACP tool kinds, keyed by the agent's tool name (lower-cased).
+_TOOL_KINDS = {
+    "read": "read", "ls": "read", "glob": "read", "list_files": "read",
+    "grep": "search", "search_code": "search", "search_files_by_name": "search",
+    "webfetch": "fetch", "websearch": "search",
+    "write": "edit", "edit": "edit", "multiedit": "edit",
+    "bash": "execute", "pwsh": "execute",
+    "askuser": "other", "task": "other", "workflow": "other",
+}
+MAX_TOOL_TEXT_CHARS = 2000
+
+
+def _tool_output_text(output: Any) -> str:
+    """Readable text for a tool_call_update, never the raw protocol envelope."""
+    if not isinstance(output, str):
+        return ""
+    try:
+        payload = json.loads(output)
+    except (TypeError, ValueError):
+        return output[:MAX_TOOL_TEXT_CHARS]
+    if isinstance(payload, dict):
+        text = payload.get("text")
+        if isinstance(text, str) and text.strip():
+            return text[:MAX_TOOL_TEXT_CHARS]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            nested = data.get("text") or data.get("result")
+            if isinstance(nested, str) and nested.strip():
+                return nested[:MAX_TOOL_TEXT_CHARS]
+    return output[:MAX_TOOL_TEXT_CHARS]
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -400,26 +431,32 @@ class AcpServer:
                     },
                 })
         elif event_type == EventType.TOOL_STARTED:
-            tool_name = str(payload.get("tool_name") or payload.get("name") or "tool")
-            self._notify("session/update", {
-                "sessionId": session_id,
-                "update": {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": str(payload.get("tool_call_id") or payload.get("id") or tool_name),
-                    "title": tool_name,
-                    "status": "in_progress",
-                },
-            })
+            tool_name = str(payload.get("tool") or payload.get("tool_name") or "tool")
+            tool_call_id = str(payload.get("tool_call_id") or payload.get("id") or tool_name)
+            update: dict[str, Any] = {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "title": tool_name,
+                "kind": _TOOL_KINDS.get(tool_name.lower(), "other"),
+                "status": "in_progress",
+            }
+            tool_input = payload.get("input")
+            if isinstance(tool_input, (dict, list, str)):
+                update["rawInput"] = tool_input
+            self._notify("session/update", {"sessionId": session_id, "update": update})
         elif event_type == EventType.TOOL_COMPLETED:
-            tool_name = str(payload.get("tool_name") or payload.get("name") or "tool")
-            self._notify("session/update", {
-                "sessionId": session_id,
-                "update": {
-                    "sessionUpdate": "tool_call_update",
-                    "toolCallId": str(payload.get("tool_call_id") or payload.get("id") or tool_name),
-                    "status": "completed",
-                },
-            })
+            tool_name = str(payload.get("tool") or payload.get("tool_name") or "tool")
+            tool_call_id = str(payload.get("tool_call_id") or payload.get("id") or tool_name)
+            status = "failed" if str(payload.get("status") or "").lower() == "error" else "completed"
+            update = {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "status": status,
+            }
+            content = _tool_output_text(payload.get("output"))
+            if content:
+                update["content"] = [{"type": "text", "text": content}]
+            self._notify("session/update", {"sessionId": session_id, "update": update})
 
     # ------------------------------------------------------------------
     def close(self) -> None:
