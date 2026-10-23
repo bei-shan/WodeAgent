@@ -296,6 +296,33 @@ class SessionManager:
             counts[state] = counts.get(state, 0) + 1
         return counts
 
+    def empty_session_ids(self) -> list[str]:
+        """Sessions with no messages, no tree entries and no open turn."""
+        empties: list[str] = []
+        for session_id in self.session_ids():
+            if (self._dir / f"{session_id}.turn.json").exists():
+                continue
+            snapshot = self._read_snapshot_raw(session_id)
+            log = SessionLog(self._dir, session_id)
+            if snapshot is None:
+                if log.exists() and not log.has_events():
+                    empties.append(session_id)
+                continue
+            if snapshot.get("history_messages") or snapshot.get("history_entries"):
+                continue
+            if log.exists() and log.has_events():
+                continue
+            empties.append(session_id)
+        return empties
+
+    def prune_empty_sessions(self) -> list[str]:
+        """Delete empty sessions; returns the ids actually removed."""
+        removed: list[str] = []
+        for session_id in self.empty_session_ids():
+            if self.delete_session(session_id):
+                removed.append(session_id)
+        return removed
+
     def _read_snapshot_raw(self, session_id: str) -> Optional[dict[str, Any]]:
         path = self._snapshot_path(session_id)
         if not path.exists():

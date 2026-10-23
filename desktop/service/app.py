@@ -208,6 +208,11 @@ def create_app(
         data_dir=app.state.data_dir,
     )
     app.state.turn_service = TurnService(controller=app.state.controller)
+    # Goals live beside the workspace, matching the Goal tool's default store.
+    from core.goals import GoalStore
+    from pathlib import Path as _Path
+
+    app.state.goal_store = GoalStore(_Path(project_root) / "memory" / "goals")
     app.state.settings_service = SessionSettingsService(controller=app.state.controller)
     app.state.teams_service = TeamsService(controller=app.state.controller)
     app.state.workspace_service = WorkspaceService(
@@ -375,6 +380,36 @@ def create_app(
     @app.get("/api/sessions/{sid}/history")
     async def get_session_history(sid: str):
         return app.state.session_service.history(sid)
+
+    # ── Goal ─────────────────────────────────────────────────────
+    @app.get("/api/sessions/{sid}/goal")
+    async def get_goal(sid: str):
+        from core.goals import GoalError
+        app.state.session_service._require_known(sid)
+        try:
+            goal = app.state.goal_store.get(sid)
+        except GoalError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {"goal": goal.to_dict() if goal else None}
+
+    @app.put("/api/sessions/{sid}/goal")
+    async def set_goal(sid: str, body: dict):
+        from core.goals import GoalError
+        app.state.session_service._require_known(sid)
+        try:
+            goal = app.state.goal_store.set_objective(
+                sid,
+                str(body.get("objective") or ""),
+                max_rounds=int(body.get("max_rounds") or 8),
+            )
+        except (GoalError, TypeError, ValueError) as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {"goal": goal.to_dict()}
+
+    @app.delete("/api/sessions/{sid}/goal")
+    async def clear_goal(sid: str):
+        app.state.session_service._require_known(sid)
+        return {"cleared": app.state.goal_store.clear(sid)}
 
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):

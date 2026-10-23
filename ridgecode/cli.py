@@ -82,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     maintain = cmds.add_parser("maintain", help="Audit and repair the local session store")
     maintain.add_argument("--sessions-dir", default="memory/sessions")
     maintain.add_argument("--dry-run", action="store_true", help="Report only; change nothing")
+    maintain.add_argument("--prune-empty", action="store_true", help="Delete sessions with no messages")
     maintain.add_argument("--json", action="store_true")
 
     evaluate = cmds.add_parser("eval", help="Run offline scripted Agent evaluation")
@@ -124,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         options = ["--sessions-dir", args.sessions_dir]
         if args.dry_run:
             options.append("--dry-run")
+        if args.prune_empty:
+            options.append("--prune-empty")
         if args.json:
             options.append("--json")
         return maintain_main(options)

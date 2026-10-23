@@ -77,6 +77,48 @@ def test_missing_store_is_reported_cleanly(tmp_path):
     assert "not found" in lines[0]
 
 
+def test_prune_empty_dry_run_lists_without_deleting(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    empty = manager.create_session("empty")
+    kept = manager.create_session("kept")
+    manager.save_session(kept, _snapshot(("user", "hello")))
+
+    lines: list[str] = []
+    result = run(str(tmp_path), dry_run=True, prune_empty=True, output=lines.append)
+
+    assert result["empty"] == [empty]
+    assert result["pruned"] == []
+    assert (tmp_path / f"{empty}.json").exists()
+    assert any("empty sessions: 1" in line for line in lines)
+
+
+def test_prune_empty_deletes_only_empty_sessions(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    empty = manager.create_session("empty")
+    kept = manager.create_session("kept")
+    manager.save_session(kept, _snapshot(("user", "hello")))
+
+    result = run(str(tmp_path), prune_empty=True)
+
+    assert result["pruned"] == [empty]
+    assert not (tmp_path / f"{empty}.json").exists()
+    assert not (tmp_path / f"{empty}.jsonl").exists()
+    assert (tmp_path / f"{kept}.json").exists()
+    assert SessionManager(sessions_dir=str(tmp_path)).get_session(empty) is None
+
+
+def test_prune_empty_skips_sessions_with_an_open_turn(tmp_path):
+    manager = SessionManager(sessions_dir=str(tmp_path))
+    active = manager.create_session("active")
+    (tmp_path / f"{active}.turn.json").write_text("{}", encoding="utf-8")
+
+    result = run(str(tmp_path), prune_empty=True)
+
+    assert result["pruned"] == []
+    assert (tmp_path / f"{active}.json").exists()
+    assert (tmp_path / f"{active}.turn.json").exists()
+
+
 def test_cli_json_output_is_machine_readable(tmp_path, capsys):
     from ridgecode.maintenance import main
 

@@ -12,6 +12,7 @@ isolation or operator consent for tools that execute effects.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import socket
 import threading
@@ -275,15 +276,173 @@ def _decode(body: bytes, content_type: str) -> str:
     return body.decode(_charset_of(content_type), errors="replace")
 
 
+BINARY_CONTENT_TYPES = frozenset(
+    {
+        "application/pdf",
+        "application/zip",
+        "application/gzip",
+        "application/x-tar",
+        "application/x-7z-compressed",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/octet-stream",
+        "application/wasm",
+        "font/woff",
+        "font/woff2",
+        "font/ttf",
+        "font/otf",
+    }
+)
+
+
 def _classify(content_type: str) -> str:
     mime = content_type.split(";", 1)[0].strip().lower()
     if mime in {"text/html", "application/xhtml+xml"} or not mime:
         return "html"
     if mime.startswith("text/") or mime in TEXT_CONTENT_TYPES:
         return "text"
-    if mime.startswith("image/") or mime.startswith("video/") or mime.startswith("audio/"):
+    if (
+        mime.startswith("image/")
+        or mime.startswith("video/")
+        or mime.startswith("audio/")
+        or mime in BINARY_CONTENT_TYPES
+    ):
         return "binary"
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# robots.txt (opt-in; off by default because a local agent acts for its user)
+# ---------------------------------------------------------------------------
+ROBOTS_CACHE_TTL_S = 3600.0
+_ROBOTS_CACHE: "dict[str, tuple[Optional[RobotsRules], float]]" = {}
+_ROBOTS_CACHE_LOCK = threading.Lock()
+
+
+def robots_enabled() -> bool:
+    value = (os.getenv("WEB_FETCH_RESPECT_ROBOTS", "false") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _parse_robots_groups(text: str) -> list[tuple[list[str], list[tuple[bool, str]]]]:
+    groups: list[tuple[list[str], list[tuple[bool, str]]]] = []
+    agents: list[str] = []
+    rules: list[tuple[bool, str]] = []
+    in_rules = False
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        field = field.strip().lower()
+        value = value.strip()
+        if field == "user-agent":
+            if in_rules:
+                groups.append((agents, rules))
+                agents, rules, in_rules = [], [], False
+            agents.append(value.lower())
+        elif field in {"allow", "disallow"} and agents:
+            in_rules = True
+            rules.append((field == "allow", value))
+    if agents:
+        groups.append((agents, rules))
+    return groups
+
+
+def _robots_match(pattern: str, path: str) -> bool:
+    if not pattern:
+        return False
+    anchored = pattern.endswith("$")
+    body = pattern[:-1] if anchored else pattern
+    regex = re.escape(body).replace(r"\*", ".*")
+    try:
+        if anchored:
+            return re.fullmatch(regex, path) is not None
+        return re.match(regex, path) is not None
+    except re.error:
+        return False
+
+
+class RobotsRules:
+    """Minimal RFC 9309 matcher: agent groups, prefixes, wildcards and anchors."""
+
+    def __init__(self, text: str = "", user_agent: str = DEFAULT_USER_AGENT):
+        self._rules = self._select(_parse_robots_groups(text), user_agent)
+
+    @staticmethod
+    def _select(groups, user_agent: str) -> list[tuple[bool, str]]:
+        ua = (user_agent or "").lower()
+        specific: list[tuple[bool, str]] = []
+        wildcard: list[tuple[bool, str]] = []
+        for agents, rules in groups:
+            named = [agent for agent in agents if agent and agent != "*"]
+            if any(agent in ua for agent in named):
+                specific.extend(rules)
+            elif "*" in agents:
+                wildcard.extend(rules)
+        return specific if specific else wildcard
+
+    def allows(self, path: str) -> bool:
+        best_length = -1
+        decision = True
+        for allow, pattern in self._rules:
+            if not _robots_match(pattern, path):
+                continue
+            length = len(pattern.rstrip("$"))
+            if length > best_length or (length == best_length and allow):
+                best_length = length
+                decision = allow
+        return decision
+
+
+def _fetch_robots(origin: str, timeout_s: float) -> Optional[str]:
+    import httpx
+
+    try:
+        with httpx.Client(
+            timeout=timeout_s, follow_redirects=True,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+        ) as client:
+            response = client.get(f"{origin}/robots.txt")
+    except httpx.HTTPError:
+        return None
+    if response.status_code >= 400:
+        return None
+    return response.text
+
+
+def _robots_for(
+    origin: str, *, user_agent: str, timeout_s: float, fetcher=None,
+) -> Optional[RobotsRules]:
+    now = time.monotonic()
+    with _ROBOTS_CACHE_LOCK:
+        cached = _ROBOTS_CACHE.get(origin)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+    text = (fetcher or _fetch_robots)(origin, timeout_s)
+    rules = RobotsRules(text, user_agent) if text else None
+    with _ROBOTS_CACHE_LOCK:
+        _ROBOTS_CACHE[origin] = (rules, now + ROBOTS_CACHE_TTL_S)
+    return rules
+
+
+def clear_robots_cache() -> None:
+    with _ROBOTS_CACHE_LOCK:
+        _ROBOTS_CACHE.clear()
+
+
+def robots_allows(
+    url: str, *, user_agent: str = DEFAULT_USER_AGENT, timeout_s: float = 5.0, fetcher=None,
+) -> bool:
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.hostname or ''}"
+    if parts.port:
+        origin = f"{origin}:{parts.port}"
+    rules = _robots_for(origin, user_agent=user_agent, timeout_s=timeout_s, fetcher=fetcher)
+    return True if rules is None else rules.allows(parts.path or "/")
 
 
 FETCH_CACHE_TTL_S = 300.0
@@ -369,6 +528,10 @@ def _fetch_uncached(
     """Perform the request; *url* must already be normalized and validated."""
     import httpx
 
+    if robots_enabled() and not robots_allows(
+        url, user_agent=user_agent, timeout_s=min(5.0, timeout_s),
+    ):
+        raise WebAccessDenied(f"robots.txt disallows fetching {url}")
     as_markdown = format != "text"
     limiter = rate_limiter or DEFAULT_RATE_LIMITER
     current = url
