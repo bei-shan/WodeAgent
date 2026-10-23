@@ -167,6 +167,15 @@ python -m scripts.context_metrics --rounds 80 --tool-chars 1500 --text-chars 150
 
 结论：**维持 0.8 / 0.5 默认值**。修剪足以把工具密集型会话压在摘要阈值以下，摘要只在文本持续累积时兜底；0.9 会把文本型会话峰值推到 ~117k，离窗口上限太近，不建议作为默认。
 
+真实 trace 统计（看实际发生了什么，而不是模拟）：
+
+```bash
+python -m scripts.context_trace_report
+python -m scripts.context_trace_report --dir memory/traces --json
+```
+
+当前本机 trace（227 文件 / 184 会话 / 120 次触发）的结果：压缩完成 0 次、跳过 120 次，原因全部是 `rounds_not_enough`；平均触发值 10,467 token、平均阈值 2,000。这些是早期小窗口调试会话，**还不能用来校准默认值**；修剪事件为 0 是因为该事件刚加入。真实长会话跑过之后，再执行一次这个脚本即可对比模拟结论。
+
 安全性：摘要超时、返回空、超过输出预算、或连续失败 3 次时都会**保留原始历史**，不执行破坏性截断；旧摘要参与新摘要合并，只保留一条；原始用户目标以 `<task_continuity>` 锚点跨多次压缩保留。
 
 ## 检查、评测和测试
