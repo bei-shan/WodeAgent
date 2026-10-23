@@ -180,6 +180,31 @@ export class TuiController {
       this.note(formatSessionTree(await this.api.tree(id)))
       return
     }
+    if (cmd.type === "goal") {
+      if (cmd.action === "set") {
+        const saved = await this.api.setGoal(id, cmd.objective)
+        if (this.disposed) return
+        this.note(
+          "Goal set: " + saved.goal.objective
+          + " · rounds " + saved.goal.rounds_started + "/" + saved.goal.max_rounds,
+        )
+        return
+      }
+      if (cmd.action === "clear") {
+        const result = await this.api.clearGoal(id)
+        if (this.disposed) return
+        this.note(result.cleared ? "Goal cleared." : "No goal to clear.")
+        return
+      }
+      const current = await this.api.goal(id)
+      if (this.disposed) return
+      this.note(current.goal
+        ? "Goal [" + current.goal.status + "] " + current.goal.objective
+          + " · rounds " + current.goal.rounds_started + "/" + current.goal.max_rounds
+          + (current.goal.blocked_reason ? " · blocked: " + current.goal.blocked_reason : "")
+        : "No goal for this session. Use /goal set TEXT.")
+      return
+    }
     if (cmd.type === "delete") {
       if (!cmd.confirmed) { this.note("To delete the current session, type /delete confirm"); return }
       if (this.view.busy) { this.note("Stop the current turn before deleting."); return }

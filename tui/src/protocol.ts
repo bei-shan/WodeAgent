@@ -15,6 +15,19 @@ export interface SessionInfo {
   pinned?: boolean
 }
 
+export type GoalStatus = "active" | "complete" | "blocked"
+
+export interface GoalInfo {
+  session_id: string
+  objective: string
+  status: GoalStatus
+  rounds_started: number
+  max_rounds: number
+  blocked_reason?: string
+  created_at?: string
+  updated_at?: string
+}
+
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"

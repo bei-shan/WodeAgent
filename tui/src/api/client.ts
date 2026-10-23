@@ -1,4 +1,4 @@
-import type { SessionInfo, TurnStatus } from "../protocol"
+import type { GoalInfo, SessionInfo, TurnStatus } from "../protocol"
 
 export type SessionTreeNode = {
   id: string
@@ -111,6 +111,17 @@ export class AgentClient {
   }
   history(id: string) { return this.request<SavedHistory>("GET", "/api/sessions/" + encodeURIComponent(id) + "/history") }
   turn(id: string) { return this.request<TurnOutcome>("GET", "/api/sessions/" + encodeURIComponent(id) + "/turn") }
+  goal(id: string) {
+    return this.request<{ goal: GoalInfo | null }>("GET", "/api/sessions/" + encodeURIComponent(id) + "/goal")
+  }
+  setGoal(id: string, objective: string, maxRounds?: number) {
+    const payload: { objective: string; max_rounds?: number } = { objective }
+    if (maxRounds !== undefined) payload.max_rounds = maxRounds
+    return this.request<{ goal: GoalInfo }>("PUT", "/api/sessions/" + encodeURIComponent(id) + "/goal", payload)
+  }
+  clearGoal(id: string) {
+    return this.request<{ cleared: boolean }>("DELETE", "/api/sessions/" + encodeURIComponent(id) + "/goal")
+  }
   send(id: string, content: string) {
     return this.request<{ status: string }>("POST", "/api/sessions/" + encodeURIComponent(id) + "/messages", { content })
   }

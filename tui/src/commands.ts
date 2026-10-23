@@ -8,6 +8,7 @@ export type TerminalCommand =
   | { type: "delete"; confirmed: boolean }
   | { type: "model"; profile: string }
   | { type: "plan" | "teams"; enabled: boolean }
+  | { type: "goal"; action: "show" | "set" | "clear"; objective: string }
   | { type: "invalid"; reason: string }
 
 export const TERMINAL_HELP = [
@@ -16,6 +17,7 @@ export const TERMINAL_HELP = [
   "/models · /model PROFILE · /plan on|off · /teams on|off",
   "/tree · /fork NODE_ID (8 hex chars)",
   "/export FILE · /import FILE (portable conversation only)",
+  "/goal · /goal set TEXT · /goal clear",
   "/stop · Ctrl+N new · Ctrl+C interrupt/exit",
 ].join("\n")
 
@@ -58,6 +60,17 @@ export function parseTerminalCommand(raw: string): TerminalCommand | null {
       return arg === "on" || arg === "off"
         ? { type: name as "plan" | "teams", enabled: arg === "on" }
         : { type: "invalid", reason: "Usage: /" + name + " on|off" }
+    case "goal": {
+      if (!arg) return { type: "goal", action: "show", objective: "" }
+      if (arg === "clear") return { type: "goal", action: "clear", objective: "" }
+      if (arg.startsWith("set ")) {
+        const objective = arg.slice(4).trim()
+        return objective
+          ? { type: "goal", action: "set", objective }
+          : { type: "invalid", reason: "Usage: /goal set TEXT" }
+      }
+      return { type: "invalid", reason: "Usage: /goal · /goal set TEXT · /goal clear" }
+    }
     default: return { type: "invalid", reason: "Unknown command: /" + name + ". Use /help." }
   }
 }
