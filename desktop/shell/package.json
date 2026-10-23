@@ -1,0 +1,37 @@
+{
+  "name": "ridgecode-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ridge Code desktop shell: starts the local API and shows the built Web UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.ridgecode.desktop",
+    "productName": "Ridge Code",
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web-dist"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}

@@ -988,7 +988,35 @@ def create_app(
     async def save_hooks(body: dict):
         return app.state.config_catalog.save_hooks(body)
 
+    # A desktop shell serves the built SPA from this process, so the window can
+    # load one loopback URL with no proxy or CORS layer. Opt-in: the plain
+    # `serve` command keeps its API-only behaviour.
+    if _serve_frontend_enabled():
+        frontend_dir = _frontend_dir(project_root)
+        if frontend_dir is not None:
+            from fastapi.staticfiles import StaticFiles
+
+            app.mount(
+                "/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend",
+            )
+
     return app
+
+
+def _serve_frontend_enabled() -> bool:
+    value = (os.getenv("WEB_SERVE_FRONTEND", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _frontend_dir(project_root: str):
+    """Built SPA directory, or ``None`` when there is nothing to serve."""
+    from pathlib import Path
+
+    override = os.getenv("WEB_FRONTEND_DIR", "").strip()
+    candidate = Path(override) if override else Path(project_root) / "desktop" / "web" / "dist"
+    if not (candidate / "index.html").is_file():
+        return None
+    return candidate
 
 
 # ═══════════════════════════════════════════════════════════════════════
