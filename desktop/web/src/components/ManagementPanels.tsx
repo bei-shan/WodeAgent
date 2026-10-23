@@ -512,3 +512,127 @@ export function MemoryPanel() {
     </div>
   )
 }
+
+export function ModelsPanel() {
+  const [settings, setSettings] = useState<api.ModelSettings | null>(null)
+  const [form, setForm] = useState({ name: '', model: '', provider: '', base_url: '', api_key: '' })
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      setSettings(await api.modelSettings.list())
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      await api.modelSettings.save({
+        name: form.name.trim(),
+        model: form.model.trim(),
+        provider: form.provider.trim(),
+        base_url: form.base_url.trim(),
+        api_key: form.api_key,
+      })
+      setForm({ name: '', model: '', provider: '', base_url: '', api_key: '' })
+      await load()
+      setNotice('模型配置已保存')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (name: string) => {
+    try {
+      await api.modelSettings.remove(name)
+      await load()
+      setNotice('已删除 ' + name)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  if (!settings) {
+    return <div className="flex-1 bg-[#F9FAFB] p-6 text-sm text-gray-400">正在读取模型配置…</div>
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+      <div className="max-w-3xl mx-auto py-8 px-6">
+        <h2 className="text-xl font-semibold text-gray-800">模型</h2>
+        <p className="text-xs text-gray-400 mt-1 mb-6">
+          这里保存的配置写入 .mycodeagent/settings/models.json，密钥只在本机保存、界面只显示末四位。
+        </p>
+
+        {notice && <div className="text-xs text-gray-500 mb-3">{notice}</div>}
+
+        <div className="space-y-2 mb-6">
+          {settings.profiles.length === 0 && (
+            <div className="text-xs text-gray-400">还没有模型配置，先在下方添加一个。</div>
+          )}
+          {settings.profiles.map(profile => (
+            <div key={profile.name} className="bg-white border border-gray-200 rounded-xl p-3 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-gray-800">{profile.name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                    {profile.source === 'env' ? 'env' : '界面'}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {profile.model}
+                  {profile.provider ? ' · ' + profile.provider : ''}
+                  {profile.base_url ? ' · ' + profile.base_url : ''}
+                </div>
+                <div className="text-[10px] text-gray-400 mt-0.5">
+                  密钥：{profile.has_key ? profile.api_key : '未设置'}
+                </div>
+              </div>
+              {profile.source === 'file' && (
+                <button type="button" onClick={() => remove(profile.name)}
+                  className="text-xs text-red-500 hover:text-red-600 shrink-0">删除</button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-sm font-medium text-gray-700 mb-3">添加 / 更新</div>
+          <div className="grid grid-cols-2 gap-3">
+            <input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}
+              placeholder="名称（小写字母/数字/-_）"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+            <input value={form.model} onChange={event => setForm({ ...form, model: event.target.value })}
+              placeholder="模型 ID，例如 deepseek-v4"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+            <input value={form.provider} onChange={event => setForm({ ...form, provider: event.target.value })}
+              placeholder="Provider，例如 deepseek / openai"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+            <input value={form.base_url} onChange={event => setForm({ ...form, base_url: event.target.value })}
+              placeholder="Base URL，例如 https://api.deepseek.com"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+            <input type="password" value={form.api_key} onChange={event => setForm({ ...form, api_key: event.target.value })}
+              placeholder="API Key（留空则保留原值）"
+              className="col-span-2 border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+          </div>
+          <div className="flex justify-end mt-3">
+            <button type="button" onClick={save} disabled={busy || !form.name.trim() || !form.model.trim()}
+              className="px-4 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-40">
+              保存模型
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-3">
+            env 中通过 MODEL_PROFILES 配置的同名模型会被这里覆盖；保存后新会话即可选用。
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}

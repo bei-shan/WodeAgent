@@ -472,6 +472,46 @@ def create_app(
         deleted = await asyncio.to_thread(lambda: _memory_service().delete(record_id))
         return {"deleted": deleted}
 
+    # ── Model profiles (UI-managed) ──────────────────────────────
+    @app.get("/api/settings/models")
+    async def get_model_settings():
+        from core.model_profiles import load_model_profiles, load_saved_profiles
+
+        profiles = load_model_profiles()
+        return {
+            "profiles": [profiles[name].as_dict() for name in sorted(profiles)],
+            "file_profiles": sorted(load_saved_profiles()),
+            "env_configured": bool(os.getenv("MODEL_PROFILES", "").strip()),
+        }
+
+    @app.put("/api/settings/models")
+    async def save_model_profile(body: dict):
+        from core.model_profiles import load_model_profiles, upsert_profile
+
+        name = str(body.get("name") or "").strip().lower()
+        try:
+            await asyncio.to_thread(
+                lambda: upsert_profile(
+                    name,
+                    str(body.get("model") or ""),
+                    provider=str(body.get("provider") or ""),
+                    api_key=str(body.get("api_key") or ""),
+                    base_url=str(body.get("base_url") or ""),
+                )
+            )
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        profile = (await asyncio.to_thread(load_model_profiles)).get(name)
+        if profile is None:
+            raise InvalidInputError("Profile was not saved")
+        return {"profile": profile.as_dict()}
+
+    @app.delete("/api/settings/models/{name}")
+    async def delete_model_profile(name: str):
+        from core.model_profiles import delete_profile
+
+        return {"deleted": await asyncio.to_thread(delete_profile, name)}
+
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):
         data = app.state.session_service.export_portable(sid)

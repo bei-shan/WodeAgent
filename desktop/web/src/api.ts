@@ -230,6 +230,33 @@ export const memory = {
     req<{ deleted: boolean }>('DELETE', `/memory/records/${encodeURIComponent(id)}`),
 };
 
+// ── Model settings ───────────────────────────────────────────────────
+
+export interface ModelProfileInfo {
+  name: string;
+  model: string;
+  provider: string | null;
+  api_key: string | null;
+  has_key: boolean;
+  base_url: string | null;
+  source: 'file' | 'env' | 'none';
+}
+
+export interface ModelSettings {
+  profiles: ModelProfileInfo[];
+  file_profiles: string[];
+  env_configured: boolean;
+}
+
+export const modelSettings = {
+  list: () => req<ModelSettings>('GET', '/settings/models'),
+  save: (profile: {
+    name: string; model: string; provider?: string; api_key?: string; base_url?: string;
+  }) => req<{ profile: ModelProfileInfo }>('PUT', '/settings/models', profile),
+  remove: (name: string) =>
+    req<{ deleted: boolean }>('DELETE', `/settings/models/${encodeURIComponent(name)}`),
+};
+
 // ── Files ────────────────────────────────────────────────────────────
 
 export const files = {

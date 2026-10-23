@@ -78,6 +78,29 @@ Web 端「工作台 → 记忆」可开关记忆、选择后端（`off` / `sqlit
 - **自动记忆**（默认关闭，需手动打开）：回合成功结束后用 compact 模型抽取最多 1–3 条可复用事实，已存在的相似条目跳过；后台线程执行，不阻塞回合、不改变回合结果
 - 记忆按工作区（项目路径哈希）隔离，仅本地单用户；`mem0` 需要外部客户端与服务端授权，界面暂不提供
 
+## 工作区指令文件
+
+`AGENTS.md`（opencode 约定）、`CLAUDE.md`（Claude Code 兼容）、`CODE_LAW.md`（旧版 Ridge Code 约定）会被自动读取，按顺序拼成一段**不可信参考**注入每轮 context。单文件上限 12k 字符、合计 20k，超出截断。
+
+**`CODE_LAW.md` 不是必须的**，保留它只是向后兼容；新项目请写 `AGENTS.md`。三份同时存在时会重复，建议只留一份。
+
+```bash
+python -m ridgecode init            # 扫描仓库生成 AGENTS.md
+python -m ridgecode init --stdout   # 只预览，不落盘
+python -m ridgecode init --force    # 覆盖已有 AGENTS.md
+```
+
+生成器只读 `package.json`、`Makefile`、pyproject/requirements、目录结构和已有规则文件，不调用模型；不确定的地方留 `<!-- TODO -->` 由人补。
+
+## 模型与 API Key
+
+Web 端「工作台 → 模型」可以新增/覆盖模型配置：名称、模型 ID、provider、base URL、API Key。
+
+- 存储：`.mycodeagent/settings/models.json`（权限 0600，根目录可用 `MYCODEAGENT_DATA_DIR` 覆盖）
+- API Key 只在本机保存；`GET /api/settings/models` 与 `/api/models` 只返回 `***末四位`，不返回明文
+- 留空 API Key 保存时保留原值，方便只改模型 ID
+- 与 `.env` 中 `MODEL_PROFILES` 同名时，**这里的配置优先**；改完新建会话即可选用
+
 ## 检查、评测和测试
 
 ```bash

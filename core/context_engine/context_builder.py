@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from core.context_engine.instruction_files import (
+    instruction_signature, load_instructions,
+)
 from core.context_engine.untrusted_content import (
     TRUST_BOUNDARY_RULES, frame_history_tool_results, untrusted_reference,
 )
@@ -46,8 +49,8 @@ class ContextBuilder:
     # ── Lightweight caches (self-invalidating) ──
     _cached_l1_mtime: Optional[float] = field(default=None, init=False)
     _cached_l1_text: str = field(default="", init=False)
-    _cached_code_law: str = field(default="", init=False)
-    _cached_code_law_mtime: Optional[float] = field(default=None, init=False)
+    _cached_instructions: str = field(default="", init=False)
+    _cached_instruction_signature: tuple = field(default=(), init=False)
 
     # ── Live state (no cache invalidation needed) ──
     _runtime_system_blocks: List[str] = field(default_factory=list, init=False)
@@ -96,9 +99,11 @@ class ContextBuilder:
             refs.append(untrusted_reference("MCP tool descriptions", self._mcp_tools_prompt))
         if self._skills_prompt:
             refs.append(untrusted_reference("Skill metadata", self._skills_prompt))
-        code_law = self._load_code_law()
+        code_law = self._load_instructions()
         if code_law:
-            refs.append(untrusted_reference("workspace CODE_LAW", code_law))
+            refs.append(untrusted_reference(
+                "workspace instructions (AGENTS.md / CLAUDE.md / CODE_LAW.md)", code_law,
+            ))
         if self._memory_prompt:
             refs.append(untrusted_reference("workspace long-term memory", self._memory_prompt))
         for block in self._runtime_system_blocks:
@@ -207,25 +212,14 @@ class ContextBuilder:
         self._cached_l1_text = prompt
         return prompt
 
-    def _load_code_law(self) -> str:
-        """Load CODE_LAW.md (mtime-cached)."""
-        for filename in ("code_law.md", "CODE_LAW.md"):
-            code_law_path = Path(self.project_root) / filename
-            if not code_law_path.exists():
-                continue
-            try:
-                mtime = code_law_path.stat().st_mtime
-            except OSError:
-                return ""
-            if self._cached_code_law_mtime == mtime and self._cached_code_law:
-                return self._cached_code_law
-            try:
-                self._cached_code_law = code_law_path.read_text(encoding="utf-8")
-            except OSError:
-                self._cached_code_law = ""
-            self._cached_code_law_mtime = mtime
-            return self._cached_code_law
-        return ""
+    def _load_instructions(self) -> str:
+        """Load AGENTS.md / CLAUDE.md / CODE_LAW.md (signature-cached)."""
+        signature = instruction_signature(self.project_root)
+        if signature == self._cached_instruction_signature and self._cached_instructions:
+            return self._cached_instructions
+        self._cached_instruction_signature = signature
+        self._cached_instructions = load_instructions(self.project_root)
+        return self._cached_instructions
 
     # ══════════════════════════════════════════════════════════════
     # Helpers

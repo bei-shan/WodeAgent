@@ -1,7 +1,15 @@
-"""Model profile registry — loads available models from environment.
+"""Model profile registry — environment variables plus UI-managed profiles.
 
 Supports Claude Code-style model switching.  Each profile defines a
 model identifier plus its provider, API key, and base URL.
+
+Profiles come from two places:
+
+* environment (``.env``), for operators who want nothing written to disk;
+* ``<data_dir>/settings/models.json``, written by the Web settings panel.
+
+A profile defined in the file wins over an environment profile with the same
+name, so editing a key in the UI takes effect without restarting the process.
 
 Configuration via ``.env``::
 
@@ -35,8 +43,129 @@ the current credentials.
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def data_dir() -> Path:
+    """Local data root shared with the Web service."""
+    override = os.getenv("MYCODEAGENT_DATA_DIR", "").strip()
+    return Path(override) if override else Path.cwd() / ".mycodeagent"
+
+
+def profiles_path() -> Path:
+    return data_dir() / "settings" / "models.json"
+
+
+def _clean_entry(entry: Any) -> Optional[Dict[str, Optional[str]]]:
+    if not isinstance(entry, dict):
+        return None
+    model = str(entry.get("model") or "").strip()
+    if not model:
+        return None
+    return {
+        "model": model,
+        "provider": str(entry.get("provider") or "").strip() or None,
+        "api_key": str(entry.get("api_key") or "").strip() or None,
+        "base_url": str(entry.get("base_url") or "").strip() or None,
+    }
+
+
+def load_saved_profiles() -> Dict[str, Dict[str, Optional[str]]]:
+    """Profiles persisted by the settings panel; empty when the file is bad."""
+    path = profiles_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    entries = raw.get("profiles") if isinstance(raw, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+    profiles: Dict[str, Dict[str, Optional[str]]] = {}
+    for name, entry in entries.items():
+        key = str(name).strip().lower()
+        if not PROFILE_NAME_RE.match(key):
+            continue
+        cleaned = _clean_entry(entry)
+        if cleaned is None:
+            continue
+        profiles[key] = cleaned
+    return profiles
+
+
+def save_saved_profiles(profiles: Dict[str, Dict[str, Optional[str]]]) -> None:
+    path = profiles_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(
+            json.dumps({"profiles": profiles}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def upsert_profile(
+    name: str,
+    model: str,
+    *,
+    provider: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> Dict[str, Optional[str]]:
+    """Create or update a profile; an empty api_key keeps the stored key."""
+    key = str(name or "").strip().lower()
+    if not PROFILE_NAME_RE.match(key):
+        raise ValueError("Profile name must be 1-32 chars: lowercase letters, digits, - or _")
+    model_id = str(model or "").strip()
+    if not model_id:
+        raise ValueError("Model id is required")
+    profiles = load_saved_profiles()
+    previous = profiles.get(key, {})
+    stored_key = api_key if api_key not in (None, "") else previous.get("api_key")
+    profiles[key] = {
+        "model": model_id,
+        "provider": (provider or "").strip() or previous.get("provider"),
+        "api_key": stored_key or None,
+        "base_url": (base_url or "").strip() or previous.get("base_url"),
+    }
+    save_saved_profiles(profiles)
+    return profiles[key]
+
+
+def delete_profile(name: str) -> bool:
+    key = str(name or "").strip().lower()
+    profiles = load_saved_profiles()
+    if key not in profiles:
+        return False
+    del profiles[key]
+    save_saved_profiles(profiles)
+    return True
+
+
+def profile_source(name: str) -> str:
+    """Where a profile comes from: ``file`` (UI), ``env``, or ``none``."""
+    key = str(name or "").strip().lower()
+    if key in load_saved_profiles():
+        return "file"
+    env_names = {
+        raw.strip().lower() for raw in os.getenv("MODEL_PROFILES", "").split(",") if raw.strip()
+    }
+    return "env" if key in env_names else "none"
 
 
 class ModelProfile:
@@ -59,28 +188,31 @@ class ModelProfile:
         self.base_url = base_url
 
     def as_dict(self) -> dict:
+        masked = None
+        if self.api_key:
+            masked = "***" + self.api_key[-4:] if len(self.api_key) >= 12 else "***"
         return {
             "name": self.name,
             "model": self.model,
             "provider": self.provider,
-            "api_key": self.api_key[:8] + "***" if self.api_key else None,
+            "api_key": masked,
+            "has_key": bool(self.api_key),
             "base_url": self.base_url,
+            "source": profile_source(self.name),
         }
 
 
 def load_model_profiles() -> Dict[str, ModelProfile]:
-    """Load model profiles from environment variables.
+    """Load profiles from the environment and the UI-managed settings file.
 
-    Reads ``MODEL_PROFILES`` (comma-separated names), then for each
-    name looks up ``MODEL_<NAME>_ID``, ``MODEL_<NAME>_PROVIDER``, etc.
+    Reads ``MODEL_PROFILES`` (comma-separated names), then for each name looks
+    up ``MODEL_<NAME>_ID``, ``MODEL_<NAME>_PROVIDER``, etc. File-backed profiles
+    are applied afterwards and win on name collisions.
 
     Returns a dict keyed by lowercase profile name.
     """
-    names = os.getenv("MODEL_PROFILES", "")
-    if not names.strip():
-        return {}
-
     profiles: Dict[str, ModelProfile] = {}
+    names = os.getenv("MODEL_PROFILES", "")
     for raw in names.split(","):
         name = raw.strip().upper()
         if not name:
@@ -97,6 +229,14 @@ def load_model_profiles() -> Dict[str, ModelProfile]:
         )
         profiles[name.lower()] = profile
 
+    for name, entry in load_saved_profiles().items():
+        profiles[name] = ModelProfile(
+            name=name,
+            model=entry["model"] or "",
+            provider=entry.get("provider"),
+            api_key=entry.get("api_key"),
+            base_url=entry.get("base_url"),
+        )
     return profiles
 
 

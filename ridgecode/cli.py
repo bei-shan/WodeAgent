@@ -85,6 +85,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     maintain.add_argument("--prune-empty", action="store_true", help="Delete sessions with no messages")
     maintain.add_argument("--json", action="store_true")
 
+    init = cmds.add_parser("init", help="Generate AGENTS.md from the repository layout")
+    init.add_argument("--dir", default=".")
+    init.add_argument("--force", action="store_true", help="Replace an existing AGENTS.md")
+    init.add_argument("--stdout", action="store_true", help="Print the file instead of writing it")
+
     evaluate = cmds.add_parser("eval", help="Run offline scripted Agent evaluation")
     evaluate.add_argument("--json", action="store_true")
     evaluate.add_argument("--case", action="append")
@@ -130,6 +135,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json:
             options.append("--json")
         return maintain_main(options)
+    if args.command == "init":
+        from core.instructions_generator import render_agents_md, scan_project, write_agents_md
+
+        root = Path(args.dir).resolve()
+        if not root.is_dir():
+            print(f"Not a directory: {root}", file=sys.stderr)
+            return 2
+        content = render_agents_md(scan_project(root))
+        if args.stdout:
+            print(content, end="")
+            return 0
+        try:
+            path = write_agents_md(root, content, force=args.force)
+        except FileExistsError:
+            print(
+                "AGENTS.md already exists; pass --force to replace it (or --stdout to preview).",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Wrote {path} ({len(content)} chars)")
+        return 0
     if args.command == "eval":
         from scripts.agent_eval import main as evaluate
         options = ["--json"] if args.json else []
