@@ -275,6 +275,19 @@ class CodeAgent(Agent):
             self.logger.warning("Goal driver unavailable: %s", exc)
             return None
 
+    def _disable_optional_tools(self, registered: list[str]) -> None:
+        """Hide tools whose feature is off so the model never sees dead options."""
+        if "Memory" not in registered:
+            return
+        try:
+            from core.memory.settings import is_enabled
+
+            if not is_enabled(self.project_root):
+                self.tool_registry.unregister("Memory", owner="builtin")
+                self.logger.debug("Memory tool hidden: long-term memory is disabled")
+        except Exception as exc:  # gating must never break agent construction
+            self.logger.debug("Memory tool gating skipped: %s", exc)
+
     def _init_tools(self) -> None:
         """Register built-in and MCP tools via ToolBootstrap auto-discovery."""
         bootstrap = ToolBootstrap(
@@ -300,6 +313,7 @@ class CodeAgent(Agent):
         if self._hosted_tool_authority is None:
             registered = bootstrap.discover_and_register()
             self.logger.debug("Auto-registered %d built-in tools: %s", len(registered), registered)
+            self._disable_optional_tools(registered)
 
         # Team tools (only when AgentTeams is enabled)
         if self.enable_agent_teams and self.team_manager:

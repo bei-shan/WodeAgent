@@ -10,7 +10,7 @@ import { createSessionEventHandler } from './state/sessionEvents'
 import { useSessionStream } from './state/useSessionStream'
 import { Icons, Svg } from './components/icons'
 import { PermissionModal, AskUserModal, ToolCard, SessionItem } from './components/ConversationWidgets'
-import { SkillsPanel, McpPanel, HooksPanel } from './components/ManagementPanels'
+import { SkillsPanel, McpPanel, HooksPanel, MemoryPanel } from './components/ManagementPanels'
 import type { Message, ToolEntry, PermRequest, AskRequest } from './components/types'
 import AuthGate from './AuthGate'
 import type { SessionInfo, SkillInfo, McpServerCfg, TeamInfo } from './api'
@@ -72,7 +72,7 @@ function AppCore() {
   const [newTeamName, setNewTeamName] = useState('')
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'trace'>('sessions')
+  const [sidebarTab, setSidebarTab] = useState<'sessions'|'files'|'skills'|'plugins'|'mcp'|'hooks'|'memory'|'trace'>('sessions')
   const [sessionSearch, setSessionSearch] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [skillsList, setSkillsList] = useState<SkillInfo[]>([])
@@ -306,6 +306,7 @@ function AppCore() {
     { key: 'plugins' as const, icon: Icons.settings, label: '插件' },
     { key: 'mcp' as const, icon: Icons.settings, label: 'MCP' },
     { key: 'hooks' as const, icon: Icons.clock, label: 'Hooks' },
+    { key: 'memory' as const, icon: Icons.brain, label: '记忆' },
     { key: 'trace' as const, icon: Icons.brain, label: 'Trace' },
   ]
 
@@ -531,6 +532,7 @@ function AppCore() {
           <McpPanel servers={mcpServers} onRefresh={async () => { try { setMcpServers(await api.mcp.list()) } catch {} }} />
         )}
         {sidebarTab === 'hooks' && <HooksPanel />}
+        {sidebarTab === 'memory' && <MemoryPanel />}
         {sidebarTab === 'files' && <FileBrowser sessionId={activeSid} />}
         {sidebarTab === 'trace' && <TracePanel sessionId={activeSid} />}
 

@@ -190,6 +190,44 @@ export const goal = {
   clear: (sid: string) => req<{ cleared: boolean }>('DELETE', `/sessions/${encodeURIComponent(sid)}/goal`),
 };
 
+// ── Memory ───────────────────────────────────────────────────────────
+
+export interface MemorySettings {
+  enabled: boolean;
+  provider: string;
+  limit: number;
+}
+
+export interface MemoryRecordInfo {
+  id: string;
+  content: string;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryStatus {
+  settings: MemorySettings;
+  scope: { tenant_id: string; user_id: string; project_id: string };
+  providers: string[];
+  available: Record<string, boolean>;
+  store: string;
+  error: string;
+  count: number;
+}
+
+export const memory = {
+  status: () => req<MemoryStatus>('GET', '/memory'),
+  update: (settings: MemorySettings) => req<MemoryStatus>('PUT', '/memory', settings),
+  records: (query = '', limit = 20) =>
+    req<{ records: MemoryRecordInfo[] }>(
+      'GET',
+      `/memory/records?query=${encodeURIComponent(query)}&limit=${limit}`,
+    ),
+  add: (content: string) => req<{ record: MemoryRecordInfo }>('POST', '/memory/records', { content }),
+  remove: (id: string) =>
+    req<{ deleted: boolean }>('DELETE', `/memory/records/${encodeURIComponent(id)}`),
+};
+
 // ── Files ────────────────────────────────────────────────────────────
 
 export const files = {

@@ -21,7 +21,8 @@ claude_code_env.sh
 .vscode/
 .idea/
 techBlogs/
-memory/
+# Runtime data only; anchored so packages like core/memory stay tracked.
+/memory/
 eval/
 .mycode/
 .teams/

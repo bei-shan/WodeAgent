@@ -411,6 +411,65 @@ def create_app(
         app.state.session_service._require_known(sid)
         return {"cleared": app.state.goal_store.clear(sid)}
 
+    # ── Memory (local single-user owner scope) ───────────────────
+    def _memory_service():
+        from core.memory.service import LocalMemoryService
+
+        return LocalMemoryService(project_root)
+
+    @app.get("/api/memory")
+    async def get_memory():
+        return await asyncio.to_thread(lambda: _memory_service().status())
+
+    @app.put("/api/memory")
+    async def update_memory(body: dict):
+        from core.memory.registry import MemoryProviderUnavailable
+        from core.memory.settings import MemorySettingsError
+
+        try:
+            return await asyncio.to_thread(lambda: _memory_service().update_settings(
+                enabled=bool(body.get("enabled")),
+                provider=str(body.get("provider") or "off"),
+                limit=int(body.get("limit") or 8),
+            ))
+        except (MemorySettingsError, MemoryProviderUnavailable, TypeError, ValueError) as exc:
+            raise InvalidInputError(str(exc)) from exc
+
+    @app.get("/api/memory/records")
+    async def list_memory_records(query: str = "", limit: int = 20):
+        from core.memory.service import LocalMemoryService
+
+        limit = max(1, min(50, int(limit)))
+
+        def load():
+            service = _memory_service()
+            records = service.search(query, limit=limit) if query else service.list(limit=limit)
+            return [LocalMemoryService.record_to_dict(record) for record in records]
+
+        return {"records": await asyncio.to_thread(load)}
+
+    @app.post("/api/memory/records")
+    async def add_memory_record(body: dict):
+        from core.memory.registry import MemoryProviderUnavailable
+        from core.memory.service import LocalMemoryService
+
+        content = str(body.get("content") or "").strip()
+        if not content:
+            raise InvalidInputError("content is required")
+
+        try:
+            record = await asyncio.to_thread(lambda: _memory_service().add(content))
+        except MemoryProviderUnavailable as exc:
+            raise InvalidInputError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        return {"record": LocalMemoryService.record_to_dict(record)}
+
+    @app.delete("/api/memory/records/{record_id}")
+    async def delete_memory_record(record_id: str):
+        deleted = await asyncio.to_thread(lambda: _memory_service().delete(record_id))
+        return {"deleted": deleted}
+
     @app.get("/api/sessions/{sid}/export")
     async def export_portable_session(sid: str):
         data = app.state.session_service.export_portable(sid)

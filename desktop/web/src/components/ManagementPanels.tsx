@@ -310,3 +310,194 @@ export function HooksPanel() {
   )
 }
 
+
+export function MemoryPanel() {
+  const [status, setStatus] = useState<api.MemoryStatus | null>(null)
+  const [records, setRecords] = useState<api.MemoryRecordInfo[]>([])
+  const [draft, setDraft] = useState('')
+  const [query, setQuery] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const loadRecords = async (text = query) => {
+    try {
+      const result = await api.memory.records(text)
+      setRecords(result.records)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const load = async () => {
+    try {
+      const current = await api.memory.status()
+      setStatus(current)
+      if (current.settings.enabled) await loadRecords('')
+      else setRecords([])
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const saveSettings = async (next: api.MemorySettings) => {
+    setBusy(true)
+    try {
+      const updated = await api.memory.update(next)
+      setStatus(updated)
+      setNotice(updated.settings.enabled ? '记忆已启用' : '记忆已关闭')
+      if (updated.settings.enabled) await loadRecords('')
+      else setRecords([])
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggle = async () => {
+    if (!status) return
+    const enabled = !status.settings.enabled
+    const provider = enabled && status.settings.provider === 'off' ? 'sqlite' : status.settings.provider
+    await saveSettings({ ...status.settings, enabled, provider })
+  }
+
+  const refreshStatus = async () => {
+    try {
+      setStatus(await api.memory.status())
+    } catch {
+      // The list below already reflects the change; a stale count is tolerable.
+    }
+  }
+
+  const addRecord = async () => {
+    const content = draft.trim()
+    if (!content) return
+    setBusy(true)
+    try {
+      await api.memory.add(content)
+      setDraft('')
+      await loadRecords(query)
+      await refreshStatus()
+      setNotice('已保存一条记忆')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeRecord = async (id: string) => {
+    try {
+      await api.memory.remove(id)
+      setRecords(prev => prev.filter(item => item.id !== id))
+      await refreshStatus()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  if (!status) {
+    return <div className="flex-1 bg-[#F9FAFB] p-6 text-sm text-gray-400">正在读取记忆设置…</div>
+  }
+
+  const enabled = status.settings.enabled
+  return (
+    <div className="flex-1 overflow-y-auto bg-[#F9FAFB]">
+      <div className="max-w-3xl mx-auto py-8 px-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">记忆</h2>
+            <p className="text-xs text-gray-400 mt-1">
+              长期记忆只属于当前工作区；启用后 Agent 可主动存取。
+            </p>
+          </div>
+          <button type="button" onClick={toggle} disabled={busy}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${enabled
+              ? 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+              : 'bg-blue-500 text-white hover:bg-blue-600'}`}>
+            {enabled ? '关闭记忆' : '启用记忆'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">{enabled ? status.count : 0}</div>
+            <div className="text-[10px] text-gray-400">条记忆</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">{status.settings.provider}</div>
+            <div className="text-[10px] text-gray-400">存储后端</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-gray-700">{status.settings.limit}</div>
+            <div className="text-[10px] text-gray-400">每次召回条数</div>
+          </div>
+        </div>
+
+        {notice && <div className="text-xs text-gray-500 mb-3">{notice}</div>}
+        {status.error && <div className="text-xs text-red-500 mb-3">{status.error}</div>}
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs text-gray-500">后端</label>
+            <select value={status.settings.provider}
+              onChange={event => saveSettings({ ...status.settings, provider: event.target.value, enabled })}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+              {status.providers.map(provider => (
+                <option key={provider} value={provider}>{provider}</option>
+              ))}
+            </select>
+            <label className="text-xs text-gray-500">召回条数</label>
+            <input type="number" min={1} max={20} value={status.settings.limit}
+              onChange={event => setStatus({ ...status, settings: { ...status.settings, limit: Number(event.target.value) } })}
+              onBlur={() => saveSettings(status.settings)}
+              className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+            <span className="text-[10px] text-gray-400 break-all">{status.store}</span>
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
+          <textarea value={draft} onChange={event => setDraft(event.target.value)}
+            rows={3} placeholder={enabled ? '写入一条长期记忆，例如：本仓库使用 pnpm，不要用 npm。' : '先启用记忆再写入'}
+            disabled={!enabled}
+            className="w-full border border-gray-200 rounded-lg p-3 text-sm text-gray-700 resize-none input-focus-ring" />
+          <div className="flex justify-end mt-2">
+            <button type="button" onClick={addRecord} disabled={!enabled || busy || !draft.trim()}
+              className="px-4 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-40">
+              保存记忆
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 mb-3">
+          <input value={query} onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter') loadRecords() }}
+            placeholder="搜索记忆后回车"
+            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm input-focus-ring" />
+          <button type="button" onClick={() => loadRecords()} disabled={!enabled}
+            className="px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40">
+            搜索
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {records.length === 0 && (
+            <div className="text-xs text-gray-400">{enabled ? '还没有匹配的记忆' : '记忆未启用'}</div>
+          )}
+          {records.map(record => (
+            <div key={record.id} className="bg-white border border-gray-200 rounded-xl p-3 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{record.content}</p>
+                <p className="text-[10px] text-gray-400 mt-1">{record.created_at}</p>
+              </div>
+              <button type="button" onClick={() => removeRecord(record.id)}
+                className="text-xs text-red-500 hover:text-red-600 shrink-0">删除</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}

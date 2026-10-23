@@ -68,6 +68,14 @@ python -m ridgecode maintain --json      # 机器可读
 
 支持 ACP 的编辑器（如 Zed）把上面的命令配置为 agent 启动命令即可；会话在进程内创建，进程退出即结束。该模式只面向本地受信任环境，不提供鉴权或多租户隔离。
 
+## 长期记忆
+
+Web 端「工作台 → 记忆」可开关记忆、选择后端（`off` / `sqlite`）、设置每次召回条数，并直接写入、搜索、删除记忆条目。
+
+- 设置：`.mycodeagent/settings/memory.json`；数据：`.mycodeagent/memory/memories.sqlite3`（根目录可用 `MYCODEAGENT_DATA_DIR` 覆盖）
+- 默认**关闭**；关闭时 Agent 的工具列表里不会出现 `Memory`，启用后新建的会话才带上它
+- 记忆按工作区（项目路径哈希）隔离，仅本地单用户；`mem0` 需要外部客户端与服务端授权，界面暂不提供
+
 ## 检查、评测和测试
 
 ```bash
